@@ -194,9 +194,7 @@ func Run(t *testing.T, newHarness Factory) {
 		{"a dispatch of a unit that left the inventory is refused", testUnitGone},
 		{"parallel creates in several namespaces, then paging returns every job", testParallelNamespaces},
 		{"parallel creates in one namespace, then paging returns every job", testParallelCreatesOneNamespace},
-		{"freezes list, end once, and validate", testFreezes},
-		{"a second freeze of a namespace with an active freeze is ErrFreezeActive", testFreezeSecondCreate},
-	}, createRuleCases(), reconcileCases(), approveCases(), damagedCases(), claimerCases(), missingNamespaceCases(),
+	}, freezeCases(), createRuleCases(), reconcileCases(), approveCases(), damagedCases(), claimerCases(), missingNamespaceCases(),
 		endClaimCases(), claimBoundCases(), claimGateCases(), claimCases())
 
 	runCases(t, newHarness, cases)

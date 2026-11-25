@@ -278,8 +278,8 @@ func classify(err error) (problem.Problem, bool) {
 		return problem.New(http.StatusTooManyRequests, errcode.JobLimit, errTooManyStreams.Error()), true
 	case errors.Is(err, errLogNotAvailable):
 		return problem.New(http.StatusNotFound, errcode.JobLogNotAvailable, errLogNotAvailable.Error()), true
-	case errors.Is(err, errNoActiveFreeze):
-		return problem.New(http.StatusNotFound, errcode.JobNotFound, errNoActiveFreeze.Error()), true
+	case errors.Is(err, job.ErrNoActiveFreeze):
+		return problem.New(http.StatusNotFound, errcode.JobNotFound, job.ErrNoActiveFreeze.Error()), true
 	case errors.Is(err, errPageToken):
 		return problem.New(http.StatusBadRequest, errcode.RequestPageTokenInvalid, err.Error()), true
 	case errors.Is(err, errInvalidQuery):

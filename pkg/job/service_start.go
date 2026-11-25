@@ -777,6 +777,10 @@ func (s *service) persist(ctx context.Context, j *Job, fence namespace.Fence, e 
 	var dispatch *durable.StartRequest
 	if open {
 		dispatch = dispatchOf(j)
+
+		if err := s.checkFreezeGate(ctx, j, fence.Namespace); err != nil {
+			return Job{}, false, err
+		}
 	} else {
 		j.State = StateAwaitingApproval
 	}
@@ -793,6 +797,27 @@ func (s *service) persist(ctx context.Context, j *Job, fence namespace.Fence, e 
 	}
 
 	return stored, isNew, nil
+}
+
+// checkFreezeGate refuses the dispatch of the first phase of j in ns when a
+// freeze is active and the job has no break-glass.
+//
+// Defense in depth: the store refuses a change dispatch in a freeze in the
+// transaction of the create. This check stays so that a store that misses the
+// rule never starts a job in a freeze. It does not rely on the store. A service
+// with no freeze store has no freeze to read, and only the store check applies
+// to it.
+func (s *service) checkFreezeGate(ctx context.Context, j *Job, ns namespace.Name) error {
+	if s.freezes == nil {
+		return nil
+	}
+
+	freezeGate, err := NewFreezeGate(ctx, s.freezes, ns, s.now())
+	if err != nil {
+		return err
+	}
+
+	return freezeGate.Allow(j.Phases[0].Kind, j.BreakGlass)
 }
 
 // waitOf returns the wait reason for a create with a dispatch that failed

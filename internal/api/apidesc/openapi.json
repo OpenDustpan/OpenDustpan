@@ -4435,6 +4435,9 @@
               "$ref": "#/components/schemas/Freeze"
             },
             "type": "array"
+          },
+          "nextPageToken": {
+            "type": "string"
           }
         },
         "required": [
@@ -8970,10 +8973,7 @@
       "StartJobRequest": {
         "properties": {
           "breakFreezeReason": {
-            "type": [
-              "string",
-              "null"
-            ]
+            "type": "string"
           },
           "location": {
             "oneOf": [
@@ -9006,7 +9006,6 @@
           }
         },
         "required": [
-          "breakFreezeReason",
           "location",
           "operation",
           "pool",
@@ -15932,6 +15931,25 @@
             "in": "path",
             "name": "namespace",
             "required": true,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "description": "The largest number of freezes on the page.",
+            "in": "query",
+            "name": "pageSize",
+            "required": false,
+            "schema": {
+              "format": "int64",
+              "type": "integer"
+            }
+          },
+          {
+            "description": "The nextPageToken of the page before, for the same namespace.",
+            "in": "query",
+            "name": "pageToken",
+            "required": false,
             "schema": {
               "type": "string"
             }

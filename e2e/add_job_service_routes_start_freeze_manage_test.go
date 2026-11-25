@@ -28,12 +28,11 @@ type freezeList struct {
 	Freezes []freezeDoc `json:"freezes"`
 }
 
-// TestJobFreezeRoutes drives a change freeze with a personal access
-// token over TLS, on each store. The person creates a freeze. A plan start and a
-// cancel are accepted during the freeze, because the freeze check applies only
-// to a start of a phase that changes a unit. The person ends the freeze, and a
-// start is accepted again. A start through a new freeze with a breakFreezeReason
-// is accepted.
+// TestJobFreezeRoutes drives a change freeze with a personal access token over
+// TLS, on each store. The person creates a freeze. A plan start and the cancel
+// of the job from before the freeze are accepted during the freeze. The person
+// ends the freeze, and a start is accepted again. A start through a new freeze
+// with a breakFreezeReason is accepted.
 //
 // The manager holds the admin role on the namespace, which holds the manage-freezes
 // action. The breaker holds the freeze-breaker role on the installation, which holds
@@ -84,8 +83,9 @@ func freezeScenario(t *testing.T, env *e2e.Env) {
 		Want: http.StatusCreated, Scheme: "token", Check: nil,
 	})
 
-	// A job that the administrator starts before the freeze. The freeze refuses
-	// the cancel of it.
+	// A job that the administrator starts before the freeze. The freeze does
+	// not refuse the cancel of it: a freeze stops only the work that
+	// OpenDustpan starts.
 	started := startsAJob(ctx, t, env)
 
 	people := freezePeople(ctx, t, env)
@@ -106,11 +106,15 @@ func freezeScenario(t *testing.T, env *e2e.Env) {
 		t.Fatalf("start of a plan during the freeze: %v", err)
 	}
 
-	// A cancel is not a start, so the freeze check does not apply to it.
-	freezeStep(ctx, t, env, freezeReq{
+	// A cancel is not refused during a freeze: the freeze stops only the work
+	// that OpenDustpan starts. The answer shows the job canceled.
+	answer = freezeStep(ctx, t, env, freezeReq{
 		token, http.MethodPost, jobPath(e2e.Namespace, started.ID) + "/cancel",
 		`{"reason":"cancel during the freeze"}`, http.StatusOK,
 	})
+	if !strings.Contains(answer, `"state":"canceled"`) {
+		t.Fatalf("cancel during the freeze = %s, want a canceled job", answer)
+	}
 
 	checkActiveFreeze(ctx, t, env, token, created)
 

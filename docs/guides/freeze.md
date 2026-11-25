@@ -4,10 +4,11 @@ This guide shows how to create a change freeze, list the freezes, start a job
 through a freeze with a break-glass reason, and end a freeze.
 
 A change freeze stops the jobs that change a unit on a namespace. While a freeze
-is active, the server refuses a start, a cancel and a dispatch of a phase that
-applies, refreshes or destroys a unit. A plan still runs. A phase that already
-runs when the freeze starts runs to its end. A freeze does not stop state writes
-from a tool. Reads, lists and logs keep working.
+is active, the server refuses a start and a dispatch of a phase that applies,
+refreshes or destroys a unit. A plan still runs. A cancel of a job still
+succeeds. A phase that already runs when the freeze starts runs to its end. A
+freeze does not stop state writes from a tool. Reads, lists and logs keep
+working.
 
 A namespace has at most one active freeze. Each freeze has a reason, the subject
 of the person who created it, and the time it started. An ended freeze keeps its
@@ -112,7 +113,7 @@ first.
 
 | Answer | What it means | The command that helps |
 | --- | --- | --- |
-| `409` with `job.frozen` on a start or a cancel | The namespace has an active freeze, and the start changes a unit without the break-freeze action. | The list command above reads the reason. Ask a namespace administrator for the `freeze-breaker` role, or wait for the freeze to end. |
+| `409` with `job.frozen` on a start | The namespace has an active freeze, and the start changes a unit without the break-freeze action. | The list command above reads the reason. Ask a namespace administrator for the `freeze-breaker` role, or wait for the freeze to end. |
 | `403` on a create or an end | The person lacks `namespace:manage-freezes` on the namespace. | Ask a namespace administrator for the `admin` role on the namespace. |
 | `409` with `job.frozen` on a create | The namespace already has an active freeze. | The list command above shows the active freeze. |
 | `404` with `job.not-found` on an end | The namespace has no active freeze. | The list command above shows the state. |

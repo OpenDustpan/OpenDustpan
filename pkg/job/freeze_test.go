@@ -3,6 +3,7 @@ package job_test
 import (
 	"errors"
 	"path/filepath"
+	"strings"
 	"testing"
 	"time"
 
@@ -43,7 +44,7 @@ func TestFreezeGuardAtJobStart(t *testing.T) {
 		{"start of a changing phase is refused", refusesStart},
 		{"plan start passes", passesPlanStart},
 		{"start with break-glass passes", passesBreakGlass},
-		{"cancel and phase dispatch are refused", refusesCancelAndDispatch},
+		{"cancel succeeds and phase dispatch is refused", refusesCancelAndDispatch},
 		{"second create is refused", refusesSecondCreate},
 	}
 
@@ -62,7 +63,7 @@ func refusesStart(t *testing.T, st *sqlite.Store) {
 	t.Helper()
 
 	g := newFreezeGuard(t, st, "fzstart")
-	j := newFreezeJob(g.unit, "")
+	j := newFreezeJob(g.unit)
 
 	_, _, err := g.jobs.Create(t.Context(), *j, dispatchOfFreezeJob(j), g.fence, nil)
 	if !errors.Is(err, job.ErrFrozen) {
@@ -94,7 +95,7 @@ func passesBreakGlass(t *testing.T, st *sqlite.Store) {
 	t.Helper()
 
 	g := newFreezeGuard(t, st, "fzglass")
-	j := newFreezeJob(g.unit, "")
+	j := newFreezeJob(g.unit)
 	j.BreakGlass = &job.BreakGlass{Reason: "outage", Freeze: g.freeze.ID}
 
 	stored, created, err := g.jobs.Create(t.Context(), *j, dispatchOfFreezeJob(j), g.fence, nil)
@@ -111,7 +112,7 @@ func refusesCancelAndDispatch(t *testing.T, st *sqlite.Store) {
 
 	g := newFreezeGuard(t, st, "fzcancel")
 
-	queued, _, err := g.jobs.Create(t.Context(), *newFreezeJob(g.unit, ""), nil, g.fence, nil)
+	queued, _, err := g.jobs.Create(t.Context(), *newFreezeJob(g.unit), nil, g.fence, nil)
 	if err != nil {
 		t.Fatalf("Create queued = %v", err)
 	}
@@ -131,6 +132,11 @@ func refusesCancelAndDispatch(t *testing.T, st *sqlite.Store) {
 	cancel := freezeChange(&queued, job.EventCancel)
 	if _, err = g.jobs.Apply(t.Context(), cancel, g.fence, nil); err != nil {
 		t.Fatalf("cancel in a freeze = %v, want nil", err)
+	}
+
+	got, err = g.jobs.Get(t.Context(), queued.ID)
+	if err != nil || got.State != job.StateCanceled {
+		t.Fatalf("job after the cancel = %s, %v; want canceled", got.State, err)
 	}
 }
 
@@ -262,8 +268,8 @@ func freezeUnitID(t *testing.T, st *sqlite.Store, ns namespace.Name) identity.Ob
 
 // newFreezeJob returns a queued runner job of a refresh on unit. A refresh has
 // one apply phase, which changes the unit, so a start of it is a changing start.
-func newFreezeJob(unit identity.Object, key string) *job.Job {
-	return newFreezeJobOf(unit, key, job.OperationRefresh)
+func newFreezeJob(unit identity.Object) *job.Job {
+	return newFreezeJobOf(unit, "", job.OperationRefresh)
 }
 
 // newFreezeJobOf returns a queued runner job of operation op on unit.
@@ -354,5 +360,190 @@ func freezeEntry(unit identity.Object) audit.Entry {
 		ValueCount: nil, Changes: nil, SourceIP: "", UserAgent: "", Channel: audit.ChannelAPI, Kind: audit.KindChange,
 		Outcome: audit.OutcomeSuccess, RequestID: "", ObjectID: "", PrevHash: "", Hash: "", Sequence: 0,
 		FenceVersion: 0, Reason: "", PrincipalKind: "", JobID: "", Origin: nil,
+	}
+}
+
+func TestFreezeReason(t *testing.T) {
+	t.Parallel()
+
+	if err := job.CheckReason("release freeze"); err != nil {
+		t.Fatalf("CheckReason with a reason = %v", err)
+	}
+
+	if err := job.CheckReason(strings.Repeat("r", audit.MaxReasonLen)); err != nil {
+		t.Fatalf("CheckReason with %d characters = %v", audit.MaxReasonLen, err)
+	}
+
+	for _, reason := range []string{"", strings.Repeat("r", audit.MaxReasonLen+1), "a\nb"} {
+		if err := job.CheckReason(reason); !errors.Is(err, job.ErrInvalid) {
+			t.Fatalf("CheckReason with %q = %v, want ErrInvalid", reason, err)
+		}
+	}
+
+	if job.ErrNoActiveFreeze == nil {
+		t.Fatal("ErrNoActiveFreeze is nil")
+	}
+}
+
+func TestFreezeGate(t *testing.T) {
+	t.Parallel()
+
+	st, err := sqlite.Open(t.Context(), filepath.Join(t.TempDir(), "dustpan.db"))
+	if err != nil {
+		t.Fatalf("open store: %v", err)
+	}
+	t.Cleanup(func() {
+		if closeErr := st.Close(); closeErr != nil {
+			t.Errorf("close store: %v", closeErr)
+		}
+	})
+
+	g := newFreezeGuard(t, st, "fzgate")
+	now := time.Now()
+	gate, err := job.NewFreezeGate(t.Context(), g.freezes, g.fence.Namespace, now)
+	if err != nil {
+		t.Fatalf("NewFreezeGate = %v", err)
+	}
+
+	active, found := gate.Active()
+	if !found || active.ID != g.freeze.ID {
+		t.Fatalf("Active = %s, %v; want %s", active.ID, found, g.freeze.ID)
+	}
+
+	applyErr := gate.Allow(job.PhaseApply, nil)
+	if !errors.Is(applyErr, job.ErrFrozen) {
+		t.Fatalf("Allow of a changing phase = %v, want ErrFrozen", applyErr)
+	}
+
+	planErr := gate.Allow(job.PhasePlan, nil)
+	if planErr != nil {
+		t.Fatalf("Allow of a plan = %v", planErr)
+	}
+
+	breakErr := gate.Allow(job.PhaseApply, &job.BreakGlass{Reason: "outage", Freeze: g.freeze.ID})
+	if breakErr != nil {
+		t.Fatalf("Allow of a break-glass = %v", breakErr)
+	}
+
+	emptyFence, _ := freezeFixture(t, st, "fzempty")
+	emptyGate, err := job.NewFreezeGate(t.Context(), st.Jobs(), emptyFence.Namespace, now)
+	if err != nil {
+		t.Fatalf("NewFreezeGate with no freeze = %v", err)
+	}
+
+	if _, found := emptyGate.Active(); found {
+		t.Fatal("Active of a namespace with no freeze is true")
+	}
+
+	if err := emptyGate.Allow(job.PhaseApply, nil); err != nil {
+		t.Fatalf("Allow with no freeze = %v", err)
+	}
+}
+
+func TestFreezeRaceBetweenCheckAndDispatch(t *testing.T) {
+	t.Parallel()
+
+	st, err := sqlite.Open(t.Context(), filepath.Join(t.TempDir(), "dustpan.db"))
+	if err != nil {
+		t.Fatalf("open store: %v", err)
+	}
+	t.Cleanup(func() {
+		if closeErr := st.Close(); closeErr != nil {
+			t.Errorf("close store: %v", closeErr)
+		}
+	})
+
+	fence, unit := freezeFixture(t, st, "fzrace")
+	stores := st.Jobs()
+	gate, err := job.NewFreezeGate(t.Context(), stores, fence.Namespace, time.Now())
+	if err != nil {
+		t.Fatalf("NewFreezeGate = %v", err)
+	}
+
+	if _, found := gate.Active(); found {
+		t.Fatal("Active is true before the freeze")
+	}
+
+	j := newFreezeJob(unit)
+
+	if err := gate.Allow(j.Phases[0].Kind, nil); err != nil {
+		t.Fatalf("Allow before the freeze = %v, want nil", err)
+	}
+
+	// A freeze starts between the gate read and the dispatch: the gate is
+	// stale, so it still allows the phase, and only the store refuses it.
+	fr := job.Freeze{
+		ID: ident.NewID("frz-"), Namespace: fence.Namespace, Reason: "release week",
+		StartsAt: time.Now().Add(-time.Hour), EndsAt: time.Time{}, CreatedBy: "al", EndedBy: "",
+	}
+	if err := stores.CreateFreeze(t.Context(), fr, fence, freezeEntry(unit)); err != nil {
+		t.Fatalf("CreateFreeze = %v", err)
+	}
+
+	if err := gate.Allow(j.Phases[0].Kind, nil); err != nil {
+		t.Fatalf("stale gate Allow after the freeze = %v, want nil (the gate holds one read)", err)
+	}
+
+	if _, _, err := stores.Create(t.Context(), *j, dispatchOfFreezeJob(j), fence, nil); !errors.Is(err, job.ErrFrozen) {
+		t.Fatalf("Create after a freeze raced in = %v, want ErrFrozen", err)
+	}
+}
+
+func TestFreezeGateWithoutStoreFailsClosed(t *testing.T) {
+	t.Parallel()
+
+	gate, err := job.NewFreezeGate(t.Context(), nil, "acme", time.Now())
+	if !errors.Is(err, job.ErrNoFreezeStore) || gate != nil {
+		t.Fatalf("NewFreezeGate with a nil store = %v, %v; want ErrNoFreezeStore and no gate", gate, err)
+	}
+}
+
+// A freeze that starts leaves a job that already runs unchanged: a running
+// job keeps running, and a queued job stays queued.
+func TestFreezeStartKeepsRunningJobs(t *testing.T) {
+	t.Parallel()
+
+	st, err := sqlite.Open(t.Context(), filepath.Join(t.TempDir(), "dustpan.db"))
+	if err != nil {
+		t.Fatalf("open store: %v", err)
+	}
+
+	t.Cleanup(func() {
+		if closeErr := st.Close(); closeErr != nil {
+			t.Errorf("close store: %v", closeErr)
+		}
+	})
+
+	fence, unit := freezeFixture(t, st, "fzrunning")
+	stores := st.Jobs()
+
+	running := newFreezeJob(unit)
+
+	dispatched, _, err := stores.Create(t.Context(), *running, dispatchOfFreezeJob(running), fence, nil)
+	if err != nil || dispatched.State != job.StateDispatched {
+		t.Fatalf("Create before the freeze = %s, %v; want dispatched", dispatched.State, err)
+	}
+
+	queued := newFreezeJobOf(unit, "", job.OperationPlan)
+
+	waiting, _, err := stores.Create(t.Context(), *queued, nil, fence, nil)
+	if err != nil || waiting.State != job.StateQueued {
+		t.Fatalf("Create of a queued job = %s, %v; want queued", waiting.State, err)
+	}
+
+	fr := job.Freeze{
+		ID: ident.NewID("frz-"), Namespace: fence.Namespace, Reason: "release week",
+		StartsAt: time.Now().Add(-time.Minute), EndsAt: time.Time{}, CreatedBy: "al", EndedBy: "",
+	}
+	if err = stores.CreateFreeze(t.Context(), fr, fence, freezeEntry(unit)); err != nil {
+		t.Fatalf("CreateFreeze = %v", err)
+	}
+
+	for _, before := range []job.Job{dispatched, waiting} {
+		after, getErr := stores.Get(t.Context(), before.ID)
+		if getErr != nil || after.State != before.State || after.Version != before.Version {
+			t.Fatalf("job %s after the freeze = %s v%d, %v; want %s v%d unchanged", before.ID, after.State,
+				after.Version, getErr, before.State, before.Version)
+		}
 	}
 }

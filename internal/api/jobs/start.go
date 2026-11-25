@@ -61,7 +61,7 @@ type startBody struct {
 	// BreakFreezeReason, when it is present, asks for a break-glass start through
 	// an active freeze. The reason must not be empty. An absent field is no
 	// break-glass.
-	BreakFreezeReason *string `json:"breakFreezeReason"`
+	BreakFreezeReason *string `json:"breakFreezeReason,omitempty"`
 }
 
 type unitRequest struct {
@@ -107,7 +107,7 @@ func (h *Handler) startJob(w http.ResponseWriter, r *http.Request, p identity.Pr
 		return
 	}
 
-	req, err = withBreakGlass(req, body)
+	req, err = h.breakGlassOf(r, p, req, body)
 	if err != nil {
 		h.writeError(ctx, w, err)
 
@@ -202,10 +202,13 @@ const (
 	reasonPolicyDenied = "policy denied the job"
 	reasonAgentDenied  = "an agent cannot do this"
 	reasonFrozen       = "a change freeze is active"
-	reasonLimit        = "too many open jobs"
-	reasonGate         = "an enforced gate covers the unit"
-	reasonUnsupported  = "the server cannot start this job"
-	reasonUnavailable  = "the approval defaults need more than a job enforces"
+	// reasonBreakGlassReason is the reason of the entry of a break-glass start
+	// whose reason is not valid.
+	reasonBreakGlassReason = "the break-glass reason is not valid"
+	reasonLimit            = "too many open jobs"
+	reasonGate             = "an enforced gate covers the unit"
+	reasonUnsupported      = "the server cannot start this job"
+	reasonUnavailable      = "the approval defaults need more than a job enforces"
 )
 
 // refusalReason returns the reason for the audit entry of err, and false for
@@ -348,6 +351,22 @@ func (h *Handler) startRequest(r *http.Request, t *target, b *startBody, key str
 	}, nil
 }
 
+// breakGlassOf applies withBreakGlass. A refused break-glass reason writes an
+// audit entry, like each other refusal of the start.
+func (h *Handler) breakGlassOf(
+	r *http.Request, p identity.Principal, req job.StartRequest, b *startBody,
+) (job.StartRequest, error) {
+	out, err := withBreakGlass(req, b)
+	if err != nil {
+		action, object := deniedTarget(err, req.Unit)
+		h.guard.Record(r.Context(), r, p, refusal.Denial{
+			Action: action, Object: object, Reason: reasonBreakGlassReason, ReasonWithin: nil, Window: 0,
+		})
+	}
+
+	return out, err
+}
+
 // withBreakGlass sets the break-glass of req when the body holds
 // breakFreezeReason. The job service checks the action, the reason and the
 // active freeze again. A body without the field starts no break-glass.
@@ -356,33 +375,15 @@ func withBreakGlass(req job.StartRequest, b *startBody) (job.StartRequest, error
 		return req, nil
 	}
 
-	err := checkBreakFreezeReason(*b.BreakFreezeReason)
+	err := job.CheckReason(*b.BreakFreezeReason)
 	if err != nil {
-		var none job.StartRequest
-
-		return none, err
+		// The refused request stays whole: the caller names its unit in the audit entry.
+		return req, err
 	}
 
 	req.BreakGlass = &job.BreakGlass{Reason: *b.BreakFreezeReason, Freeze: ""}
 
 	return req, nil
-}
-
-// checkBreakFreezeReason checks the breakFreezeReason of a start: 1 to 500
-// characters, with no character that the audit log refuses. The job service
-// checks the reason again. This check stays so that an empty or hostile reason
-// is refused at the boundary, whatever the service does.
-func checkBreakFreezeReason(reason string) error {
-	if reason == "" {
-		return fmt.Errorf("%w: breakFreezeReason needs 1 to %d characters", job.ErrInvalid, audit.MaxReasonLen)
-	}
-
-	err := audit.ValidateReason(reason)
-	if err != nil {
-		return fmt.Errorf("%w: breakFreezeReason: %w", job.ErrInvalid, err)
-	}
-
-	return nil
 }
 
 // truncate cuts s to at most n bytes.

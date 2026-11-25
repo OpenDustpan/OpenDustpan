@@ -65,7 +65,10 @@ var operationLabels = map[string]apidesc.Label{
 	apidesc.Pattern(http.MethodGet, freezesPath): apidesc.Name(
 		"listFreezes",
 		"freezes",
-	).On(apidesc.KindNamespace).WithBodies(apidesc.NoBody, apidesc.Typed[listFreezesResponse](
+	).On(apidesc.KindNamespace).WithQuery(
+		apidesc.IntegerParam("pageSize", "The largest number of freezes on the page."),
+		apidesc.StringParam("pageToken", "The nextPageToken of the page before, for the same namespace."),
+	).WithBodies(apidesc.NoBody, apidesc.Typed[listFreezesResponse](
 		"ListFreezesResponse",
 		apidesc.Named[freezeResponse]("Freeze"),
 	)),
