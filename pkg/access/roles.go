@@ -93,7 +93,10 @@ var builtInDescriptions = []struct {
 		RoleAccountAdministrator,
 		"Manages principals, groups, roles, grants and namespaces, makes the tokens of each service principal whose reach fits inside its own reach, and holds every data action.",
 	},
-	{RoleFreezeBreaker, "Starts jobs through an active freeze with a reason, on the installation. Holds no other action."},
+	{
+		RoleFreezeBreaker,
+		"Starts jobs through an active freeze with a reason, on the installation. Holds no other action.",
+	},
 	{RoleSiteAdministrator, "Holds every action of the installation."},
 	{
 		RoleTokenManager,

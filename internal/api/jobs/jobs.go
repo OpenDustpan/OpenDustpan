@@ -12,6 +12,7 @@ import (
 	"log/slog"
 	"net/http"
 	"strings"
+	"time"
 
 	"opendustpan.org/opendustpan/internal/api/admit"
 	"opendustpan.org/opendustpan/internal/api/apidesc"
@@ -91,6 +92,10 @@ type Config struct {
 	// job service does, so that the filled slots in the answer are the ones that
 	// the matching counts. The zero value is the policy of a dev installation.
 	Approvers gate.ApproverPolicy
+	// Now is the clock of the freeze routes. It must be the clock of the job
+	// service, so that a freeze starts at the time that the start check reads.
+	// Nil takes the system clock.
+	Now func() time.Time
 }
 
 // Handler serves the jobs API under /api/dustpan/v1/.
@@ -114,6 +119,7 @@ type Handler struct {
 	logger     *slog.Logger
 	mux        *patternMux
 	routes     []Route
+	clock      func() time.Time
 }
 
 // NewHandler returns a Handler. Every Config field except Sessions is
@@ -159,6 +165,11 @@ func NewHandler(cfg Config) (*Handler, error) {
 		logger:     cfg.Logger,
 		mux:        newPatternMux(),
 		routes:     nil,
+		clock:      cfg.Now,
+	}
+
+	if h.clock == nil {
+		h.clock = time.Now
 	}
 
 	h.streams = newStreamLimiter(h.logs.PerPrincipal, h.logs.Total)

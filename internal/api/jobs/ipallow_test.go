@@ -72,7 +72,7 @@ func newRefusalHandler(
 		Starter: nil, Freezes: nil, Workers: nil, Pools: nil,
 		Authenticator: tokenAuthenticator{}, Authorizer: authz,
 		Audit: records, OnAuditFailure: nil, DenialLimiter: limiter,
-		Sessions: nil, Logger: slog.New(slog.DiscardHandler),
+		Sessions: nil, Logger: slog.New(slog.DiscardHandler), Now: nil,
 		Logs: nil, Cursors: nil, Approvers: gate.ApproverPolicy{Production: false, IsDev: nil},
 	})
 	if err != nil {

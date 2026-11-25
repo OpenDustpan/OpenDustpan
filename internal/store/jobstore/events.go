@@ -35,11 +35,6 @@ func change(ctx context.Context, tx Tx, next *job.Job, c *job.Change, now time.T
 		return finish(next, c, now)
 	case job.EventMerged:
 		return merge(next, c)
-	case job.EventCancel:
-		// Defense in depth: the service checks the freeze before this write.
-		// This check stays so that a new caller cannot cancel a job during a
-		// freeze without a break-glass.
-		return checkFreeze(ctx, tx, next, now)
 	default:
 		// Every other event changes the state only.
 		return nil

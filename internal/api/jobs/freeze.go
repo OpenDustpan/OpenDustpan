@@ -94,7 +94,7 @@ func (h *Handler) createFreeze(w http.ResponseWriter, r *http.Request, p identit
 		return
 	}
 
-	now := time.Now().UTC()
+	now := h.clock().UTC()
 	f := job.Freeze{
 		ID: ident.NewID(freezeIDPrefix), Namespace: t.ns.Name, Reason: body.Reason, StartsAt: now,
 		EndsAt: time.Time{}, CreatedBy: p.Subject, EndedBy: "",
@@ -123,7 +123,7 @@ func (h *Handler) endFreeze(w http.ResponseWriter, r *http.Request, p identity.P
 		return
 	}
 
-	now := time.Now().UTC()
+	now := h.clock().UTC()
 
 	active, found, err := h.activeFreeze(ctx, t.ns.Name, now)
 	if err != nil {
@@ -161,7 +161,7 @@ func (h *Handler) endFreeze(w http.ResponseWriter, r *http.Request, p identity.P
 		return
 	}
 
-	h.writeJSON(ctx, w, http.StatusOK, toFreezeResponse(&ended, time.Now()))
+	h.writeJSON(ctx, w, http.StatusOK, toFreezeResponse(&ended, h.clock()))
 }
 
 // listFreezes answers GET /api/dustpan/v1/namespaces/{namespace}/freezes with
@@ -177,7 +177,7 @@ func (h *Handler) listFreezes(w http.ResponseWriter, r *http.Request, _ identity
 		return
 	}
 
-	now := time.Now()
+	now := h.clock()
 	out := listFreezesResponse{Freezes: make([]freezeResponse, 0, len(freezes))}
 
 	for i := range freezes {

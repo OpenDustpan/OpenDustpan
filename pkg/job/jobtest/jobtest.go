@@ -166,7 +166,7 @@ func Run(t *testing.T, newHarness Factory) {
 		{"a change dispatch in a freeze is ErrFrozen", testFrozen},
 		{"break-glass passes a freeze", testBreakGlass},
 		{"a dispatch after the freeze ends", testFreezeEnds},
-		{"a cancel in a freeze is ErrFrozen, and break-glass passes it", testCancelFrozen},
+		{"a cancel in a freeze succeeds", testCancelFrozen},
 		{"a dispatch of a unit with a manual lock is ErrLocked, plan phases too", testLocked},
 		{"a manual lock of the namespace stops the dispatch of each unit in it", testNamespaceLocked},
 		{"break-glass does not pass a manual lock", testBreakGlassNotPastLock},

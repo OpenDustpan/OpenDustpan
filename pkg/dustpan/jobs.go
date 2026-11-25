@@ -93,6 +93,7 @@ func newJobsHandler(svc services, cfg *settings, onFailure func(), starter job.S
 		Approvers:      jobApprovers(cfg),
 		Starter:        starter,
 		Freezes:        freezes,
+		Now:            cfg.now,
 		Workers:        cfg.watch,
 		Pools:          pools,
 		Authenticator:  cfg.authenticator,

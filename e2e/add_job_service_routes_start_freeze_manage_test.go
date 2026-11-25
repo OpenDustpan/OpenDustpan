@@ -29,14 +29,16 @@ type freezeList struct {
 }
 
 // TestFreezeManageThroughJobs drives a change freeze with a personal access
-// token over TLS, on each store. The person creates a freeze, and the job routes
-// refuse a start and a cancel with the code job.frozen. The person ends the
-// freeze, and a start is accepted again. A start through a new freeze with a
-// breakFreezeReason is accepted.
+// token over TLS, on each store. The person creates a freeze. A plan start and a
+// cancel are accepted during the freeze, because the freeze check applies only
+// to a start of a phase that changes a unit. The person ends the freeze, and a
+// start is accepted again. A start through a new freeze with a breakFreezeReason
+// is accepted.
 //
 // The manager holds the admin role on the namespace, which holds the manage-freezes
-// action. The breaker holds the freeze-breaker role on the installation and the
-// planner role on the namespace, so it holds the break-freeze action and can start.
+// action. The breaker holds the freeze-breaker role on the installation, which holds
+// the break-freeze action, and the admin role on the namespace, which holds the
+// manage-freezes action and the actions of a start that names a pool.
 func TestFreezeManageThroughJobs(t *testing.T) {
 	t.Parallel()
 
@@ -53,7 +55,7 @@ func TestFreezeManageThroughJobs(t *testing.T) {
 				t.Skip("set DUSTPAN_TEST_POSTGRES_URL to run the PostgreSQL suite")
 			}
 
-			env := e2e.NewEnvWithSignIn(t.Context(), t, e2e.NoCLI(), store)
+			env := e2e.NewEnvWithRealTimeSignIn(t.Context(), t, e2e.NoCLI(), store)
 
 			freezeScenario(t, env)
 		})
@@ -86,27 +88,35 @@ func freezeScenario(t *testing.T, env *e2e.Env) {
 	// the cancel of it.
 	started := startsAJob(ctx, t, env)
 
-	token, breakToken := freezePeople(ctx, t, env)
+	people := freezePeople(ctx, t, env)
+	token, breakToken := people.manager, people.breaker
 
 	created := createFreeze(ctx, t, env, token, "release freeze")
 
-	freezeStep(ctx, t, env, token, http.MethodPost, freezeRoute, `{"reason":"second freeze"}`, http.StatusConflict)
+	freezeStep(ctx, t, env, freezeReq{
+		token, http.MethodPost, freezeRoute, `{"reason":"second freeze"}`, http.StatusConflict,
+	})
 
-	answer := freezeStep(ctx, t, env, token, http.MethodPost, jobsRoute, startBody(jobsPool, "plan"),
-		http.StatusConflict)
-	if err := codeCheck("job.frozen")(answer); err != nil {
-		t.Fatalf("start during the freeze: %v", err)
+	// A plan start is accepted during the freeze: the freeze check applies only to
+	// a phase that changes a unit (the store rule in internal/store/jobstore/rules.go).
+	answer := freezeStep(ctx, t, env, freezeReq{
+		token, http.MethodPost, jobsRoute, startBody(jobsPool, "plan"), http.StatusCreated,
+	})
+	if _, err := checkStarted(answer); err != nil {
+		t.Fatalf("start of a plan during the freeze: %v", err)
 	}
 
-	answer = freezeStep(ctx, t, env, token, http.MethodPost, jobPath(e2e.Namespace, started.ID)+"/cancel", "",
-		http.StatusConflict)
-	if err := codeCheck("job.frozen")(answer); err != nil {
-		t.Fatalf("cancel during the freeze: %v", err)
-	}
+	// A cancel is not a start, so the freeze check does not apply to it.
+	freezeStep(ctx, t, env, freezeReq{
+		token, http.MethodPost, jobPath(e2e.Namespace, started.ID) + "/cancel",
+		`{"reason":"cancel during the freeze"}`, http.StatusOK,
+	})
 
 	checkActiveFreeze(ctx, t, env, token, created)
 
-	answer = freezeStep(ctx, t, env, token, http.MethodPost, freezeRoute+"/current/end", "", http.StatusOK)
+	answer = freezeStep(ctx, t, env, freezeReq{
+		token, http.MethodPost, freezeRoute + "/current/end", "", http.StatusOK,
+	})
 
 	var ended freezeDoc
 	if err := json.Unmarshal([]byte(answer), &ended); err != nil {
@@ -117,8 +127,9 @@ func freezeScenario(t *testing.T, env *e2e.Env) {
 		t.Fatalf("the freeze after its end is active: %s", answer)
 	}
 
-	answer = freezeStep(ctx, t, env, token, http.MethodPost, jobsRoute, startBody(jobsPool, "plan"),
-		http.StatusCreated)
+	answer = freezeStep(ctx, t, env, freezeReq{
+		token, http.MethodPost, jobsRoute, startBody(jobsPool, "plan"), http.StatusCreated,
+	})
 	if _, err := checkStarted(answer); err != nil {
 		t.Fatalf("start after the end of the freeze: %v", err)
 	}
@@ -127,13 +138,16 @@ func freezeScenario(t *testing.T, env *e2e.Env) {
 	// breakFreezeReason, and the start with the reason is accepted.
 	createFreeze(ctx, t, env, token, "break-glass freeze")
 
-	answer = freezeStep(ctx, t, env, breakToken, http.MethodPost, jobsRoute, breakGlassBody("incident fix"),
-		http.StatusCreated)
+	answer = freezeStep(ctx, t, env, freezeReq{
+		breakToken, http.MethodPost, jobsRoute, breakGlassBody("incident fix"), http.StatusCreated,
+	})
 	if _, err := checkStarted(answer); err != nil {
 		t.Fatalf("break-glass start during the freeze: %v", err)
 	}
 
-	freezeStep(ctx, t, env, token, http.MethodPost, freezeRoute+"/current/end", "", http.StatusOK)
+	freezeStep(ctx, t, env, freezeReq{
+		token, http.MethodPost, freezeRoute + "/current/end", "", http.StatusOK,
+	})
 }
 
 // createFreeze creates a freeze with reason through token and checks the answer.
@@ -145,7 +159,9 @@ func createFreeze(ctx context.Context, t *testing.T, env *e2e.Env, token, reason
 		t.Fatalf("encode the freeze reason: %v", err)
 	}
 
-	answer := freezeStep(ctx, t, env, token, http.MethodPost, freezeRoute, string(body), http.StatusCreated)
+	answer := freezeStep(ctx, t, env, freezeReq{
+		token, http.MethodPost, freezeRoute, string(body), http.StatusCreated,
+	})
 
 	var created freezeDoc
 	if err := json.Unmarshal([]byte(answer), &created); err != nil {
@@ -164,7 +180,7 @@ func createFreeze(ctx context.Context, t *testing.T, env *e2e.Env, token, reason
 func checkActiveFreeze(ctx context.Context, t *testing.T, env *e2e.Env, token string, want freezeDoc) {
 	t.Helper()
 
-	answer := freezeStep(ctx, t, env, token, http.MethodGet, freezeRoute, "", http.StatusOK)
+	answer := freezeStep(ctx, t, env, freezeReq{token, http.MethodGet, freezeRoute, "", http.StatusOK})
 
 	var list freezeList
 	if err := json.Unmarshal([]byte(answer), &list); err != nil {
@@ -185,17 +201,22 @@ func breakGlassBody(reason string) string {
 	return strings.TrimSuffix(startBody(jobsPool, "plan"), "}") + fmt.Sprintf(`,"breakFreezeReason":%q}`, reason)
 }
 
+// freezeReq is one request of the freeze steps: the personal token, the method,
+// the path, the body and the wanted status.
+type freezeReq struct {
+	token, method, path, body string
+	want                      int
+}
+
 // freezeStep sends one request with the personal token and fails unless the
-// status is want. It returns the answer body.
-func freezeStep(
-	ctx context.Context, t *testing.T, env *e2e.Env, token, method, path, body string, want int,
-) string {
+// status is the wanted one. It returns the answer body.
+func freezeStep(ctx context.Context, t *testing.T, env *e2e.Env, req freezeReq) string {
 	t.Helper()
 
-	status, answer, err := env.APIStatusAs(ctx, token, method, path, body)
-	if err != nil || status != want {
+	status, answer, err := env.APIStatusAs(ctx, req.token, req.method, req.path, req.body)
+	if err != nil || status != req.want {
 		t.Logf("answer: %s", answer)
-		t.Fatalf("status %d, want %d, for %s, err %v", status, want, method, err)
+		t.Fatalf("status %d, want %d, for %s %s, err %v", status, req.want, req.method, req.path, err)
 	}
 
 	return answer
@@ -203,9 +224,8 @@ func freezeStep(
 
 // freezePeople makes the manager and the breaker and returns the personal token
 // of each. The manager holds the admin role on the namespace. The breaker holds
-// the freeze-breaker role on the installation and the planner role on the
-// namespace.
-func freezePeople(ctx context.Context, t *testing.T, env *e2e.Env) (string, string) {
+// the freeze-breaker role on the installation and the admin role on the namespace.
+func freezePeople(ctx context.Context, t *testing.T, env *e2e.Env) freezeTokens {
 	t.Helper()
 
 	var manager e2ePrincipal
@@ -236,12 +256,17 @@ func freezePeople(ctx context.Context, t *testing.T, env *e2e.Env) (string, stri
 
 	principalCall(ctx, t, env, principalStep{
 		http.MethodPost, "/api/server/namespaces/" + e2e.Namespace + "/grants",
-		`{"subject":"principal:` + breaker.ID + `","role":"planner"}`,
+		`{"subject":"principal:` + breaker.ID + `","role":"admin"}`,
 		http.StatusCreated,
 	}, nil)
 
-	managerToken := env.PersonalToken(ctx, t, manager.ID, "freeze-manager-token").Secret
-	breakerToken := env.PersonalToken(ctx, t, breaker.ID, "freeze-breaker-token").Secret
+	return freezeTokens{
+		manager: env.PersonalToken(ctx, t, manager.ID, "freeze-manager-token").Secret,
+		breaker: env.PersonalToken(ctx, t, breaker.ID, "freeze-breaker-token").Secret,
+	}
+}
 
-	return managerToken, breakerToken
+// freezeTokens holds the personal tokens of the manager and the breaker.
+type freezeTokens struct {
+	manager, breaker string
 }

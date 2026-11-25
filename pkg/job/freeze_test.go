@@ -17,10 +17,11 @@ import (
 )
 
 // TestFreezeGuardAtJobStart checks the freeze guard of the real SQLite store:
-// a start, a cancel and a phase dispatch are refused with job.ErrFrozen during
-// an active freeze unless the job has a break-glass, and a second create of a
-// freeze is refused with job.ErrFreezeActive. Each subtest has its own
-// namespace, so the subtests run in parallel.
+// a start and a phase dispatch of a phase that changes the unit are refused
+// with job.ErrFrozen during an active freeze unless the job has a break-glass,
+// a plan start and a cancel are not refused, and a second create of a freeze
+// is refused with job.ErrFreezeActive. Each subtest has its own namespace, so
+// the subtests run in parallel.
 func TestFreezeGuardAtJobStart(t *testing.T) {
 	t.Parallel()
 
@@ -39,7 +40,8 @@ func TestFreezeGuardAtJobStart(t *testing.T) {
 		name string
 		run  func(t *testing.T, st *sqlite.Store)
 	}{
-		{"start is refused", refusesStart},
+		{"start of a changing phase is refused", refusesStart},
+		{"plan start passes", passesPlanStart},
 		{"start with break-glass passes", passesBreakGlass},
 		{"cancel and phase dispatch are refused", refusesCancelAndDispatch},
 		{"second create is refused", refusesSecondCreate},
@@ -54,7 +56,8 @@ func TestFreezeGuardAtJobStart(t *testing.T) {
 	}
 }
 
-// refusesStart checks that a start in a frozen namespace is job.ErrFrozen.
+// refusesStart checks that a start of a phase that changes the unit in a frozen
+// namespace is job.ErrFrozen. The store stores nothing for it.
 func refusesStart(t *testing.T, st *sqlite.Store) {
 	t.Helper()
 
@@ -64,6 +67,24 @@ func refusesStart(t *testing.T, st *sqlite.Store) {
 	_, _, err := g.jobs.Create(t.Context(), *j, dispatchOfFreezeJob(j), g.fence, nil)
 	if !errors.Is(err, job.ErrFrozen) {
 		t.Fatalf("Create with a dispatch = %v, want ErrFrozen", err)
+	}
+
+	if _, err = g.jobs.Get(t.Context(), j.ID); !errors.Is(err, job.ErrNotFound) {
+		t.Fatalf("Get after the refused start = %v, want ErrNotFound", err)
+	}
+}
+
+// passesPlanStart checks that a plan start in a frozen namespace is accepted:
+// a plan changes no resource, so the freeze does not refuse it.
+func passesPlanStart(t *testing.T, st *sqlite.Store) {
+	t.Helper()
+
+	g := newFreezeGuard(t, st, "fzplan")
+	j := newFreezeJobOf(g.unit, "", job.OperationPlan)
+
+	stored, created, err := g.jobs.Create(t.Context(), *j, dispatchOfFreezeJob(j), g.fence, nil)
+	if err != nil || !created || stored.State != job.StateDispatched {
+		t.Fatalf("plan Create = %s, created %v, %v; want dispatched", stored.State, created, err)
 	}
 }
 
@@ -82,8 +103,9 @@ func passesBreakGlass(t *testing.T, st *sqlite.Store) {
 	}
 }
 
-// refusesCancelAndDispatch checks that a cancel and a phase dispatch of a
-// queued job in a frozen namespace are job.ErrFrozen, and change nothing.
+// refusesCancelAndDispatch checks that a phase dispatch of a queued job in a
+// frozen namespace is job.ErrFrozen and changes nothing, and that a cancel of
+// the same job still succeeds.
 func refusesCancelAndDispatch(t *testing.T, st *sqlite.Store) {
 	t.Helper()
 
@@ -92,11 +114,6 @@ func refusesCancelAndDispatch(t *testing.T, st *sqlite.Store) {
 	queued, _, err := g.jobs.Create(t.Context(), *newFreezeJob(g.unit, ""), nil, g.fence, nil)
 	if err != nil {
 		t.Fatalf("Create queued = %v", err)
-	}
-
-	cancel := freezeChange(&queued, job.EventCancel)
-	if _, err = g.jobs.Apply(t.Context(), cancel, g.fence, nil); !errors.Is(err, job.ErrFrozen) {
-		t.Fatalf("cancel = %v, want ErrFrozen", err)
 	}
 
 	dispatch := freezeChange(&queued, job.EventDispatch)
@@ -108,7 +125,12 @@ func refusesCancelAndDispatch(t *testing.T, st *sqlite.Store) {
 
 	got, err := g.jobs.Get(t.Context(), queued.ID)
 	if err != nil || got.State != job.StateQueued {
-		t.Fatalf("job after the refused changes = %s, %v; want queued", got.State, err)
+		t.Fatalf("job after the refused dispatch = %s, %v; want queued", got.State, err)
+	}
+
+	cancel := freezeChange(&queued, job.EventCancel)
+	if _, err = g.jobs.Apply(t.Context(), cancel, g.fence, nil); err != nil {
+		t.Fatalf("cancel in a freeze = %v, want nil", err)
 	}
 }
 
@@ -238,9 +260,15 @@ func freezeUnitID(t *testing.T, st *sqlite.Store, ns namespace.Name) identity.Ob
 	return unit
 }
 
-// newFreezeJob returns a queued runner job of a refresh on unit.
+// newFreezeJob returns a queued runner job of a refresh on unit. A refresh has
+// one apply phase, which changes the unit, so a start of it is a changing start.
 func newFreezeJob(unit identity.Object, key string) *job.Job {
-	phases, err := job.DefaultPhases(job.ExecutorRunner, job.OperationRefresh)
+	return newFreezeJobOf(unit, key, job.OperationRefresh)
+}
+
+// newFreezeJobOf returns a queued runner job of operation op on unit.
+func newFreezeJobOf(unit identity.Object, key string, op job.Operation) *job.Job {
+	phases, err := job.DefaultPhases(job.ExecutorRunner, op)
 	if err != nil {
 		panic(err)
 	}
@@ -248,7 +276,7 @@ func newFreezeJob(unit identity.Object, key string) *job.Job {
 	j := job.Job{
 		ID:             job.ID(ident.NewID(job.IDPrefix)),
 		NamespaceID:    "",
-		Spec:           freezeSpec(unit),
+		Spec:           freezeSpec(unit, op),
 		State:          job.StateQueued,
 		Wait:           job.WaitNone,
 		Reason:         "",
@@ -278,11 +306,12 @@ func newFreezeJob(unit identity.Object, key string) *job.Job {
 	return &j
 }
 
-// freezeSpec returns the spec of a runner refresh of unit.
-func freezeSpec(unit identity.Object) job.Spec {
+// freezeSpec returns the spec of a runner operation op of unit. Its one step
+// is a plan step, which changes no resource.
+func freezeSpec(unit identity.Object, op job.Operation) job.Spec {
 	return job.Spec{
 		Unit:      unit,
-		Operation: job.OperationRefresh,
+		Operation: op,
 		Executor:  job.ExecutorRunner,
 		Location: job.Location{
 			Connection: "github", Repository: "acme/infra", Ref: "main", Directory: "network", Revision: "abc123",

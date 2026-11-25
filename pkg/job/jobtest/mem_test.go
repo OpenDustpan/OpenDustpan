@@ -488,11 +488,6 @@ func (m *memDB) Apply(ctx context.Context, c job.Change, fence namespace.Fence, 
 	next := copyJob(cur)
 	now := time.Now().UTC()
 
-	// The store refuses a cancel in a freeze unless the job has a break-glass.
-	if c.Event == job.EventCancel && cur.BreakGlass == nil && m.activeFreeze(cur.Spec.Unit.Namespace(), now) {
-		return job.Job{}, fmt.Errorf("%w: job %s", job.ErrFrozen, c.Job)
-	}
-
 	if err := m.applyIn(ctx, cur, &next, &c, now); err != nil {
 		return job.Job{}, err
 	}
@@ -715,18 +710,6 @@ func (m *memDB) EndFreeze(_ context.Context, id, by string, fence namespace.Fenc
 	return nil
 }
 
-// activeFreeze reports whether a freeze of ns is active at now. The caller
-// holds m.mu.
-func (m *memDB) activeFreeze(ns namespace.Name, now time.Time) bool {
-	for _, f := range m.freezes {
-		if f.Namespace == ns && f.ActiveAt(now) {
-			return true
-		}
-	}
-
-	return false
-}
-
 // ListFreezes implements job.FreezeStore.
 func (m *memDB) ListFreezes(_ context.Context, ns namespace.Name, since time.Time) ([]job.Freeze, error) {
 	m.mu.Lock()
@@ -755,6 +738,18 @@ type operationEnd struct {
 
 // endedOperation returns the end of the durable operation of the current phase
 // of j.
+// activeFreeze reports whether a freeze of ns is active at now. The caller
+// holds m.mu.
+func (m *memDB) activeFreeze(ns namespace.Name, now time.Time) bool {
+	for _, f := range m.freezes {
+		if f.Namespace == ns && f.ActiveAt(now) {
+			return true
+		}
+	}
+
+	return false
+}
+
 func (m *memDB) endedOperation(ctx context.Context, j *job.Job) (operationEnd, error) {
 	op, err := m.durable.Get(ctx, durable.ID(j.Phases[j.Current].Operation))
 	if errors.Is(err, durable.ErrNotFound) {

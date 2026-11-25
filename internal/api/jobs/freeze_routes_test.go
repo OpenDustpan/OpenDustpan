@@ -130,8 +130,9 @@ func (f *fakeFreezes) activeIn(ns namespace.Name) bool {
 }
 
 // freezeStarter is the job service of these tests. Like the service, it
-// refuses a start during an active freeze with job.ErrFrozen, unless the
-// request is a break-glass start and the caller holds the break-freeze action.
+// refuses a start of a changing phase during an active freeze with
+// job.ErrFrozen, unless the request is a break-glass start and the caller holds
+// the break-freeze action. A plan changes no resource, so a plan start passes.
 // It counts only the starts that it lets through.
 type freezeStarter struct {
 	*fakeStarter
@@ -150,6 +151,10 @@ func (s freezeStarter) StartOnce(ctx context.Context, a job.Actor, req job.Start
 	}
 
 	if req.BreakGlass == nil {
+		if req.Operation == job.OperationPlan {
+			return s.fakeStarter.StartOnce(ctx, a, req)
+		}
+
 		return refused, false, fmt.Errorf("%w: a change freeze is active", job.ErrFrozen)
 	}
 
@@ -203,6 +208,7 @@ func newFreezeFixture(t *testing.T, holds ...string) freezeFixture {
 		DenialLimiter:  nil,
 		Sessions:       nil,
 		Logger:         slog.New(slog.DiscardHandler),
+		Now:            nil,
 	})
 	if err != nil {
 		t.Fatalf("handler: %v", err)
@@ -355,8 +361,10 @@ func checkListAndEnd(t *testing.T, f freezeFixture) {
 	}
 }
 
-// TestFreezeCreateThenJobStartRefused runs the freeze path in order: create,
-// refused start, break-glass start, second create, list, end, and start again.
+// TestFreezeCreateThenJobStartRefused runs the freeze path in order: create, a
+// plan start during the freeze, break-glass start, second create, list, end,
+// and start again. A plan start is accepted during a freeze; the refusal of a
+// start of a changing phase is proven below this API by the job service tests.
 func TestFreezeCreateThenJobStartRefused(t *testing.T) {
 	t.Parallel()
 
@@ -369,14 +377,12 @@ func TestFreezeCreateThenJobStartRefused(t *testing.T) {
 	checkCreated(t, f)
 
 	rec := post(t, f.h, testToken, goodBody)
-	if rec.Code != http.StatusConflict {
-		t.Fatalf("start during the freeze = %d %s, want 409", rec.Code, rec.Body.String())
+	if rec.Code != http.StatusCreated {
+		t.Fatalf("plan start during the freeze = %d %s, want 201", rec.Code, rec.Body.String())
 	}
 
-	checkErrorBody(t, rec.Body.String(), "job.frozen", "freeze")
-
-	if f.starter.calls() != 0 {
-		t.Fatalf("starts during the freeze = %d, want 0", f.starter.calls())
+	if f.starter.calls() != 1 {
+		t.Fatalf("starts during the freeze = %d, want 1", f.starter.calls())
 	}
 
 	rec = post(t, f.h, testToken, fmt.Sprintf(breakBodyFormat, "hotfix"))
@@ -384,9 +390,9 @@ func TestFreezeCreateThenJobStartRefused(t *testing.T) {
 		t.Fatalf("break-glass start = %d %s, want 201", rec.Code, rec.Body.String())
 	}
 
-	if f.starter.calls() != 1 || f.starter.requests[0].BreakGlass == nil ||
-		f.starter.requests[0].BreakGlass.Reason != "hotfix" {
-		t.Fatalf("break-glass request = %+v, want one start with the reason hotfix", f.starter.requests)
+	if f.starter.calls() != 2 || f.starter.requests[1].BreakGlass == nil ||
+		f.starter.requests[1].BreakGlass.Reason != "hotfix" {
+		t.Fatalf("break-glass request = %+v, want a second start with the reason hotfix", f.starter.requests)
 	}
 
 	rec = freezeRequest(t, f.h, http.MethodPost, freezesURL, `{"reason":"second"}`)
@@ -479,9 +485,9 @@ func TestFreezeRoutes(t *testing.T) {
 			wantStatus: http.StatusNotFound, wantCode: "job.not-found", wantText: "",
 		},
 		{
-			name: "start during a freeze is refused", holds: []string{read}, open: true,
+			name: "plan start during a freeze is accepted", holds: []string{read}, open: true,
 			method: http.MethodPost, url: jobsURL, body: goodBody, key: false,
-			wantStatus: http.StatusConflict, wantCode: "job.frozen", wantText: "freeze",
+			wantStatus: http.StatusCreated, wantCode: "", wantText: "",
 		},
 		{
 			name: "break-glass start with the action is accepted", holds: []string{read, breakFreeze}, open: true,
