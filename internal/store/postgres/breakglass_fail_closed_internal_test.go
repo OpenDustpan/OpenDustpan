@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"slices"
 	"strings"
+	"sync/atomic"
 	"testing"
 	"time"
 
@@ -15,6 +16,7 @@ import (
 
 	"opendustpan.org/opendustpan/internal/store/postgres/internal/db"
 	"opendustpan.org/opendustpan/pkg/accesstoken"
+	"opendustpan.org/opendustpan/pkg/audit"
 	"opendustpan.org/opendustpan/pkg/principal"
 )
 
@@ -138,6 +140,207 @@ func TestSweepInactiveFailsClosed(t *testing.T) {
 			}
 		})
 	}
+}
+
+// TestSweepInactiveRollsBackOnFailure proves that a failed read or disable
+// in the sweep rolls the transaction back, through the same function that
+// SweepInactive runs. The runner commits only when the function returns nil,
+// as the store does. After each failure the test checks that the runner got
+// the error, did not commit, and that no audit entry was inserted and the
+// entry function was not called.
+func TestSweepInactiveRollsBackOnFailure(t *testing.T) {
+	t.Parallel()
+
+	for _, fail := range []string{
+		"DatabaseNowMs",
+		"DisableInactiveAccessTokens",
+		"DisableInactivePrincipals",
+		"ListSweepSkippedBreakGlassPrincipals",
+	} {
+		t.Run(fail, func(t *testing.T) {
+			t.Parallel()
+
+			checkSweepRollsBack(t, fail)
+		})
+	}
+}
+
+// checkSweepRollsBack fails the statement fail in a sweep through
+// sweepInactiveAudited and checks the rollback.
+func checkSweepRollsBack(t *testing.T, fail string) {
+	t.Helper()
+
+	tx := &scriptTx{fail: fail, rows: nil, count: 1_700_000_000_000, ran: nil}
+	committed := false
+
+	run := func(_ context.Context, fn func(q *db.Queries) error) error {
+		err := fn(db.New(tx))
+		if err == nil {
+			committed = true
+		}
+
+		return err
+	}
+
+	called := false
+	entry := func(time.Time, string) audit.Entry {
+		called = true
+
+		var e audit.Entry
+
+		return e
+	}
+	sw := accesstoken.Sweep{Tokens: true, Accounts: true, Inactivity: 90 * 24 * time.Hour}
+
+	res, err := sweepInactiveAudited(t.Context(), run, sw, entry)
+	if !errors.Is(err, errScriptedStatement) {
+		t.Fatalf("sweepInactiveAudited = %v, want an error that matches %v", err, errScriptedStatement)
+	}
+
+	if committed {
+		t.Fatal("the transaction committed after a failed statement")
+	}
+
+	if !res.At.IsZero() || len(res.Tokens) != 0 || len(res.Principals) != 0 {
+		t.Fatalf("result after the failure = %+v, want the zero result", res)
+	}
+
+	if called {
+		t.Fatal("the sweep built an audit entry after a failed statement")
+	}
+
+	if slices.Contains(tx.ran, "InsertAuditEntry") {
+		t.Fatalf("statements = %v, want no InsertAuditEntry", tx.ran)
+	}
+
+	if len(tx.ran) == 0 || tx.ran[0] != "LockServerAuditScope" {
+		t.Fatalf("statements = %v, want the lock of @server first", tx.ran)
+	}
+}
+
+// ErrStatementFaultForTest is the error of the statement that
+// FailStatementForTest fails.
+var ErrStatementFaultForTest = errors.New("injected statement failure")
+
+// txBeginner is the pool that guardedPool wraps.
+type txBeginner interface {
+	Begin(ctx context.Context) (pgx.Tx, error)
+	BeginTx(ctx context.Context, opts pgx.TxOptions) (pgx.Tx, error)
+}
+
+// StatementFaultForTest is a fault that FailStatementForTest set on a store.
+type StatementFaultForTest struct {
+	s     *Store
+	inner txBeginner
+	fault *statementFault
+}
+
+// FailStatementForTest makes each statement with the given sqlc name fail
+// with ErrStatementFaultForTest, in each transaction that s opens after the
+// call. The transaction itself is the real one of the store: its rollback
+// and its commit run as in production.
+func FailStatementForTest(s *Store, name string) StatementFaultForTest {
+	inner := s.txs.pool
+	fault := &statementFault{name: name, fired: atomic.Int64{}}
+	s.txs.pool = statementFaultPool{inner: inner, fault: fault}
+
+	return StatementFaultForTest{s: s, inner: inner, fault: fault}
+}
+
+// Fired reports how many times the fault fired.
+func (f StatementFaultForTest) Fired() int64 { return f.fault.fired.Load() }
+
+// Restore removes the fault: the transactions that s opens after the call
+// run every statement.
+func (f StatementFaultForTest) Restore() { f.s.txs.pool = f.inner }
+
+// statementFault names the statement to fail and counts the failures.
+type statementFault struct {
+	name  string
+	fired atomic.Int64
+}
+
+// match reports whether sql is the statement to fail, and counts it.
+func (f *statementFault) match(sql string) bool {
+	if statementName(sql) != f.name {
+		return false
+	}
+
+	f.fired.Add(1)
+
+	return true
+}
+
+// statementFaultPool opens the real transactions of inner and wraps each one
+// in a statementFaultTx.
+type statementFaultPool struct {
+	inner txBeginner
+	fault *statementFault
+}
+
+// Begin opens a real transaction with the fault.
+func (p statementFaultPool) Begin(ctx context.Context) (pgx.Tx, error) {
+	tx, err := p.inner.Begin(ctx)
+	if err != nil {
+		return nil, err
+	}
+
+	return statementFaultTx{Tx: tx, fault: p.fault}, nil
+}
+
+// BeginTx opens a real transaction of opts with the fault.
+func (p statementFaultPool) BeginTx(ctx context.Context, opts pgx.TxOptions) (pgx.Tx, error) {
+	tx, err := p.inner.BeginTx(ctx, opts)
+	if err != nil {
+		return nil, err
+	}
+
+	return statementFaultTx{Tx: tx, fault: p.fault}, nil
+}
+
+// statementFaultTx is a real transaction that fails the statement of fault
+// and sends each other statement to the database.
+type statementFaultTx struct {
+	pgx.Tx
+
+	fault *statementFault
+}
+
+// Exec fails the faulted statement and runs another one.
+func (t statementFaultTx) Exec(ctx context.Context, sql string, args ...any) (pgconn.CommandTag, error) {
+	if t.fault.match(sql) {
+		return pgconn.CommandTag{}, ErrStatementFaultForTest
+	}
+
+	tag, err := t.Tx.Exec(ctx, sql, args...)
+	if err != nil {
+		return tag, fmt.Errorf("exec: %w", err)
+	}
+
+	return tag, nil
+}
+
+// Query fails the faulted statement and runs another one.
+func (t statementFaultTx) Query(ctx context.Context, sql string, args ...any) (pgx.Rows, error) {
+	if t.fault.match(sql) {
+		return nil, ErrStatementFaultForTest
+	}
+
+	rows, err := t.Tx.Query(ctx, sql, args...)
+	if err != nil {
+		return rows, fmt.Errorf("query: %w", err)
+	}
+
+	return rows, nil
+}
+
+// QueryRow fails the faulted statement and runs another one.
+func (t statementFaultTx) QueryRow(ctx context.Context, sql string, args ...any) pgx.Row {
+	if t.fault.match(sql) {
+		return failedRow{err: ErrStatementFaultForTest}
+	}
+
+	return t.Tx.QueryRow(ctx, sql, args...)
 }
 
 // scriptTx is a db.DBTX that records the name of each statement and fails

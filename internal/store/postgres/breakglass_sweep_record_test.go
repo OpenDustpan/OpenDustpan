@@ -100,6 +100,109 @@ func TestBreakGlassSweepWritesExemptRecord(t *testing.T) {
 	checkPostgresExemptRecord(t, f, f.sweep(t), bg)
 }
 
+// TestBreakGlassSweepFailureStoresNothing proves on a real PostgreSQL store
+// that a sweep fails closed through SweepInactive: when the clock read, the
+// disable of the tokens, the disable of the accounts or the list of the
+// skipped break-glass accounts fails, the transaction of the store rolls
+// back. No account is disabled, and the server audit scope holds no new
+// record. The list fails after the disable of the accounts ran, so that case
+// shows that the rollback undoes a disable. After the fault is removed, the
+// same sweep disables the inactive person, so the seed is one that the failed
+// sweep would have changed.
+func TestBreakGlassSweepFailureStoresNothing(t *testing.T) {
+	t.Parallel()
+
+	for _, name := range []string{
+		"DatabaseNowMs",
+		"DisableInactiveAccessTokens",
+		"DisableInactivePrincipals",
+		"ListSweepSkippedBreakGlassPrincipals",
+	} {
+		t.Run(name, func(t *testing.T) {
+			t.Parallel()
+
+			checkSweepFailureStoresNothing(t, name)
+		})
+	}
+}
+
+func checkSweepFailureStoresNothing(t *testing.T, name string) {
+	t.Helper()
+
+	f := newPostgresSweepFixture(t)
+	bg := f.seed(t)
+	idle := f.seedIdlePerson(t)
+	before := f.serverEntryCount(t)
+
+	fault := postgres.FailStatementForTest(f.store, name)
+
+	res, err := f.svc.SweepInactive(t.Context(), accesstoken.SweepEntry())
+	if err == nil {
+		t.Fatalf("sweep with %s failing = %+v, want an error", name, res)
+	}
+
+	if fault.Fired() == 0 {
+		t.Fatalf("the fault of %s did not fire", name)
+	}
+
+	fault.Restore()
+
+	for _, id := range []string{idle.ID, bg.ID} {
+		stored, getErr := f.principals.GetPrincipal(t.Context(), id)
+		if getErr != nil || !stored.DisabledAt.IsZero() {
+			t.Fatalf("principal %s after the failed sweep = %+v, %v; want it enabled", id, stored, getErr)
+		}
+	}
+
+	if after := f.serverEntryCount(t); after != before {
+		t.Fatalf("server audit entries after the failed sweep = %d, want %d", after, before)
+	}
+
+	if clean := f.sweep(t); !slices.Contains(clean.Principals, idle.ID) {
+		t.Fatalf("sweep without the fault = %+v, want the inactive person %q disabled", clean, idle.ID)
+	}
+}
+
+// seedIdlePerson turns the token part of the sweep on and stores one
+// inactive person that is not a break-glass account.
+func (f postgresSweepFixture) seedIdlePerson(t *testing.T) principal.Principal {
+	t.Helper()
+
+	ctx := t.Context()
+	_, err := f.svc.SetPolicy(ctx, policyCaller(), accesstoken.PolicyChange{
+		MaxLifetime: nil, Inactivity: nil,
+		DisableTokens: new(true), DisableAccounts: new(true), DisableBreakGlass: nil, ExchangeLifetime: nil,
+	})
+	if err != nil {
+		t.Fatalf("set policy: %v", err)
+	}
+
+	p, err := f.principals.CreatePrincipal(ctx, policyCaller(), principal.Input{
+		Subject: "idle@example.com", DisplayName: "", Kind: principal.KindPerson,
+	})
+	if err != nil {
+		t.Fatalf("create person: %v", err)
+	}
+
+	return p
+}
+
+// serverEntryCount returns the count of the entries in the server audit
+// scope.
+func (f postgresSweepFixture) serverEntryCount(t *testing.T) int {
+	t.Helper()
+
+	var n int
+
+	err := postgres.Pool(f.store).QueryRow(t.Context(),
+		"SELECT count(*) FROM audit_entries WHERE namespace = $1", audit.ServerScope.String()).Scan(&n)
+	if err != nil {
+		t.Fatalf("count the server audit entries: %v", err)
+	}
+
+	return n
+}
+
 func checkPostgresExemptRecord(
 	t *testing.T, f postgresSweepFixture, res accesstoken.SweepResult, bg principal.Principal,
 ) {

@@ -1107,52 +1107,53 @@ func testAddBreakGlassPersonGuards(t *testing.T, s PasskeyStore) {
 	t.Helper()
 
 	cases := []struct {
-		name   string
-		setup  func(t *testing.T, s PasskeyStore)
-		person func() principal.Principal
-		mutate func(next *mfa.Passkey)
+		name    string
+		setup   func(t *testing.T, s PasskeyStore)
+		person  func() principal.Principal
+		mutate  func(next *mfa.Passkey)
+		wantErr error
 	}{
 		{
-			name:  "a principal of another kind",
-			setup: nil,
-			person: func() principal.Principal {
-				p := breakGlassPrincipal()
-				p.Kind = principal.KindService
-
-				return p
-			},
-			mutate: nil,
+			name:    "a principal of another kind",
+			setup:   nil,
+			person:  func() principal.Principal { p := breakGlassPrincipal(); p.Kind = principal.KindService; return p },
+			mutate:  nil,
+			wantErr: mfa.ErrInvalid,
 		},
 		{
-			name:  "a person that is not a break-glass account",
-			setup: nil,
-			person: func() principal.Principal {
-				p := breakGlassPrincipal()
-				p.BreakGlass = false
-
-				return p
-			},
-			mutate: nil,
+			name:    "a person that is not a break-glass account",
+			setup:   nil,
+			person:  func() principal.Principal { p := breakGlassPrincipal(); p.BreakGlass = false; return p },
+			mutate:  nil,
+			wantErr: mfa.ErrInvalid,
 		},
 		{
-			name:  "a person of a namespace",
-			setup: nil,
-			person: func() principal.Principal {
-				p := breakGlassPrincipal()
-				p.Namespace = "team"
-
-				return p
-			},
-			mutate: nil,
+			name:    "a person of a namespace",
+			setup:   nil,
+			person:  func() principal.Principal { p := breakGlassPrincipal(); p.Namespace = "team"; return p },
+			mutate:  nil,
+			wantErr: mfa.ErrInvalid,
 		},
 		{
-			name: "a first passkey of another person",
-			setup: func(t *testing.T, s PasskeyStore) {
-				t.Helper()
-				mustPerson(t, s, 5)
-			},
-			person: breakGlassPrincipal,
-			mutate: func(next *mfa.Passkey) { next.PersonID = "prn-5" },
+			name:    "a first passkey of another person",
+			setup:   func(t *testing.T, s PasskeyStore) { t.Helper(); mustPerson(t, s, 5) },
+			person:  breakGlassPrincipal,
+			mutate:  func(next *mfa.Passkey) { next.PersonID = "prn-5" },
+			wantErr: mfa.ErrInvalid,
+		},
+		{
+			name:    "an invalid person",
+			setup:   nil,
+			person:  func() principal.Principal { p := breakGlassPrincipal(); p.Subject = ""; return p },
+			mutate:  nil,
+			wantErr: principal.ErrInvalid,
+		},
+		{
+			name:    "an invalid first passkey",
+			setup:   nil,
+			person:  breakGlassPrincipal,
+			mutate:  func(next *mfa.Passkey) { next.CredentialID = nil },
+			wantErr: mfa.ErrInvalid,
 		},
 	}
 
@@ -1170,7 +1171,7 @@ func testAddBreakGlassPersonGuards(t *testing.T, s PasskeyStore) {
 
 		err := s.AddBreakGlassPerson(t.Context(), p, first,
 			entry(principal.Ref(p.ID), at(0)), entry(passkeyObject(1), at(11)))
-		wantErr(t, "add "+tc.name, err, mfa.ErrInvalid)
+		wantErr(t, "add "+tc.name, err, tc.wantErr)
 
 		if _, err := s.GetPrincipal(t.Context(), p.ID); !errors.Is(err, principal.ErrNotFound) {
 			t.Fatalf("%s: principal after the refused add: err = %v, want ErrNotFound", tc.name, err)

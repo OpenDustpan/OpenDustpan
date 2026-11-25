@@ -71,10 +71,14 @@ func checkBreakGlassAddFreshStep(t *testing.T, f accessFixture, old passkeyClien
 
 	// The access token carries the actions of the route, so only the fresh
 	// step can refuse it.
+	failures := breakGlassFailureCount(t, f)
+
 	rec := f.asToken(t, "admin", http.MethodPost, breakGlassPath, []byte(breakGlassAddBody))
 	if rec.Code != http.StatusForbidden {
 		t.Fatalf("access token = %d %s, want 403", rec.Code, rec.Body.String())
 	}
+
+	failures = expectOneMoreBreakGlassFailure(t, f, failures, "access token add")
 
 	rec = old.do(http.MethodPost, breakGlassPath, []byte(breakGlassAddBody))
 
@@ -84,6 +88,8 @@ func checkBreakGlassAddFreshStep(t *testing.T, f accessFixture, old passkeyClien
 		t.Fatalf("stale add = %d %s, want 403 with errorCode %s and a path of a new sign-in", rec.Code,
 			rec.Body.String(), freshErrorCode)
 	}
+
+	expectOneMoreBreakGlassFailure(t, f, failures, "stale add")
 
 	// The stale add stored nothing: the same subject is free.
 	rec = f.freshPasskeyClient(t, "admin").do(http.MethodPost, breakGlassPath, []byte(breakGlassAddBody))
@@ -114,21 +120,51 @@ func checkBreakGlassRotateFreshStep(
 	rotateBody := []byte(`{"oldPasskey":"` + account.Passkeys[0].ID + `","name":"next-key",` +
 		`"credential":"BwgJ","publicKey":"CgsM","transports":["nfc"]}`)
 
+	failures := breakGlassFailureCount(t, f)
+
 	rec := f.asToken(t, "admin", http.MethodPost, rotatePath, rotateBody)
 	if rec.Code != http.StatusForbidden {
 		t.Fatalf("access token on the rotation = %d %s, want 403", rec.Code, rec.Body.String())
 	}
+
+	failures = expectOneMoreBreakGlassFailure(t, f, failures, "access token rotation")
 
 	rec = old.do(http.MethodPost, rotatePath, rotateBody)
 	if got := decodeErrorBody(t, rec); rec.Code != http.StatusForbidden || got.ErrorCode != freshErrorCode {
 		t.Fatalf("stale rotation = %d %s, want 403 with errorCode %s", rec.Code, rec.Body.String(), freshErrorCode)
 	}
 
+	expectOneMoreBreakGlassFailure(t, f, failures, "stale rotation")
+
 	// The stale rotation kept the old passkey: the same rotation works.
 	rec = f.freshPasskeyClient(t, "admin").do(http.MethodPost, rotatePath, rotateBody)
 	if rec.Code != http.StatusNoContent {
 		t.Fatalf("fresh rotation = %d %s, want 204", rec.Code, rec.Body.String())
 	}
+}
+
+// breakGlassFailureCount returns the number of failure entries on the
+// server object for the manage action. The break-glass routes resolve the
+// server object, and the refusal writes its entry on that object.
+func breakGlassFailureCount(t *testing.T, f accessFixture) int {
+	t.Helper()
+
+	return len(floorEntries(t, f.store, identity.ActionServerManagePrincipals, audit.OutcomeFailure,
+		identity.ServerObject().String()))
+}
+
+// expectOneMoreBreakGlassFailure fails the test unless the refusal named
+// what wrote exactly one failure entry since before, and returns the new
+// count.
+func expectOneMoreBreakGlassFailure(t *testing.T, f accessFixture, before int, what string) int {
+	t.Helper()
+
+	after := breakGlassFailureCount(t, f)
+	if after != before+1 {
+		t.Fatalf("failure entries on break-glass after the %s = %d, want %d", what, after, before+1)
+	}
+
+	return after
 }
 
 // checkBreakGlassList proves the live count of the list.
@@ -462,6 +498,112 @@ func TestBreakGlassRotateRefusesHostilePathID(t *testing.T) {
 			if len(accounts) != 1 || len(accounts[0].Passkeys) != 1 ||
 				accounts[0].Passkeys[0].ID != account.Passkeys[0].ID {
 				t.Fatalf("accounts = %+v, want the old passkey %s only", accounts, account.Passkeys[0].ID)
+			}
+		})
+	}
+}
+
+// TestBreakGlassRotateRefusesHostileOldPasskey sends a hostile old passkey ID
+// in the body of the rotation of a real break-glass account. The handler
+// checks the ID at the boundary, before it asks a service. Each refusal
+// answers 404 with break-glass.not-found, writes one denied entry on the
+// "break-glass" object and keeps the old passkey. The passkey service checks
+// the ID too, but it writes no denied entry on that object: a row whose guard
+// is removed misses the entry, and fails.
+func TestBreakGlassRotateRefusesHostileOldPasskey(t *testing.T) {
+	t.Parallel()
+
+	cases := []struct {
+		name string
+		id   string
+	}{
+		{"empty ID", ""},
+		{"ID over the length limit", "pky-" + strings.Repeat("a", mfa.MaxIDLength)},
+		{"ID with CR LF", "pky-x\r\nX-Injected: 1"},
+		{"ID with a path", "../pky-x"},
+		{"ID with a space", "pky- x"},
+		{"ID with uppercase and unicode", "PKY-éÉ"},
+		{"ID with an SQL quote", "pky-x' OR '1'='1"},
+		{"ID with a NUL byte", "pky-x\x00"},
+	}
+
+	for _, c := range cases {
+		t.Run(c.name, func(t *testing.T) {
+			t.Parallel()
+
+			f := newAccessFixture(t)
+			f.seedSessionAdmin(t, "admin")
+			account := addBreakGlassAccount(t, f)
+
+			body := breakGlassBody(t, map[string]any{"oldPasskey": c.id, "name": "next-key"})
+			rec := f.freshPasskeyClient(t, "admin").do(http.MethodPost, breakGlassPath+"/"+account.ID+"/rotate", body)
+
+			if got := decodeErrorBody(t, rec); rec.Code != http.StatusNotFound ||
+				got.ErrorCode != errcode.BreakGlassNotFound {
+				t.Fatalf("rotate with old passkey %q = %d %s, want 404 with errorCode %s", c.id, rec.Code,
+					rec.Body.String(), errcode.BreakGlassNotFound)
+			}
+
+			denied := floorEntries(t, f.store, identity.ActionServerManagePrincipals, audit.OutcomeDenied,
+				"break-glass")
+			if len(denied) != 1 || denied[0].Reason == "" {
+				t.Fatalf("denied entries on break-glass = %+v, want one with a reason", denied)
+			}
+
+			accounts := breakGlassAccounts(t, f)
+			if len(accounts) != 1 || len(accounts[0].Passkeys) != 1 ||
+				accounts[0].Passkeys[0].ID != account.Passkeys[0].ID {
+				t.Fatalf("accounts = %+v, want the old passkey %s only", accounts, account.Passkeys[0].ID)
+			}
+		})
+	}
+}
+
+// TestBreakGlassAddRefusesHostileSubject sends a hostile subject to the add.
+// The handler checks the subject at the boundary, before it asks the passkey
+// service. Each refusal answers 400, writes one denied entry on the
+// "break-glass" object and stores no account. The principal service checks
+// the subject too, but its refusal is a failure entry, not a denied one: a
+// row whose guard is removed misses the denied entry, and fails.
+func TestBreakGlassAddRefusesHostileSubject(t *testing.T) {
+	t.Parallel()
+
+	cases := []struct {
+		name    string
+		subject string
+	}{
+		{"empty subject", ""},
+		{"subject over the length limit", "a" + strings.Repeat("b", 255)},
+		{"subject with CR LF", "bg\r\nX-Injected: 1"},
+		{"subject with a space", "bg x"},
+		{"subject that starts with a dot", ".bg"},
+		{"subject with unicode", "bg-é"},
+		{"subject with an SQL quote", "bg' OR '1'='1"},
+		{"subject with a NUL byte", "bg\x00"},
+	}
+
+	for _, c := range cases {
+		t.Run(c.name, func(t *testing.T) {
+			t.Parallel()
+
+			f := newAccessFixture(t)
+			f.seedSessionAdmin(t, "admin")
+
+			body := breakGlassBody(t, map[string]any{"subject": c.subject, "displayName": "Recovery"})
+			rec := f.freshPasskeyClient(t, "admin").do(http.MethodPost, breakGlassPath, body)
+
+			if rec.Code != http.StatusBadRequest {
+				t.Fatalf("add with subject %q = %d %s, want 400", c.subject, rec.Code, rec.Body.String())
+			}
+
+			denied := floorEntries(t, f.store, identity.ActionServerManagePrincipals, audit.OutcomeDenied,
+				"break-glass")
+			if len(denied) != 1 || denied[0].Reason == "" {
+				t.Fatalf("denied entries on break-glass = %+v, want one with a reason", denied)
+			}
+
+			if accounts := breakGlassAccounts(t, f); len(accounts) != 0 {
+				t.Fatalf("accounts = %+v, want none after a refused add", accounts)
 			}
 		})
 	}

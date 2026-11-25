@@ -308,6 +308,20 @@ func (h *Handler) addBreakGlass(w http.ResponseWriter, r *http.Request, p identi
 		return
 	}
 
+	// Allowlist check at the boundary. Defense in depth: the principal
+	// service validates the subject of the person too; this check stays so
+	// that a hostile subject never reaches the service, and it does not rely
+	// on it.
+	if err := principal.ValidateSubject(req.Subject); err != nil {
+		h.appendServerChangeReason(r, p, serverChange{
+			at: h.now(), action: identity.ActionServerManagePrincipals, object: tagBreakGlass,
+			outcome: audit.OutcomeDenied,
+		}, "the subject is not valid")
+		h.writeError(ctx, w, err)
+
+		return
+	}
+
 	key, err := passkeyOf(req.passkey())
 	if err != nil {
 		h.appendServerChangeReason(r, p, serverChange{
@@ -359,17 +373,12 @@ func (h *Handler) rotateBreakGlass(w http.ResponseWriter, r *http.Request, p ide
 		return
 	}
 
-	// Allowlist check at the boundary: an ID of another shape names no
-	// break-glass account, so nothing reaches the principal service. The audit
-	// entry names the route object, not the hostile text. Defense in depth:
-	// the store reads by placeholder and breakGlassAccount refuses an unknown
-	// record; this check stays so that a hostile ID never reaches either
-	// layer, and it does not rely on them.
-	if !ident.Valid(id, maxBreakGlassIDLength) {
+	// The audit entry names the route object, not the hostile text.
+	if reason := rotateIDRefusal(id, req.OldPasskey); reason != "" {
 		h.appendServerChangeReason(r, p, serverChange{
 			at: h.now(), action: identity.ActionServerManagePrincipals, object: tagBreakGlass,
 			outcome: audit.OutcomeDenied,
-		}, "the ID has a form that no break-glass account has")
+		}, reason)
 		h.writeError(ctx, w, errBreakGlassNotFound)
 
 		return
@@ -418,6 +427,29 @@ func (h *Handler) rotateBreakGlass(w http.ResponseWriter, r *http.Request, p ide
 	}
 
 	w.WriteHeader(http.StatusNoContent)
+}
+
+// rotateIDRefusal is the allowlist check at the boundary of the IDs of a
+// rotation. It returns the reason of the refusal, or "" when the account ID
+// of the path and the old passkey ID of the body are both valid. An ID of
+// another shape names no break-glass account or no passkey, so nothing
+// reaches a service.
+func rotateIDRefusal(id, oldPasskey string) string {
+	// Defense in depth: the store reads by placeholder and
+	// breakGlassAccount refuses an unknown record; this check stays so that
+	// a hostile ID never reaches either layer, and it does not rely on them.
+	if !ident.Valid(id, maxBreakGlassIDLength) {
+		return "the ID has a form that no break-glass account has"
+	}
+
+	// Defense in depth: the passkey service checks the ID with ident.Valid
+	// and the store reads it by placeholder; this check stays so that a
+	// hostile ID never reaches either layer, and it does not rely on them.
+	if !ident.Valid(oldPasskey, mfa.MaxIDLength) {
+		return "the old passkey ID has a form that no passkey has"
+	}
+
+	return ""
 }
 
 // breakGlassActor returns the actor of a break-glass write: the console

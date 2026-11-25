@@ -427,9 +427,18 @@ func setPolicy(ctx context.Context, q *db.Queries, p accesstoken.Policy) error {
 func (s *Store) SweepInactive(
 	ctx context.Context, sw accesstoken.Sweep, entry accesstoken.SweepEntryFunc,
 ) (accesstoken.SweepResult, error) {
+	return sweepInactiveAudited(ctx, s.inTx, sw, entry)
+}
+
+// sweepInactiveAudited runs the sweep and appends its audit entries in one
+// transaction of run. When a read, a disable or an append fails, fn returns
+// the error and run rolls the transaction back: no disable and no entry stay.
+func sweepInactiveAudited(
+	ctx context.Context, run txRunner, sw accesstoken.Sweep, entry accesstoken.SweepEntryFunc,
+) (accesstoken.SweepResult, error) {
 	var res accesstoken.SweepResult
 
-	err := runServerAuditTx(ctx, s.inTx, func(tx serverAuditTx) error {
+	err := runServerAuditTx(ctx, run, func(tx serverAuditTx) error {
 		var err error
 
 		var skipped []string
@@ -439,7 +448,7 @@ func (s *Store) SweepInactive(
 			return err
 		}
 
-		return s.appendSweepEntries(ctx, tx, res, skipped, entry)
+		return appendSweepEntries(ctx, tx, res, skipped, entry)
 	})
 	if err != nil {
 		return accesstoken.SweepResult{}, err
@@ -508,7 +517,7 @@ func sweepInactive(
 // appendSweepEntries appends one entry for each record of res and one
 // exemption entry for each skipped break-glass account, in the locked
 // transaction tx.
-func (s *Store) appendSweepEntries(
+func appendSweepEntries(
 	ctx context.Context, tx serverAuditTx, res accesstoken.SweepResult, skipped []string,
 	entry accesstoken.SweepEntryFunc,
 ) error {

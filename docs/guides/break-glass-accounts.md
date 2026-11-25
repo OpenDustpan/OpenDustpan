@@ -178,6 +178,8 @@ for every other principal. A caller that does not hold them gets 403.
 
 ## Replace the last account
 
+This is the upgrade path for a break-glass account.
+
 1. Make the second break-glass account before you disable the first.
 2. Check that the second account can sign in.
 3. Disable the first account.
