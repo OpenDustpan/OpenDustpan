@@ -3,6 +3,7 @@ package jobtest
 import (
 	"errors"
 	"slices"
+	"strings"
 	"testing"
 	"time"
 
@@ -413,6 +414,15 @@ func testList(t *testing.T, h Harness) {
 	}
 }
 
+// freezeCases returns the cases of the freeze methods of the store.
+func freezeCases() []suiteCase {
+	return []suiteCase{
+		{"freezes list, end once, and validate", testFreezes},
+		{"a second freeze of a namespace with an active freeze is ErrFreezeActive", testFreezeSecondCreate},
+		{"SQL text as a freeze namespace or ID matches no row", testFreezeSQLText},
+	}
+}
+
 func testFreezes(t *testing.T, h Harness) {
 	t.Helper()
 
@@ -447,5 +457,72 @@ func testFreezes(t *testing.T, h Harness) {
 
 	if err := h.Freezes.EndFreeze(t.Context(), "frz-unknown", "bo", f.fence, e); !errors.Is(err, job.ErrNotFound) {
 		t.Fatalf("EndFreeze of an unknown ID = %v, want ErrNotFound", err)
+	}
+}
+
+// testFreezeSQLText sends SQL text as the namespace and as the freeze ID to the
+// freeze methods of the store. The store binds each value as a placeholder, so
+// the text matches no row and changes no row. This case stays even though the
+// HTTP adapter refuses such a name: it checks the store alone.
+func testFreezeSQLText(t *testing.T, h Harness) {
+	t.Helper()
+
+	f := setUp(t, h)
+	first := freeze(t, h, f)
+	e := entry(f.unit, job.ActionNamespaceManageFreezes)
+
+	hostile := namespace.Name(string(f.fence.Namespace) + "' OR '1'='1")
+	hostileFence := namespace.Fence{Namespace: hostile, FailoverVersion: f.fence.FailoverVersion}
+
+	listed, err := h.Freezes.ListFreezes(t.Context(), hostile, time.Time{})
+	if err == nil && len(listed) != 0 {
+		t.Fatalf("ListFreezes with SQL text = %v, want no freeze", listed)
+	}
+
+	fr := newFreeze(f)
+	fr.Namespace = hostile
+
+	if h.Freezes.CreateFreeze(t.Context(), fr, hostileFence, e) == nil {
+		t.Fatal("CreateFreeze with SQL text as the namespace = nil, want an error")
+	}
+
+	if h.Freezes.EndFreeze(t.Context(), "frz-1' OR '1'='1", "bo", f.fence, e) == nil {
+		t.Fatal("EndFreeze with SQL text as the ID = nil, want an error")
+	}
+
+	if h.Freezes.EndFreeze(t.Context(), first.ID, "bo", hostileFence, e) == nil {
+		t.Fatal("EndFreeze with SQL text in the fence = nil, want an error")
+	}
+
+	listed, err = h.Freezes.ListFreezes(t.Context(), f.fence.Namespace, time.Time{})
+	if err != nil || len(listed) != 1 || listed[0].ID != first.ID || !listed[0].EndsAt.IsZero() {
+		t.Fatalf("ListFreezes after the SQL text = %v, %v; want only the active %s", listed, err, first.ID)
+	}
+}
+
+func testFreezeSecondCreate(t *testing.T, h Harness) {
+	t.Helper()
+
+	f := setUp(t, h)
+	first := freeze(t, h, f)
+
+	second := newFreeze(f)
+
+	// Layer: the application check of CreateFreeze. The unique index of the
+	// open freezes refuses a second open freeze too, but it names the refused
+	// freeze. The refusal names the active freeze, so it comes from the check:
+	// remove the check and the error names second.ID instead of first.ID.
+	err := h.Freezes.CreateFreeze(t.Context(), second, f.fence, entry(f.unit, job.ActionNamespaceManageFreezes))
+	if !errors.Is(err, job.ErrFreezeActive) {
+		t.Fatalf("second CreateFreeze = %v, want ErrFreezeActive", err)
+	}
+
+	if err == nil || !strings.Contains(err.Error(), first.ID) {
+		t.Fatalf("second CreateFreeze = %v, want the active freeze %s", err, first.ID)
+	}
+
+	listed, err := h.Freezes.ListFreezes(t.Context(), f.fence.Namespace, time.Now().Add(-time.Hour))
+	if err != nil || len(listed) != 1 || listed[0].ID != first.ID {
+		t.Fatalf("ListFreezes after the refused create = %v, %v; want only %s", listed, err, first.ID)
 	}
 }

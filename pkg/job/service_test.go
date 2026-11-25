@@ -484,7 +484,7 @@ func newRig(t *testing.T, opts ...rigOption) *rig {
 		Authorizer: r.authz,
 		Gates:      r.gates,
 		Fences:     svcFences{err: nil},
-		Freezes:    nil, Switches: nil,
+		Freezes:    svcFreezes{list: nil, err: nil}, Switches: nil,
 		Now:       func() time.Time { return r.now },
 		NewID:     func() job.ID { return job.ID("job-fixed") },
 		Log:       slog.New(slog.DiscardHandler),
@@ -1341,8 +1341,73 @@ func TestStartBreakGlass(t *testing.T) {
 	}
 
 	e := r.store.creates[0].entries[0]
-	if e.Kind != audit.KindOverride || e.Reason != "outage" {
-		t.Fatalf("audit entry = kind %s, reason %q; want an override with the reason", e.Kind, e.Reason)
+	if e.Kind != audit.KindOverride || e.Reason != "outage" || e.Subject != "ada" {
+		t.Fatalf("audit entry = kind %s, reason %q, subject %q; want ada's override with the reason",
+			e.Kind, e.Reason, e.Subject)
+	}
+
+	foundFreeze := false
+	for _, change := range e.Changes {
+		if change.Key == "freeze" && change.New == "frz-1" {
+			foundFreeze = true
+		}
+	}
+	if !foundFreeze {
+		t.Fatalf("audit changes = %+v, want the freeze frz-1", e.Changes)
+	}
+}
+
+// allowApply grants the caller the apply action on the unit of the rig.
+func allowApply(_ *job.ServiceConfig, r *rig) {
+	r.authz.allow[string(job.ActionUnitRunApply)+" "+r.unit.String()] = true
+}
+
+// noFreezeStore removes the freeze store of the service, so that the service
+// has no freeze to read.
+func noFreezeStore(cfg *job.ServiceConfig, _ *rig) {
+	cfg.Freezes = nil
+}
+
+// Layer: the freeze gate of the service. The fake store has no freeze rule, so
+// only the gate of the service can refuse the start of a changing phase. Remove
+// the gate and the first case starts the job.
+func TestStartInFreezeIsRefusedByTheServiceGate(t *testing.T) {
+	t.Parallel()
+
+	r := freezeRig(t, svcFreezes{list: []job.Freeze{activeFreeze()}, err: nil}, allowApply)
+
+	req := r.plan("")
+	req.Operation = job.OperationRefresh
+
+	if _, err := r.svc.Start(t.Context(), actorOf("ada"), req); !errors.Is(err, job.ErrFrozen) {
+		t.Fatalf("Start of a refresh in a freeze = %v, want ErrFrozen", err)
+	}
+
+	if len(r.store.creates) != 0 {
+		t.Fatalf("Create calls = %d, want none", len(r.store.creates))
+	}
+
+	if _, err := r.svc.Start(t.Context(), actorOf("ada"), r.plan("")); err != nil {
+		t.Fatalf("Start of a plan in a freeze = %v, want nil", err)
+	}
+}
+
+// A service with no freeze store cannot read a freeze, so a start with a
+// dispatch is refused with ErrNoFreezeStore and nothing reaches the store.
+func TestStartWithoutFreezeStoreRefusesTheDispatch(t *testing.T) {
+	t.Parallel()
+
+	r := newRig(t, allowApply, noFreezeStore)
+
+	req := r.plan("")
+	req.Operation = job.OperationRefresh
+
+	if _, err := r.svc.Start(t.Context(), actorOf("ada"), req); !errors.Is(err, job.ErrNoFreezeStore) {
+		t.Fatalf("Start with no freeze store = %v, want ErrNoFreezeStore", err)
+	}
+
+	if len(r.store.creates) != 0 {
+		t.Fatalf("Create calls = %d, want none", len(r.store.creates))
 	}
 }
 

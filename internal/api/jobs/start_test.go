@@ -187,7 +187,9 @@ func checkPostRoute(t *testing.T, h testHandler) {
 	}
 
 	declares := found.Scope == jobsapi.ScopeAuthorized &&
-		slices.Equal(found.Writes, []identity.Action{identity.ActionUnitRunPlan}) && len(found.Reads) == 0
+		slices.Equal(found.Writes, []identity.Action{
+			identity.ActionUnitRunPlan, identity.ActionNamespaceBreakFreeze,
+		}) && len(found.Reads) == 0
 	serves := found.Resolve != nil && found.Serve != nil
 
 	if !declares || !serves || !found.IdempotencyKey || !found.ETag {
@@ -207,8 +209,12 @@ func checkStartOperation(t *testing.T, ops []apidesc.Operation) {
 
 		// The wrapper reads the namespace of the path first, then the job
 		// service checks the start action on the unit of the body.
-		wantActions := []string{"namespace:read", "unit:run-plan"}
-		wantObjects := map[string]string{"namespace:read": apidesc.KindNamespace, "unit:run-plan": apidesc.KindUnit}
+		wantActions := []string{"namespace:read", "unit:run-plan", "namespace:break-freeze"}
+		wantObjects := map[string]string{
+			"namespace:read":         apidesc.KindNamespace,
+			"unit:run-plan":          apidesc.KindUnit,
+			"namespace:break-freeze": apidesc.KindNamespace,
+		}
 
 		if !op.IdempotencyKey || !op.ETag || !slices.Equal(op.Actions, wantActions) ||
 			!maps.Equal(op.ActionObjects, wantObjects) {
@@ -664,6 +670,11 @@ func TestStartDeniedWritesTheAuditEntry(t *testing.T) {
 			"an agent cannot do this",
 		},
 		{"a freeze", job.ErrFrozen, http.StatusConflict, "a change freeze is active"},
+		{
+			"a start with no freeze store fails closed",
+			fmt.Errorf("check freeze gate: %w", job.ErrNoFreezeStore),
+			http.StatusInternalServerError, "the server cannot read the freezes",
+		},
 		{"the limit", job.ErrLimit, http.StatusTooManyRequests, "too many open jobs"},
 		{"an enforced gate", enforced, http.StatusForbidden, "an enforced gate covers the unit: no-plans"},
 		{

@@ -4810,19 +4810,39 @@ ORDER BY j.seq
 LIMIT sqlc.arg(max_rows);
 
 -- name: GetActiveJobFreeze :one
-SELECT f.id FROM job_freezes AS f
-JOIN namespaces AS n ON n.id = f.namespace_id
-WHERE n.name = sqlc.arg(namespace) AND f.starts_at_ms <= sqlc.arg(now_ms)
+-- The read locks the namespace row FOR SHARE, so a freeze create that locks
+-- the same row FOR NO KEY UPDATE waits, and a freeze that the create commits
+-- first is seen here. The left join keeps the namespace row when no freeze is
+-- active, so the read locks the row either way. A lock on a freeze row alone
+-- locks an existing row only.
+-- Defense in depth: the fence check of a write transaction locks the same
+-- namespace row FOR UPDATE (GetFailoverVersionForUpdate); this lock stays so
+-- that a read outside a fenced write cannot pass a freeze create.
+SELECT COALESCE(f.id, '') AS id
+FROM namespaces AS n
+LEFT JOIN job_freezes AS f
+  ON f.namespace_id = n.id AND f.starts_at_ms <= sqlc.arg(now_ms)
   AND (f.ends_at_ms = 0 OR sqlc.arg(now_ms) < f.ends_at_ms)
-ORDER BY f.starts_at_ms, f.id
-LIMIT 1;
+WHERE n.name = sqlc.arg(namespace)
+ORDER BY f.starts_at_ms NULLS LAST, f.id
+LIMIT 1
+FOR SHARE OF n;
 
 -- name: InsertJobFreeze :execrows
-INSERT INTO job_freezes (id, namespace_id, reason, starts_at_ms, ends_at_ms, created_by, ended_by)
-VALUES (
-    sqlc.arg(id), (SELECT n.id FROM namespaces AS n WHERE n.name = sqlc.arg(namespace)), sqlc.arg(reason),
-    sqlc.arg(starts_at_ms), sqlc.arg(ends_at_ms), sqlc.arg(created_by), sqlc.arg(ended_by)
+-- The insert locks the namespace row FOR NO KEY UPDATE before it inserts, so
+-- a dispatch that reads the active freeze with the same row FOR SHARE waits,
+-- and a freeze that this insert makes cannot pass a dispatch that read no
+-- freeze. A lock on the freeze row alone locks an existing row only.
+-- Defense in depth: the fence check of a write transaction locks the same
+-- namespace row FOR UPDATE (GetFailoverVersionForUpdate); this lock stays so
+-- that an insert without that fence lock cannot pass a dispatch.
+WITH locked AS (
+    SELECT n.id FROM namespaces AS n WHERE n.name = sqlc.arg(namespace) FOR NO KEY UPDATE
 )
+INSERT INTO job_freezes (id, namespace_id, reason, starts_at_ms, ends_at_ms, created_by, ended_by)
+SELECT sqlc.arg(id), locked.id, sqlc.arg(reason), sqlc.arg(starts_at_ms), sqlc.arg(ends_at_ms),
+       sqlc.arg(created_by), sqlc.arg(ended_by)
+FROM locked
 ON CONFLICT (id) DO NOTHING;
 
 -- name: GetJobFreeze :one

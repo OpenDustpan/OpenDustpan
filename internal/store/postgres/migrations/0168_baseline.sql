@@ -2391,6 +2391,8 @@ CREATE INDEX item_keys_wrapper ON item_keys USING btree (wrapper_id) WHERE (shre
 
 CREATE INDEX job_freezes_namespace ON job_freezes USING btree (namespace_id, starts_at_ms);
 
+CREATE UNIQUE INDEX job_freezes_one_open ON job_freezes USING btree (namespace_id) WHERE (ends_at_ms = 0);
+
 CREATE INDEX job_logs_job ON job_logs USING btree (job_id);
 
 CREATE INDEX job_plans_job ON job_plans USING btree (job_id);

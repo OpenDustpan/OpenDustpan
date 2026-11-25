@@ -59,6 +59,10 @@ const (
 	// as that principal, with every grant that the principal has now or
 	// gets later.
 	RoleTokenManager = "token-manager"
+	// RoleFreezeBreaker holds the break-freeze action only. It is granted on
+	// the installation, and lets its holder start a job through an active
+	// freeze. It cannot create or end a freeze.
+	RoleFreezeBreaker = "freeze-breaker"
 )
 
 // builtInDescriptions describes each built-in role, in catalog order.
@@ -88,6 +92,10 @@ var builtInDescriptions = []struct {
 	{
 		RoleAccountAdministrator,
 		"Manages principals, groups, roles, grants and namespaces, makes the tokens of each service principal whose reach fits inside its own reach, and holds every data action.",
+	},
+	{
+		RoleFreezeBreaker,
+		"Starts jobs through an active freeze with a reason, on the installation. Holds no other action.",
 	},
 	{RoleSiteAdministrator, "Holds every action of the installation."},
 	{
@@ -174,7 +182,13 @@ func builtInActions(id string) []identity.Action {
 	case RoleAdmin:
 		return Actions(FamilyData)
 	case RoleInstallationOperator:
-		return Actions(FamilyOperator)
+		// The break-freeze action is an operator action that only RoleFreezeBreaker
+		// and RoleSiteAdministrator hold, so this role leaves it out.
+		return slices.DeleteFunc(Actions(FamilyOperator), func(a identity.Action) bool {
+			return a == identity.ActionNamespaceBreakFreeze
+		})
+	case RoleFreezeBreaker:
+		return []identity.Action{identity.ActionNamespaceBreakFreeze}
 	case RoleAccountAdministrator:
 		return accountAdministratorActions()
 	case RoleSiteAdministrator:

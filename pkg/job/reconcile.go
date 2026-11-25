@@ -385,8 +385,41 @@ func (run *reconcileRun) dispatchJob(ctx context.Context, j *Job) error {
 	return nil
 }
 
-// dispatch applies EventDispatch to j.
+// checkFreeze refuses the dispatch of the current phase of j when a freeze of
+// its namespace is active and j has no break-glass.
+//
+// Defense in depth: the store refuses a change dispatch in a freeze in the
+// transaction of the dispatch. This check stays so that a store that misses the
+// rule never dispatches a job in a freeze. It does not rely on the store.
+// The freezes come from the job store. A store that is no FreezeStore reads no
+// freeze, so the reconcile dispatches no job that changes a unit: fail closed.
+func (run *reconcileRun) checkFreeze(ctx context.Context, j *Job) error {
+	freezes, ok := run.r.cfg.Store.(FreezeStore)
+	if !ok {
+		return ErrNoFreezeStore
+	}
+
+	freezeGate, err := NewFreezeGate(ctx, freezes, j.Spec.Unit.Namespace(), run.now)
+	if err != nil {
+		return err
+	}
+
+	return freezeGate.Allow(j.Phases[j.Current].Kind, j.BreakGlass)
+}
+
+// dispatch applies EventDispatch to j. A freeze leaves the job queued and
+// writes nothing.
 func (run *reconcileRun) dispatch(ctx context.Context, j *Job) error {
+	if err := run.checkFreeze(ctx, j); err != nil {
+		if errors.Is(err, ErrFrozen) {
+			run.res.Waiting++
+		} else {
+			run.fail(j, "dispatch", err)
+		}
+
+		return nil
+	}
+
 	c := Change{
 		Job: j.ID, Version: j.Version, Event: EventDispatch, Wait: WaitNone, Reason: "", Dispatch: dispatchOf(j),
 		PlanNotBefore: time.Time{}, Executor: "", Claim: nil, Delivery: nil, MergedAt: time.Time{}, Approval: nil,

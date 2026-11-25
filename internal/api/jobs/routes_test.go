@@ -365,6 +365,7 @@ func newLoggedWorkerHandler(
 		Cursors:        deps.cursors,
 		Approvers:      gate.ApproverPolicy{Production: false, IsDev: nil},
 		Starter:        deps.starter,
+		Freezes:        nil,
 		Workers:        workers,
 		Pools:          nil,
 		Authenticator:  tokenAuthenticator{},
@@ -374,6 +375,7 @@ func newLoggedWorkerHandler(
 		DenialLimiter:  nil,
 		Sessions:       nil,
 		Logger:         logger,
+		Now:            nil,
 	})
 	if err != nil {
 		t.Fatalf("handler: %v", err)
@@ -911,6 +913,7 @@ func TestNewHandlerNeedsItsDependencies(t *testing.T) {
 		Cursors:        nil,
 		Approvers:      gate.ApproverPolicy{Production: false, IsDev: nil},
 		Starter:        nil,
+		Freezes:        nil,
 		Workers:        nil,
 		Pools:          nil,
 		Authenticator:  nil,
@@ -920,6 +923,7 @@ func TestNewHandlerNeedsItsDependencies(t *testing.T) {
 		DenialLimiter:  nil,
 		Sessions:       nil,
 		Logger:         nil,
+		Now:            nil,
 	})
 	if !errors.Is(err, jobsapi.ErrMissingDependency) {
 		t.Fatalf("NewHandler with no dependency = %v, want ErrMissingDependency", err)

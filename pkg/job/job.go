@@ -75,7 +75,9 @@ var (
 	// ErrFrozen reports a start or a dispatch of a phase that changes
 	// resources while a change freeze of the namespace is active, without
 	// break-glass.
-	ErrFrozen = errors.New("a change freeze of the namespace is active")
+	ErrFrozen = errors.New(
+		"a change freeze of the namespace is active; list the freezes with GET /api/dustpan/v1/namespaces/{namespace}/freezes",
+	)
 	// ErrLocked reports a start or a dispatch of any phase while a manual lock
 	// covers the unit: a lock on the unit, on its collection or on its
 	// namespace. Break-glass does not pass it. The store wraps the error of

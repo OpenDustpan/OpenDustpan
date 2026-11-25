@@ -374,7 +374,9 @@ func jobRow(r db.GetJobRow) jobstore.Row {
 	}
 }
 
-// ActiveFreeze implements jobstore.Tx.
+// ActiveFreeze implements jobstore.Tx. The read locks the namespace row FOR
+// SHARE, so a freeze create that locks the same row FOR NO KEY UPDATE waits
+// for the dispatch that reads it.
 func (t *jobTx) ActiveFreeze(ctx context.Context, ns namespace.Name, at time.Time) (string, bool, error) {
 	id, err := t.q.GetActiveJobFreeze(ctx, db.GetActiveJobFreezeParams{Namespace: ns.String(), NowMs: at.UnixMilli()})
 	if errors.Is(err, pgx.ErrNoRows) {
@@ -383,6 +385,12 @@ func (t *jobTx) ActiveFreeze(ctx context.Context, ns namespace.Name, at time.Tim
 
 	if err != nil {
 		return "", false, fmt.Errorf("select active freeze: %w", err)
+	}
+
+	// The query keeps the namespace row when no freeze is active, so it
+	// answers an empty ID for no freeze rather than no row.
+	if id == "" {
+		return "", false, nil
 	}
 
 	return id, true, nil
@@ -440,6 +448,13 @@ func (t *jobTx) InsertFreeze(ctx context.Context, f jobstore.FreezeRow) error {
 		CreatedBy: f.CreatedBy, EndedBy: f.EndedBy,
 	})
 	if err != nil {
+		// The insert conflicts on the ID alone, so the conflict on the index of
+		// the open freezes is the only unique violation that reaches here.
+		var pgErr *pgconn.PgError
+		if errors.As(err, &pgErr) && pgErr.Code == uniqueViolation && pgErr.ConstraintName == "job_freezes_one_open" {
+			return fmt.Errorf("%w: freeze %s", job.ErrFreezeActive, f.ID)
+		}
+
 		return fmt.Errorf("insert freeze: %w", err)
 	}
 

@@ -3,6 +3,7 @@ package jobs
 import (
 	"net/http"
 	"slices"
+	"strings"
 
 	"opendustpan.org/opendustpan/internal/api/apidesc"
 	"opendustpan.org/opendustpan/pkg/identity"
@@ -61,6 +62,27 @@ var operationLabels = map[string]apidesc.Label{
 		"RedactJobLogRequest",
 		apidesc.Named[substitutionBody]("JobLogSubstitution"),
 	), apidesc.Typed[redactResponse]("RedactJobLogResponse", apidesc.Named[logRef]("JobLog"))),
+	apidesc.Pattern(http.MethodGet, freezesPath): apidesc.Name(
+		"listFreezes",
+		"freezes",
+	).On(apidesc.KindNamespace).WithQuery(
+		apidesc.IntegerParam("pageSize", "The largest number of freezes on the page."),
+		apidesc.StringParam("pageToken", "The nextPageToken of the page before, for the same namespace."),
+	).WithBodies(apidesc.NoBody, apidesc.Typed[listFreezesResponse](
+		"ListFreezesResponse",
+		apidesc.Named[freezeResponse]("Freeze"),
+	)),
+	apidesc.Pattern(http.MethodPost, freezesPath): apidesc.Name(
+		"createFreeze",
+		"freezes",
+	).WithStatus(http.StatusCreated).On(apidesc.KindNamespace).WithBodies(
+		apidesc.Typed[freezeBody]("CreateFreezeRequest"),
+		apidesc.Typed[freezeResponse]("Freeze"),
+	),
+	apidesc.Pattern(http.MethodPost, currentFreezeEndPath): apidesc.Name(
+		"endFreeze",
+		"freezes",
+	).On(apidesc.KindNamespace).WithBodies(apidesc.NoBody, apidesc.Typed[freezeResponse]("Freeze")),
 }
 
 // jobDeclarations name the types inside the document of a job.
@@ -116,6 +138,12 @@ func (h *Handler) Operations() []apidesc.Operation {
 
 		for _, action := range slices.Concat(route.Reads, route.Actions, route.Filters, route.Writes) {
 			actions = append(actions, string(action))
+
+			// An action of a namespace object, for example namespace:break-freeze,
+			// has the namespace of the path as its object.
+			if strings.HasPrefix(string(action), "namespace:") {
+				namespaceActions = append(namespaceActions, string(action))
+			}
 		}
 
 		rows = append(rows, apidesc.Row{

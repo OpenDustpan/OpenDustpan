@@ -12,6 +12,7 @@ import (
 	"log/slog"
 	"net/http"
 	"strings"
+	"time"
 
 	"opendustpan.org/opendustpan/internal/api/admit"
 	"opendustpan.org/opendustpan/internal/api/apidesc"
@@ -58,6 +59,9 @@ type Config struct {
 	// Starter starts jobs. Nil serves the read route only: a server that lacks
 	// a port of the job service starts no job.
 	Starter job.Starter
+	// Freezes creates, ends and lists the change freezes of a namespace. Nil
+	// serves no freeze route.
+	Freezes job.FreezeStore
 	// Workers tells the start of a durable operation whether a worker runs.
 	// Nil admits every start.
 	Workers admit.Source
@@ -88,6 +92,10 @@ type Config struct {
 	// job service does, so that the filled slots in the answer are the ones that
 	// the matching counts. The zero value is the policy of a dev installation.
 	Approvers gate.ApproverPolicy
+	// Now is the clock of the freeze routes. It must be the clock of the job
+	// service, so that a freeze starts at the time that the start check reads.
+	// Nil takes the system clock.
+	Now func() time.Time
 }
 
 // Handler serves the jobs API under /api/dustpan/v1/.
@@ -102,6 +110,7 @@ type Handler struct {
 	cursors    secret.Wrapper
 	approvers  gate.ApproverPolicy
 	starter    job.Starter
+	freezes    job.FreezeStore
 	workers    admit.Source
 	pools      runner.PoolReader
 	authn      identity.Authenticator
@@ -110,6 +119,7 @@ type Handler struct {
 	logger     *slog.Logger
 	mux        *patternMux
 	routes     []Route
+	clock      func() time.Time
 }
 
 // NewHandler returns a Handler. Every Config field except Sessions is
@@ -146,6 +156,7 @@ func NewHandler(cfg Config) (*Handler, error) {
 		cursors:    cfg.Cursors,
 		approvers:  cfg.Approvers,
 		starter:    cfg.Starter,
+		freezes:    cfg.Freezes,
 		workers:    cfg.Workers,
 		pools:      cfg.Pools,
 		authn:      cfg.Authenticator,
@@ -154,6 +165,11 @@ func NewHandler(cfg Config) (*Handler, error) {
 		logger:     cfg.Logger,
 		mux:        newPatternMux(),
 		routes:     nil,
+		clock:      cfg.Now,
+	}
+
+	if h.clock == nil {
+		h.clock = time.Now
 	}
 
 	h.streams = newStreamLimiter(h.logs.PerPrincipal, h.logs.Total)
@@ -262,6 +278,8 @@ func classify(err error) (problem.Problem, bool) {
 		return problem.New(http.StatusTooManyRequests, errcode.JobLimit, errTooManyStreams.Error()), true
 	case errors.Is(err, errLogNotAvailable):
 		return problem.New(http.StatusNotFound, errcode.JobLogNotAvailable, errLogNotAvailable.Error()), true
+	case errors.Is(err, job.ErrNoActiveFreeze):
+		return problem.New(http.StatusNotFound, errcode.JobNotFound, job.ErrNoActiveFreeze.Error()), true
 	case errors.Is(err, errPageToken):
 		return problem.New(http.StatusBadRequest, errcode.RequestPageTokenInvalid, err.Error()), true
 	case errors.Is(err, errInvalidQuery):
@@ -312,7 +330,7 @@ func classifyJobRefusal(err error) (problem.Problem, bool) {
 		return problem.Refused(err, http.StatusConflict, errcode.JobWrongState), true
 	case errors.Is(err, job.ErrNotRequester):
 		return problem.Refused(err, http.StatusForbidden, errcode.AccessDenied), true
-	case errors.Is(err, job.ErrFrozen):
+	case errors.Is(err, job.ErrFrozen), errors.Is(err, job.ErrFreezeActive):
 		return problem.Refused(err, http.StatusConflict, errcode.JobFrozen), true
 	case errors.Is(err, job.ErrLimit):
 		return problem.Refused(err, http.StatusTooManyRequests, errcode.JobLimit), true

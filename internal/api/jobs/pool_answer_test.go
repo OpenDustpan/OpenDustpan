@@ -59,6 +59,7 @@ func newPoolHandler(
 		Cursors:        nil,
 		Approvers:      gate.ApproverPolicy{Production: false, IsDev: nil},
 		Starter:        starter,
+		Freezes:        nil,
 		Workers:        nil,
 		Pools:          pools,
 		Authenticator:  tokenAuthenticator{},
@@ -68,6 +69,7 @@ func newPoolHandler(
 		DenialLimiter:  nil,
 		Sessions:       nil,
 		Logger:         logger,
+		Now:            nil,
 	})
 	if err != nil {
 		t.Fatalf("handler: %v", err)

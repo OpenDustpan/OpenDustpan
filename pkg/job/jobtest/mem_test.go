@@ -662,7 +662,10 @@ func (m *memDB) Orphans(ctx context.Context, limit int) ([]job.Orphan, []job.Dam
 	return out, damaged, nil
 }
 
-// CreateFreeze implements job.FreezeStore.
+// CreateFreeze implements job.FreezeStore. The mutex is the namespace row
+// lock of the SQL adapters: the active check and the insert run under one
+// lock, as they run in the transaction of a create, so a dispatch and a
+// create have one serial order.
 func (m *memDB) CreateFreeze(_ context.Context, f job.Freeze, fence namespace.Fence, e audit.Entry) error {
 	m.mu.Lock()
 	defer m.mu.Unlock()
@@ -673,6 +676,10 @@ func (m *memDB) CreateFreeze(_ context.Context, f job.Freeze, fence namespace.Fe
 
 	if err := f.Validate(); err != nil {
 		return err
+	}
+
+	if id, active := m.activeFreeze(f.Namespace, time.Now()); active {
+		return fmt.Errorf("%w: freeze %s is active", job.ErrFreezeActive, id)
 	}
 
 	m.freezes[f.ID] = &f
@@ -734,6 +741,18 @@ type operationEnd struct {
 
 // endedOperation returns the end of the durable operation of the current phase
 // of j.
+// activeFreeze returns the ID of the freeze of ns that is active at now.
+// The caller holds m.mu.
+func (m *memDB) activeFreeze(ns namespace.Name, now time.Time) (string, bool) {
+	for _, f := range m.freezes {
+		if f.Namespace == ns && f.ActiveAt(now) {
+			return f.ID, true
+		}
+	}
+
+	return "", false
+}
+
 func (m *memDB) endedOperation(ctx context.Context, j *job.Job) (operationEnd, error) {
 	op, err := m.durable.Get(ctx, durable.ID(j.Phases[j.Current].Operation))
 	if errors.Is(err, durable.ErrNotFound) {

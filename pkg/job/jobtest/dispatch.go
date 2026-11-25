@@ -181,6 +181,20 @@ func testFreezeEnds(t *testing.T, h Harness) {
 	}
 }
 
+// testCancelFrozen proves that a cancel succeeds during a freeze: the freeze
+// refuses only a start and a phase dispatch.
+func testCancelFrozen(t *testing.T, h Harness) {
+	t.Helper()
+
+	f := setUp(t, h)
+	plain := create(t, h, f, newJob(f.unit, job.OperationRefresh, ""), nil)
+	freeze(t, h, f)
+
+	if got := apply(t, h, f, change(&plain, job.EventCancel)); got.State != job.StateCanceled {
+		t.Fatalf("cancel in a freeze = %s, want canceled", got.State)
+	}
+}
+
 func testCancelDispatched(t *testing.T, h Harness) {
 	t.Helper()
 

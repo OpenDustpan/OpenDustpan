@@ -380,7 +380,24 @@ func (s *Store) CreateFreeze(ctx context.Context, f job.Freeze, fence namespace.
 	}
 
 	return s.run.Write(ctx, fence, func(tx Tx) error {
-		err := tx.InsertFreeze(ctx, FreezeRow{
+		now, err := tx.Now(ctx)
+		if err != nil {
+			return err
+		}
+
+		// Defense in depth: the unique index of the open freezes refuses a
+		// second open freeze too. This check stays so that the refusal does not
+		// depend on the index, and so that it names the active freeze.
+		id, active, err := tx.ActiveFreeze(ctx, f.Namespace, now)
+		if err != nil {
+			return err
+		}
+
+		if active {
+			return fmt.Errorf("%w: freeze %s is active", job.ErrFreezeActive, id)
+		}
+
+		err = tx.InsertFreeze(ctx, FreezeRow{
 			ID: f.ID, Namespace: f.Namespace, Reason: f.Reason, StartsMs: f.StartsAt.UnixMilli(),
 			EndsMs: millisOrZero(f.EndsAt), CreatedBy: f.CreatedBy, EndedBy: "",
 		})

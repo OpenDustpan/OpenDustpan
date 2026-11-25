@@ -823,17 +823,22 @@ func testReachOperators(t *testing.T, s access.Store) {
 	mustCreatePerson(t, rs, "prn-op", "operator")
 	mustCreatePerson(t, rs, "prn-site", "site")
 	mustCreatePerson(t, rs, "prn-account", "account")
+	mustCreatePerson(t, rs, "prn-breaker", "breaker")
 
 	mustCreateGrant(t, rs, newGrant("grt-op", principalSubject("prn-op"), access.RoleInstallationOperator, server))
 	mustCreateGrant(t, rs, newGrant("grt-site", principalSubject("prn-site"), access.RoleSiteAdministrator, server))
 	mustCreateGrant(t, rs, newGrant(
 		"grt-account", principalSubject("prn-account"), access.RoleAccountAdministrator, server,
 	))
+	mustCreateGrant(t, rs, newGrant(
+		"grt-breaker", principalSubject("prn-breaker"), access.RoleFreezeBreaker, server,
+	))
 
 	reaches := map[string]access.Reach{
 		access.RoleInstallationOperator: reachOf(t, rs, "prn-op"),
 		access.RoleSiteAdministrator:    reachOf(t, rs, "prn-site"),
 		access.RoleAccountAdministrator: reachOf(t, rs, "prn-account"),
+		access.RoleFreezeBreaker:        reachOf(t, rs, "prn-breaker"),
 	}
 
 	operatorActions := access.Actions(access.FamilyOperator)
@@ -845,12 +850,16 @@ func testReachOperators(t *testing.T, s access.Store) {
 	}, 0, 3*len(operatorActions))
 
 	for _, action := range operatorActions {
-		cases = append(cases,
-			struct {
+		// break-freeze is held only through the installation grant of
+		// RoleFreezeBreaker, so RoleInstallationOperator does not reach it.
+		if action != identity.ActionNamespaceBreakFreeze {
+			cases = append(cases, struct {
 				role   string
 				action identity.Action
 				want   bool
-			}{role: access.RoleInstallationOperator, action: action, want: true},
+			}{role: access.RoleInstallationOperator, action: action, want: true})
+		}
+		cases = append(cases,
 			struct {
 				role   string
 				action identity.Action
@@ -863,6 +872,13 @@ func testReachOperators(t *testing.T, s access.Store) {
 			}{role: access.RoleAccountAdministrator, action: action, want: false},
 		)
 	}
+
+	// The freeze-breaker role reaches break-freeze on the installation.
+	cases = append(cases, struct {
+		role   string
+		action identity.Action
+		want   bool
+	}{role: access.RoleFreezeBreaker, action: identity.ActionNamespaceBreakFreeze, want: true})
 
 	if len(cases) == 0 {
 		t.Fatal("no operator action is classified")

@@ -5872,6 +5872,10 @@ type GetActiveJobFreezeParams struct {
 	NowMs     int64
 }
 
+// SQLite has one writer at a time and this store runs every write over one
+// connection behind a write gate, so the read and the insert of a freeze and
+// the dispatch already serialize in their transactions. The read stays a
+// plain SELECT: a row lock has no equivalent here.
 func (q *Queries) GetActiveJobFreeze(ctx context.Context, arg GetActiveJobFreezeParams) (string, error) {
 	row := q.db.QueryRowContext(ctx, getActiveJobFreeze, arg.Namespace, arg.NowMs)
 	var id string
@@ -12369,6 +12373,9 @@ type InsertJobFreezeParams struct {
 	EndedBy    string
 }
 
+// The single writer of SQLite serializes this insert with the dispatch, so
+// the transaction needs no row lock. The unique index on the open freezes
+// keeps one active freeze of each namespace.
 func (q *Queries) InsertJobFreeze(ctx context.Context, arg InsertJobFreezeParams) (int64, error) {
 	result, err := q.db.ExecContext(ctx, insertJobFreeze,
 		arg.ID,
