@@ -535,7 +535,9 @@ func checkRestoredSuspendedMember(t *testing.T, dst RestoreStore) {
 	}
 
 	members, _, err := ps.ListMembers(
-		t.Context(), "grp-ops", principal.Query{After: "", Low: "", High: "", Limit: principal.MaxLimit + 1, InstallationOnly: false},
+		t.Context(),
+		"grp-ops",
+		principal.Query{After: "", Low: "", High: "", Limit: principal.MaxLimit + 1, InstallationOnly: false},
 	)
 	if err != nil {
 		t.Fatalf("list restored members: %v", err)

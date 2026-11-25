@@ -26,7 +26,13 @@ func Bench(b *testing.B, s principal.Store) {
 	seedBench(b, s)
 
 	page := principal.Query{After: "", Low: "", High: "", Limit: principal.DefaultLimit + 1, InstallationOnly: false}
-	prefixed := principal.Query{After: "", Low: "user-01", High: "user-02", Limit: principal.DefaultLimit + 1, InstallationOnly: false}
+	prefixed := principal.Query{
+		After:            "",
+		Low:              "user-01",
+		High:             "user-02",
+		Limit:            principal.DefaultLimit + 1,
+		InstallationOnly: false,
+	}
 
 	cases := []struct {
 		run  func() (int, int64, error)
