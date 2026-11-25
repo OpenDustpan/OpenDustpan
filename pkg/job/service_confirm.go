@@ -74,7 +74,7 @@ func (s *service) Confirm(ctx context.Context, a Actor, id ID, v Verdict, plan P
 		}
 	}
 
-	return s.record(ctx, &j, a, &ap, recordAs{action: action, auth: ap.Auth})
+	return s.record(ctx, &j, a, &ap, recordAs{action: action, auth: ap.Auth, freshRequired: s.fresh.Required(ctx)})
 }
 
 // ConfirmAction returns the action that a confirmation of j needs on its unit:

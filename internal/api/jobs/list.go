@@ -453,7 +453,7 @@ func (h *Handler) answerJobList(w http.ResponseWriter, r *http.Request, p *jobPa
 
 	for i := range p.jobs {
 		j := &p.jobs[i]
-		doc := toJobResponse(j, h.approvers)
+		doc := toJobResponse(j, h.approvers, h.freshGuard.Required(ctx))
 
 		if j.Spec.Pool != "" {
 			name, seen := names[j.Spec.Pool]

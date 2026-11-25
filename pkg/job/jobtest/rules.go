@@ -301,7 +301,7 @@ func testConfirmationStored(t *testing.T, h Harness) {
 
 	policy := gate.ApproverPolicy{Production: false, IsDev: nil}
 
-	s := job.GatesStatus(got.Phases[0].Gates, got.Phases[0].Approvals, got.StartedBy, policy)
+	s := job.GatesStatus(got.Phases[0].Gates, got.Phases[0].Approvals, got.StartedBy, policy, true)
 	if s != job.GateOpen {
 		t.Fatalf("GatesStatus of the stored job = %s, want open", s)
 	}

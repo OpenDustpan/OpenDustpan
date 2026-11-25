@@ -20,6 +20,7 @@ import (
 	"opendustpan.org/opendustpan/pkg/audit"
 	blobfs "opendustpan.org/opendustpan/pkg/blob/fs"
 	"opendustpan.org/opendustpan/pkg/durable"
+	"opendustpan.org/opendustpan/pkg/freshstep"
 	"opendustpan.org/opendustpan/pkg/gate"
 	"opendustpan.org/opendustpan/pkg/job"
 	"opendustpan.org/opendustpan/pkg/namespace"
@@ -419,7 +420,8 @@ func TestJobScheduleReconcileRuns(t *testing.T) {
 
 	reconciler, err := job.NewReconciler(job.ReconcilerConfig{
 		Store: store.Jobs(), Namespaces: store, QueueTimeout: 0, DispatchTimeout: 0, StateTimeout: 0,
-		MaxPlanAge: 0, Approvers: gate.ApproverPolicy{Production: true, IsDev: nil}, Batch: 0, Now: nil, Log: nil,
+		MaxPlanAge: 0, Approvers: gate.ApproverPolicy{Production: true, IsDev: nil}, FreshGuard: freshstep.Guard{},
+		Batch: 0, Now: nil, Log: nil,
 	})
 	if err != nil {
 		t.Fatalf("new reconciler: %v", err)

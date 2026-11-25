@@ -294,7 +294,7 @@ func checkApprovals(t *testing.T, name string, j *job.Job, want approvalsWant) {
 		t.Fatalf("%s = %s, %d approvals; want %s, %d", name, j.State, len(phase.Approvals), want.state, want.count)
 	}
 
-	if s := job.GatesStatus(phase.Gates, phase.Approvals, j.StartedBy, approverPolicy()); s != want.status {
+	if s := job.GatesStatus(phase.Gates, phase.Approvals, j.StartedBy, approverPolicy(), true); s != want.status {
 		t.Fatalf("status after the %s = %s, want %s", name, s, want.status)
 	}
 }

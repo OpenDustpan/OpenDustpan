@@ -62,7 +62,11 @@ func (s *service) Approve(
 		}
 	}
 
-	gates, err := waitingGates(&j, s.approvers)
+	// The setting is read once, so that the gates and the audit entry of this
+	// verdict answer from one value.
+	freshRequired := s.fresh.Required(ctx)
+
+	gates, err := waitingGates(&j, s.approvers, freshRequired)
 	if err != nil {
 		return Job{}, err
 	}
@@ -84,7 +88,7 @@ func (s *service) Approve(
 		}
 	}
 
-	return s.record(ctx, &j, a, &ap, recordAs{action: ActionJobApprove, auth: ap.Auth})
+	return s.record(ctx, &j, a, &ap, recordAs{action: ActionJobApprove, auth: ap.Auth, freshRequired: freshRequired})
 }
 
 // checkApproval runs the checks that only an approval needs. ap.Plan holds the
@@ -201,7 +205,7 @@ func (s *service) authorizedJob(ctx context.Context, a Actor, id ID) (Job, error
 // that ended, and ErrTransition for a job that does not wait, for a phase with
 // no approval gate, and for a phase whose approval gates are open already (a
 // confirmation gate may still wait: Confirm answers it).
-func waitingGates(j *Job, policy gate.ApproverPolicy) ([]Gate, error) {
+func waitingGates(j *Job, policy gate.ApproverPolicy, freshRequired bool) ([]Gate, error) {
 	if j.State.Terminal() {
 		return nil, fmt.Errorf("%w: job %s is %s", ErrFinished, j.ID, j.State)
 	}
@@ -225,7 +229,8 @@ func waitingGates(j *Job, policy gate.ApproverPolicy) ([]Gate, error) {
 		return nil, fmt.Errorf("%w: phase %d of job %s has no approval gate", ErrTransition, j.Current, j.ID)
 	}
 
-	if GatesStatus(gates, phase.Approvals, j.StartedBy, policy) != GateWaiting {
+	status := GatesStatus(gates, phase.Approvals, j.StartedBy, policy, freshRequired)
+	if status != GateWaiting {
 		return nil, fmt.Errorf("%w: no approval gate of phase %d of job %s waits", ErrTransition, j.Current, j.ID)
 	}
 
@@ -460,6 +465,9 @@ func newDestroyFresh(a Actor, now time.Time) (destroyFresh, error) {
 type recordAs struct {
 	action identity.Action
 	auth   ConfirmAuth
+	// freshRequired is the answer of the fresh policy that the verdict read.
+	// The gates of the verdict count with it.
+	freshRequired bool
 }
 
 // record stores the verdict in one change with its audit entry. The event
@@ -475,7 +483,7 @@ func (s *service) record(ctx context.Context, j *Job, a Actor, ap *Approval, as 
 		End: nil,
 	}
 
-	switch GatesStatus(phase.Gates, approvals, j.StartedBy, s.approvers) {
+	switch GatesStatus(phase.Gates, approvals, j.StartedBy, s.approvers, as.freshRequired) {
 	case GateRejected:
 		c.Event, c.Reason = EventRejected, "rejected by "+ap.Subject
 	case GateOpen:

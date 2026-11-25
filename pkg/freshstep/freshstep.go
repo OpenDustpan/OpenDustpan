@@ -92,6 +92,16 @@ func (g Guard) IsZero() bool {
 	return g.policy == nil || g.check == nil
 }
 
+// Required returns the answer of the policy of g. A Guard with no policy, the
+// zero value, requires a step: it fails closed.
+func (g Guard) Required(ctx context.Context) bool {
+	if g.policy == nil {
+		return true
+	}
+
+	return g.policy.Required(ctx)
+}
+
 // Require returns nil when the policy does not require a step. Otherwise it
 // returns the result of the check, which is the refusal of the domain package.
 func (g Guard) Require(ctx context.Context, subject string) error {

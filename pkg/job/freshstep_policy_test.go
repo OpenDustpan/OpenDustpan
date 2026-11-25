@@ -260,3 +260,75 @@ func TestConfirmAuthNoneIsNotAFreshStep(t *testing.T) {
 		t.Fatalf("ConfirmAuthNone = %q, want none", got)
 	}
 }
+
+// TestConfirmationGateFollowsSetting proves that the confirmation gate counts
+// an approval with auth none only while freshRequired is false. Each row runs
+// Gate.Status, GatesStatus and GatesProgress, which must agree. Without the
+// freshRequired check in freshAuth, the off row of none fails (the gate waits)
+// and the on rows of none fail (the gate opens).
+func TestConfirmationGateFollowsSetting(t *testing.T) {
+	t.Parallel()
+
+	g := job.ConfirmationGate(false)
+	none := []job.Approval{withAuth(confirmation("al", 0), job.ConfirmAuthNone)}
+
+	tests := []struct {
+		name          string
+		approvals     []job.Approval
+		freshRequired bool
+		want          job.GateStatus
+	}{
+		{"none with the setting off counts", none, false, job.GateOpen},
+		{"none with the setting on does not count", none, true, job.GateWaiting},
+		{
+			"none recorded with the setting off and evaluated with it on does not count",
+			none,
+			true,
+			job.GateWaiting,
+		},
+		{
+			"a fresh MFA step counts with the setting off",
+			[]job.Approval{confirmation("al", time.Minute)},
+			false,
+			job.GateOpen,
+		},
+		{
+			"a fresh MFA step counts with the setting on",
+			[]job.Approval{confirmation("al", time.Minute)},
+			true,
+			job.GateOpen,
+		},
+		{
+			"an old MFA step counts with the setting off",
+			[]job.Approval{confirmation("al", job.ConfirmFreshness+time.Second)},
+			false,
+			job.GateWaiting,
+		},
+		{
+			"an old MFA step counts with the setting on",
+			[]job.Approval{confirmation("al", job.ConfirmFreshness+time.Second)},
+			true,
+			job.GateWaiting,
+		},
+	}
+
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			t.Parallel()
+
+			if got := g.Status(tc.approvals, "al", *openPolicy(), tc.freshRequired); got != tc.want {
+				t.Fatalf("Status() = %s, want %s", got, tc.want)
+			}
+
+			gates := []job.Gate{g}
+			if got := job.GatesStatus(gates, tc.approvals, "al", *openPolicy(), tc.freshRequired); got != tc.want {
+				t.Fatalf("GatesStatus() = %s, want %s", got, tc.want)
+			}
+
+			got, _ := job.GatesProgress(gates, tc.approvals, "al", *openPolicy(), tc.freshRequired)
+			if got != tc.want {
+				t.Fatalf("GatesProgress() = %s, want %s", got, tc.want)
+			}
+		})
+	}
+}

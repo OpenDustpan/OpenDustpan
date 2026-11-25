@@ -772,7 +772,8 @@ func (s *service) persist(ctx context.Context, j *Job, fence namespace.Fence, e 
 	entries := []audit.Entry{e}
 	// No approval exists yet, so the policy counts no signature.
 	closedPolicy := gate.ApproverPolicy{Production: true, IsDev: nil}
-	open := len(j.Phases) > 0 && GatesStatus(j.Phases[0].Gates, nil, j.StartedBy, closedPolicy) == GateOpen
+	// No approval exists here, so the setting changes nothing. true is the closed choice.
+	open := len(j.Phases) > 0 && GatesStatus(j.Phases[0].Gates, nil, j.StartedBy, closedPolicy, true) == GateOpen
 
 	var dispatch *durable.StartRequest
 	if open {

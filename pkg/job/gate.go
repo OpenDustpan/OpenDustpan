@@ -62,8 +62,8 @@ const (
 	// ConfirmAuthNone is the record of an approval of a destroy that needed no
 	// fresh step, because the installation setting freshAuthEnabled is off and
 	// the service recorded it for a person. It is not a fresh authentication:
-	// Valid is false for it, but the gate accepts it, because the service wrote
-	// it after the policy answered no.
+	// Valid is false for it. The gate accepts it only while the setting is off:
+	// the setting is read when the gate is evaluated, not when it is recorded.
 	ConfirmAuthNone ConfirmAuth = "none"
 )
 
@@ -269,7 +269,12 @@ const (
 //
 // A gate of type GateConfirmation opens with one confirmation by startedBy
 // with a fresh authentication at most ConfirmFreshness before it.
-func (g Gate) Status(approvals []Approval, startedBy string, policy gate.ApproverPolicy) GateStatus {
+//
+// freshRequired is the answer of the policy of the fresh step: while it is
+// true, an approval that records auth none does not count.
+func (g Gate) Status(
+	approvals []Approval, startedBy string, policy gate.ApproverPolicy, freshRequired bool,
+) GateStatus {
 	passed := 0
 	seen := make(map[string]bool, len(approvals))
 
@@ -279,7 +284,8 @@ func (g Gate) Status(approvals []Approval, startedBy string, policy gate.Approve
 			return GateRejected
 		}
 
-		if g.counts(a, startedBy, policy) && !seen[a.Subject] {
+		counted := g.counts(a, startedBy, policy, freshRequired)
+		if counted && !seen[a.Subject] {
 			seen[a.Subject] = true
 			passed++
 		}
@@ -299,7 +305,7 @@ func (g Gate) Status(approvals []Approval, startedBy string, policy gate.Approve
 
 // counts reports whether the approval a counts for g, in a job that
 // startedBy started.
-func (g Gate) counts(a *Approval, startedBy string, policy gate.ApproverPolicy) bool {
+func (g Gate) counts(a *Approval, startedBy string, policy gate.ApproverPolicy, freshRequired bool) bool {
 	if a.Agent != "" || a.Verdict != VerdictApprove || typeOf(a.Gate) != typeOf(g.Type) {
 		return false
 	}
@@ -312,7 +318,7 @@ func (g Gate) counts(a *Approval, startedBy string, policy gate.ApproverPolicy) 
 	}
 
 	if typeOf(g.Type) == GateConfirmation {
-		return a.Subject == startedBy && freshAuth(a)
+		return a.Subject == startedBy && freshAuth(a, freshRequired)
 	}
 
 	return a.Subject != startedBy || g.AllowSelf
@@ -320,11 +326,15 @@ func (g Gate) counts(a *Approval, startedBy string, policy gate.ApproverPolicy) 
 
 // freshAuth reports whether a has a valid fresh authentication at most
 // ConfirmFreshness before a, and not after it. An approval that the service
-// recorded with the authentication none needs no fresh step, and the gate
-// accepts it.
-func freshAuth(a *Approval) bool {
+// recorded with the authentication none counts only while freshRequired is
+// false.
+//
+// Defense in depth: the handler, the service and the store each check the
+// setting and the kind of the approver before they record none. This gate
+// refuses none while the setting is on, and it does not rely on those layers.
+func freshAuth(a *Approval, freshRequired bool) bool {
 	if a.Auth == ConfirmAuthNone {
-		return true
+		return !freshRequired
 	}
 
 	return a.Auth.Valid() && !a.AuthAt.IsZero() && !a.AuthAt.After(a.At) &&
@@ -335,8 +345,10 @@ func freshAuth(a *Approval) bool {
 // phase: rejected when a verdict rejects, open when every gate is open,
 // and waiting otherwise. A phase with no gate is open. The approval gates
 // share the approvers: see GatesProgress.
-func GatesStatus(gates []Gate, approvals []Approval, startedBy string, policy gate.ApproverPolicy) GateStatus {
-	status, _ := GatesProgress(gates, approvals, startedBy, policy)
+func GatesStatus(
+	gates []Gate, approvals []Approval, startedBy string, policy gate.ApproverPolicy, freshRequired bool,
+) GateStatus {
+	status, _ := GatesProgress(gates, approvals, startedBy, policy, freshRequired)
 
 	return status
 }

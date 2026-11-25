@@ -178,6 +178,13 @@ func newJobReconciler(svc services, cfg *settings) (*job.Reconciler, error) {
 		log = slog.Default()
 	}
 
+	// The same policy as the service and the handler decides whether a gate
+	// counts an approval that records auth none.
+	freshGuard, err := job.NewFreshGuard(freshPolicyOf(cfg))
+	if err != nil {
+		return nil, fmt.Errorf("job reconcile: %w", err)
+	}
+
 	r, err := job.NewReconciler(job.ReconcilerConfig{
 		Store:           cfg.jobStore,
 		Namespaces:      jobNamespaces{namespaces: svc.namespaces},
@@ -186,6 +193,7 @@ func newJobReconciler(svc services, cfg *settings) (*job.Reconciler, error) {
 		StateTimeout:    0,
 		MaxPlanAge:      0,
 		Approvers:       jobApprovers(cfg),
+		FreshGuard:      freshGuard,
 		Batch:           0,
 		Now:             cfg.now,
 		Log:             log,

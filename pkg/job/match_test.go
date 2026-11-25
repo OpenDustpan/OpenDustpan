@@ -146,12 +146,12 @@ func TestGatesStatusSeveralGates(t *testing.T) {
 func checkMatchCase(t *testing.T, tt *matchCase) {
 	t.Helper()
 
-	got, filled := job.GatesProgress(tt.gates, tt.approvals, tt.starter, tt.policy)
+	got, filled := job.GatesProgress(tt.gates, tt.approvals, tt.starter, tt.policy, true)
 	if got != tt.want {
 		t.Fatalf("GatesProgress() status = %s, want %s", got, tt.want)
 	}
 
-	if status := job.GatesStatus(tt.gates, tt.approvals, tt.starter, tt.policy); status != got {
+	if status := job.GatesStatus(tt.gates, tt.approvals, tt.starter, tt.policy, true); status != got {
 		t.Fatalf("GatesStatus() = %s, want the status of GatesProgress, %s", status, got)
 	}
 
@@ -198,7 +198,7 @@ func TestGatesStatusSeveralGatesOrderFree(t *testing.T) {
 	}
 
 	for i, p := range perms {
-		if got := job.GatesStatus(gates, p, "al", devInstallation); got != job.GateOpen {
+		if got := job.GatesStatus(gates, p, "al", devInstallation, true); got != job.GateOpen {
 			t.Fatalf("order %d (%v) = %s, want open: a needs bo and ann, b and c need cy and di", i, p, got)
 		}
 	}
