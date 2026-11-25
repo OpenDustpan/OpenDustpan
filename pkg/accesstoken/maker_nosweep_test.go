@@ -10,6 +10,7 @@ import (
 	"opendustpan.org/opendustpan/pkg/access"
 	"opendustpan.org/opendustpan/pkg/accesstoken"
 	"opendustpan.org/opendustpan/pkg/audit"
+	"opendustpan.org/opendustpan/pkg/freshstep"
 	"opendustpan.org/opendustpan/pkg/identity"
 	"opendustpan.org/opendustpan/pkg/principal"
 	"opendustpan.org/opendustpan/pkg/store/storetest"
@@ -163,6 +164,7 @@ func wantRefusedAfterNoSweep(
 		Makers: newNoSweepAccessService(t, &rf), TempAdmins: nil,
 		Store: rf.store, Principals: rf.store, Freshness: nil, Authorizer: rf.authorizerOf(t), Reach: rf.reach,
 		Logger: nil, Now: rf.clock.Now, NewID: nil,
+		Guard: freshstep.Guard{},
 	})
 	if err != nil {
 		t.Fatalf("token service: %v", err)

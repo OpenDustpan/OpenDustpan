@@ -1,7 +1,9 @@
 package sqlite_test
 
 import (
+	"context"
 	"errors"
+	"fmt"
 	"reflect"
 	"testing"
 	"time"
@@ -38,6 +40,113 @@ func (d unmanagedDomain) Namespace(t *testing.T, name string) namespace.Fence {
 	ensurePool(t, d.s, fence, unmanagedtest.JobPool, runner.PurposeJobs)
 
 	return fence
+}
+
+// Pool implements unmanagedtest.Harness.Pool.
+func (d unmanagedDomain) Pool(t *testing.T, ns, name, purpose string) {
+	t.Helper()
+
+	ensurePool(t, d.s, ensureNamespace(t, d.s, namespace.Name(ns)), name, runner.Purpose(purpose))
+}
+
+// Failover implements unmanagedtest.Harness.Failover: it raises the failover
+// version of each namespace and returns the new fence of the namespace name.
+// It runs off the test goroutine, so it returns its error.
+func (d unmanagedDomain) Failover(ctx context.Context, name string) (namespace.Fence, error) {
+	if _, err := d.s.BumpFailoverVersions(ctx); err != nil {
+		return namespace.Fence{}, fmt.Errorf("bump failover versions: %w", err)
+	}
+
+	ns, err := d.s.GetNamespace(ctx, namespace.Name(name))
+	if err != nil {
+		return namespace.Fence{}, fmt.Errorf("read namespace %s: %w", name, err)
+	}
+
+	return ns.Fence(), nil
+}
+
+// RenameNamespace implements unmanagedtest.Harness.RenameNamespace: it changes
+// the name of the namespace row and keeps its ID.
+func (d unmanagedDomain) RenameNamespace(t *testing.T, ns, newName string) {
+	t.Helper()
+
+	err := d.s.ExecForTest(t.Context(), `UPDATE namespaces SET name = ? WHERE name = ?`, newName, ns)
+	if err != nil {
+		t.Fatalf("rename namespace %s: %v", ns, err)
+	}
+}
+
+// FailAudit implements unmanagedtest.Harness.FailAudit: a trigger aborts each
+// later insert of an audit entry, inside the write transaction.
+func (d unmanagedDomain) FailAudit(t *testing.T) {
+	t.Helper()
+
+	err := d.s.ExecForTest(t.Context(), `CREATE TRIGGER unmanaged_forced_error BEFORE INSERT ON audit_entries
+BEGIN SELECT RAISE(ABORT, 'forced error'); END`)
+	if err != nil {
+		t.Fatalf("create the forced error trigger: %v", err)
+	}
+}
+
+// PurgeNamespace implements unmanagedtest.Harness.PurgeNamespace: it deletes
+// the runner pools of the namespace name, which hold its ID, and then the
+// namespace row, as the purge of a namespace does.
+func (d unmanagedDomain) PurgeNamespace(t *testing.T, name string) {
+	t.Helper()
+
+	err := d.s.ExecForTest(t.Context(),
+		`DELETE FROM runner_pools WHERE namespace_id = (SELECT id FROM namespaces WHERE name = ?)`, name)
+	if err != nil {
+		t.Fatalf("delete the runner pools of %s: %v", name, err)
+	}
+
+	if err := d.s.PurgeNamespace(t.Context(), namespace.Name(name)); err != nil {
+		t.Fatalf("purge namespace %s: %v", name, err)
+	}
+}
+
+// SetPool implements unmanagedtest.Harness.SetPool. A change of purpose is a
+// direct update, as a restore of another version can bring in. A delete
+// passes the foreign key from targets to pools, so it runs on one connection
+// with the foreign key checks off, and turns them on again before it releases
+// the connection.
+func (d unmanagedDomain) SetPool(t *testing.T, ns, name, purpose string) {
+	t.Helper()
+
+	const where = `name = ? AND namespace_id = (SELECT id FROM namespaces WHERE name = ?)`
+
+	if purpose != "" {
+		err := d.s.ExecForTest(t.Context(), `UPDATE runner_pools SET purpose = ? WHERE `+where, purpose, name, ns)
+		if err != nil {
+			t.Fatalf("change the purpose of pool %s: %v", name, err)
+		}
+
+		return
+	}
+
+	pinned, err := sqlite.DB(d.s).Conn(t.Context())
+	if err != nil {
+		t.Fatalf("take a connection: %v", err)
+	}
+
+	defer func() {
+		if closeErr := pinned.Close(); closeErr != nil {
+			t.Errorf("release the connection: %v", closeErr)
+		}
+	}()
+
+	for _, stmt := range []struct {
+		query string
+		args  []any
+	}{
+		{`PRAGMA foreign_keys = OFF`, nil},
+		{`DELETE FROM runner_pools WHERE ` + where, []any{name, ns}},
+		{`PRAGMA foreign_keys = ON`, nil},
+	} {
+		if _, err := pinned.ExecContext(t.Context(), stmt.query, stmt.args...); err != nil {
+			t.Fatalf("%s: %v", stmt.query, err)
+		}
+	}
 }
 
 // ensurePool makes the runner pool name in the namespace of fence when it is
@@ -111,12 +220,17 @@ func newUnmanagedHarness(t *testing.T) unmanagedtest.Harness {
 	s := openTemplated(t)
 
 	return unmanagedtest.Harness{
-		Index:          nil,
-		Links:          nil,
-		Findings:       nil,
-		Scans:          s.UnmanagedScans(),
-		Namespace:      unmanagedDomain{s: s}.Namespace,
-		PurgeNamespace: nil,
+		Index:           nil,
+		Links:           nil,
+		Findings:        nil,
+		Scans:           s.UnmanagedScans(),
+		Namespace:       unmanagedDomain{s: s}.Namespace,
+		PurgeNamespace:  unmanagedDomain{s: s}.PurgeNamespace,
+		Pool:            unmanagedDomain{s: s}.Pool,
+		Failover:        unmanagedDomain{s: s}.Failover,
+		SetPool:         unmanagedDomain{s: s}.SetPool,
+		RenameNamespace: unmanagedDomain{s: s}.RenameNamespace,
+		FailAudit:       unmanagedDomain{s: s}.FailAudit,
 	}
 }
 
@@ -282,6 +396,156 @@ func TestUnmanagedDeletePoolOfATarget(t *testing.T) {
 
 	if err = s.Runners().DeletePool(t.Context(), pool.ID, fence, entries); err != nil {
 		t.Fatalf("delete the pool after the target is gone: %v", err)
+	}
+}
+
+// TestUnmanagedSQLTextStaysData sends SQL text as a namespace name, a target
+// name and a pool name to the sweep store. The writes of the port refuse each
+// name with ErrInvalidTarget before SQL. The reads that bind the text find no
+// row of another name. The rows with SQL text in their names are planted with
+// placeholders, as a restore of another version could bring them in, and stay
+// one row each. TestSweepPoolIDKeepsSQLTextAsData reaches the pool query with
+// the text, because no path of the port sends a pool name to SQL unchecked.
+func TestUnmanagedSQLTextStaysData(t *testing.T) {
+	t.Parallel()
+
+	for i, text := range unmanagedtest.HostileSQLText() {
+		c := newSQLTextCase(t, openTemplated(t), text)
+
+		c.namespaceName(t)
+		c.targetName(t)
+		c.poolName(t, fmt.Sprintf("rpl-hostile-%d", i))
+
+		tables := c.count(t, "tables", `SELECT COUNT(*) FROM sqlite_master WHERE name IN `+
+			`('namespaces', 'runner_pools', 'unmanaged_targets', 'unmanaged_scans')`)
+		if tables != 4 {
+			t.Errorf("%q: %d of the 4 tables are there", text, tables)
+		}
+	}
+}
+
+// sqlTextAcmeID selects the ID of the namespace acme.
+const sqlTextAcmeID = `(SELECT id FROM namespaces WHERE name = 'acme')`
+
+// sqlTextCase is one store with the namespace acme and its target aws, and
+// one name that holds SQL text.
+type sqlTextCase struct {
+	s     *sqlite.Store
+	fence namespace.Fence
+	e     audit.Entry
+	text  string
+}
+
+// newSQLTextCase makes the namespace acme and its target aws in s.
+func newSQLTextCase(t *testing.T, s *sqlite.Store, text string) sqlTextCase {
+	t.Helper()
+
+	c := sqlTextCase{
+		s:     s,
+		fence: unmanagedDomain{s: s}.Namespace(t, "acme"),
+		e:     sweepEntry("acme", "namespace:manage-sweeps", unmanagedAt()),
+		text:  text,
+	}
+
+	if err := s.UnmanagedScans().CreateTarget(t.Context(), unmanagedTargetOf("acme", "aws"), c.fence, c.e); err != nil {
+		t.Fatalf("create the target: %v", err)
+	}
+
+	return c
+}
+
+// count returns the count that query gives.
+func (c sqlTextCase) count(t *testing.T, what, query string, args ...any) int {
+	t.Helper()
+
+	var n int
+	if err := sqlite.DB(c.s).QueryRowContext(t.Context(), query, args...).Scan(&n); err != nil {
+		t.Fatalf("%s: count: %v", what, err)
+	}
+
+	return n
+}
+
+// namespaceName sends the text as a namespace name: the read binds it and
+// finds no namespace, and the delete refuses the name before SQL.
+func (c sqlTextCase) namespaceName(t *testing.T) {
+	t.Helper()
+
+	ns := namespace.Name(c.text)
+
+	got, err := c.s.UnmanagedScans().Targets(t.Context(), ns)
+	if err != nil || len(got) != 0 {
+		t.Errorf("%q: targets of the namespace = %+v, %v; want none", c.text, got, err)
+	}
+
+	err = c.s.UnmanagedScans().DeleteTarget(t.Context(), ns, "aws", namespace.Fence{Namespace: ns, FailoverVersion: 1},
+		sweepEntry(ns, "namespace:manage-sweeps", unmanagedAt()))
+	if !errors.Is(err, unmanaged.ErrInvalidTarget) {
+		t.Errorf("%q: delete in the namespace = %v, want ErrInvalidTarget", c.text, err)
+	}
+}
+
+// targetName plants a target with the text as its name. The delete refuses
+// the name before SQL, the planted row stays, the target aws stays, and the
+// read of the sweeps of that target name binds it and finds none.
+func (c sqlTextCase) targetName(t *testing.T) {
+	t.Helper()
+
+	plant := `INSERT INTO unmanaged_targets
+(namespace_id, name, pool_id, scopes_json, command_json, every_ms, timeout_ms, enabled)
+SELECT namespace_id, ?, pool_id, scopes_json, command_json, every_ms, timeout_ms, enabled
+FROM unmanaged_targets WHERE name = 'aws' AND namespace_id = ` + sqlTextAcmeID
+
+	err := c.s.ExecForTest(t.Context(), plant, c.text)
+	if err != nil {
+		t.Fatalf("%q: plant the target: %v", c.text, err)
+	}
+
+	err = c.s.UnmanagedScans().DeleteTarget(t.Context(), "acme", c.text, c.fence, c.e)
+	if !errors.Is(err, unmanaged.ErrInvalidTarget) {
+		t.Errorf("%q: delete of the planted target = %v, want ErrInvalidTarget", c.text, err)
+	}
+
+	if n := c.count(t, "planted target", `SELECT COUNT(*) FROM unmanaged_targets WHERE name = ?`, c.text); n != 1 {
+		t.Errorf("%q: %d planted targets after the refused delete, want 1", c.text, n)
+	}
+
+	sweeps, err := c.s.UnmanagedScans().Scans(t.Context(), "acme", c.text, "", unmanaged.MaxPage)
+	if err != nil || len(sweeps) != 0 {
+		t.Errorf("%q: sweeps of the target = %+v, %v; want none", c.text, sweeps, err)
+	}
+
+	if n := c.count(t, "target aws", `SELECT COUNT(*) FROM unmanaged_targets WHERE name = 'aws'`); n != 1 {
+		t.Errorf("%q: %d targets aws, want 1", c.text, n)
+	}
+}
+
+// poolName plants a pool with the text as its name. The port refuses a
+// target on that pool in Target.Validate, before SQL, and the pool stays one
+// row. TestSweepPoolIDKeepsSQLTextAsData sends the text to the pool query.
+func (c sqlTextCase) poolName(t *testing.T, id string) {
+	t.Helper()
+
+	plant := `INSERT INTO runner_pools
+(id, namespace_id, name, purpose, lease_ms, concurrency, isolation, git_mode, git_helper, created_at_ms, updated_at_ms)
+SELECT ?, namespace_id, ?, purpose, lease_ms, concurrency, isolation, git_mode, git_helper, created_at_ms, updated_at_ms
+FROM runner_pools WHERE name = ? AND namespace_id = ` + sqlTextAcmeID
+
+	err := c.s.ExecForTest(t.Context(), plant, id, c.text, unmanagedtest.Pool)
+	if err != nil {
+		t.Fatalf("%q: plant the pool: %v", c.text, err)
+	}
+
+	onText := unmanagedTargetOf("acme", "on-text")
+	onText.Pool = c.text
+
+	err = c.s.UnmanagedScans().CreateTarget(t.Context(), onText, c.fence, c.e)
+	if !errors.Is(err, unmanaged.ErrInvalidTarget) {
+		t.Errorf("%q: create on the pool = %v, want ErrInvalidTarget", c.text, err)
+	}
+
+	if n := c.count(t, "planted pool", `SELECT COUNT(*) FROM runner_pools WHERE name = ?`, c.text); n != 1 {
+		t.Errorf("%q: %d planted pools, want 1", c.text, n)
 	}
 }
 

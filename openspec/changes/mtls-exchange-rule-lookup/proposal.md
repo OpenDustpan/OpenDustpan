@@ -1,5 +1,5 @@
 ---
-version: 2
+version: 3
 ---
 
 Issue: #3685. This change supersedes the read of "every rule of the namespace" in tasks 2.3 and 2.9 of the change `mtls-mtls-exchange-token`, for the recheck inside the fenced transaction only.

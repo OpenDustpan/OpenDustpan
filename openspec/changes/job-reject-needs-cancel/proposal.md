@@ -1,8 +1,8 @@
 ---
-version: 5
+version: 6
 ---
 
-Issue: none. The owner decided the rule on 2026-11-15 (option b, relayed by the lead) after a review of #3251 found that a rejection stops a job like a cancel does, with a weaker action.
+Issue: #4090. The owner decided the rule on 2026-11-15 (option b, relayed by the lead) after a review of #3251 found that a rejection stops a job like a cancel does, with a weaker action.
 
 Depends on: none. The approvals route and `job.Service.Approve` exist on main. The confirmation route of #3251 is not changed.
 
@@ -84,7 +84,7 @@ Questions considered and answered:
 
 This question does not block the change, because the rule works without it. The PM puts it in the queue of owner decisions. Nobody decides it provisionally.
 
-- The owner wishes that a role that can start a job can also cancel it. Today only `planner` breaks this: it holds `unit:run-plan` and not `job:cancel`. Should `planner` hold `job:cancel`? That answer changes ADR 212 decision 1 ("It cannot apply, destroy, approve or read a secret value" does not name `job:cancel`, but `pkg/access/planner_role_test.go:37` asserts that it does not hold it) and ADR 373 decision 1 (owner-tagged). It needs an RFC and then an ADR first, and the owner decides.
+- The owner wishes that a role that can start a job can also cancel it. Today only `planner` breaks this: it holds `unit:run-plan` and not `job:cancel`. Should `planner` hold `job:cancel`? That answer changes ADR 212 decision 1 ("It cannot apply, destroy, approve or read a secret value" does not name `job:cancel`, but (read only) `pkg/access/planner_role_test.go` (line 37) asserts that it does not hold it) and ADR 373 decision 1 (owner-tagged). It needs an RFC and then an ADR first, and the owner decides.
 
 ## What main already does
 

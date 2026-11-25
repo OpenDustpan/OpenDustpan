@@ -7,14 +7,14 @@ This part adds persistence only: ports, an in-memory adapter, a conformance suit
 1. **Ports and suite first.** Keep the operations of ADR 164 decision 18 and ADR 165 decision 13. Write the suite and the memory adapter before the SQL adapters.
 2. **Fence in the transaction.** Each SQL write locks the namespace row, compares the failover version, then writes in one transaction. A stale, missing or soft-deleted namespace returns namespace.ErrFenced.
 3. **Pool check by stable ID.** A target stores the pool ID. CreateTarget, UpdateTarget and StartScan read the pool in the same transaction. Only a pool with the sweep purpose in the namespace of the target passes (Owner decision, 23 Nov 2026 (ADR 396, replaces the 13 Nov 2026 answer P14)). The store has no installation pool.
-4. **Busy check.** StartScan refuses with ErrScanBusy while the target has a sweep in a non-final status. A unique index on the open sweep makes concurrent starts safe in SQL. The memory adapter holds a lock.
+4. **Busy check.** StartScan refuses with ErrScanBusy while the target has a sweep in a non-final status. Concurrent starts are safe because the fenced write transaction is serial for a namespace: SQLite holds the write lock, and PostgreSQL locks the namespace row FOR UPDATE (inFencedUpdateTx). The change adds no unique index and no schema change. The memory adapter holds a lock.
 5. **Transitions.** AdvanceScan uses NextScan. A pair that the table does not hold returns ErrTransition. Act uses Next, ErrStatusChanged and writes its audit entry in the same transaction.
 6. **Delete of a target.** DeleteTarget cancels a sweep of the target that is not in a final status, and deletes the target, in one transaction. A duplicate name in a namespace returns the exists error.
 7. **Bounds.** The store refuses a command or scope list above the ADR 164 limits.
 
 ## Structure
 
-An unexported type fencedTx wraps the SQL transaction. Only its constructor makes a value, and it reads and checks the fence. Write methods take a fencedTx, so no write path skips the fence.
+Each SQL write method runs inside the fenced transaction helper of its adapter (inFencedEntryTx in SQLite, inFencedUpdateTx in PostgreSQL). The helper reads and checks the fence before the write function runs, so no write path skips the fence. The change adds no new transaction type.
 
 ## Risks
 
