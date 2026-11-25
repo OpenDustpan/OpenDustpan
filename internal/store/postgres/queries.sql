@@ -4815,6 +4815,9 @@ LIMIT sqlc.arg(max_rows);
 -- first is seen here. The left join keeps the namespace row when no freeze is
 -- active, so the read locks the row either way. A lock on a freeze row alone
 -- locks an existing row only.
+-- Defense in depth: the fence check of a write transaction locks the same
+-- namespace row FOR UPDATE (GetFailoverVersionForUpdate); this lock stays so
+-- that a read outside a fenced write cannot pass a freeze create.
 SELECT COALESCE(f.id, '') AS id
 FROM namespaces AS n
 LEFT JOIN job_freezes AS f
@@ -4830,6 +4833,9 @@ FOR SHARE OF n;
 -- a dispatch that reads the active freeze with the same row FOR SHARE waits,
 -- and a freeze that this insert makes cannot pass a dispatch that read no
 -- freeze. A lock on the freeze row alone locks an existing row only.
+-- Defense in depth: the fence check of a write transaction locks the same
+-- namespace row FOR UPDATE (GetFailoverVersionForUpdate); this lock stays so
+-- that an insert without that fence lock cannot pass a dispatch.
 WITH locked AS (
     SELECT n.id FROM namespaces AS n WHERE n.name = sqlc.arg(namespace) FOR NO KEY UPDATE
 )

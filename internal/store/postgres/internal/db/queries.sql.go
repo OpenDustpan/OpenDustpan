@@ -6409,6 +6409,9 @@ type GetActiveJobFreezeParams struct {
 // first is seen here. The left join keeps the namespace row when no freeze is
 // active, so the read locks the row either way. A lock on a freeze row alone
 // locks an existing row only.
+// Defense in depth: the fence check of a write transaction locks the same
+// namespace row FOR UPDATE (GetFailoverVersionForUpdate); this lock stays so
+// that a read outside a fenced write cannot pass a freeze create.
 func (q *Queries) GetActiveJobFreeze(ctx context.Context, arg GetActiveJobFreezeParams) (string, error) {
 	row := q.db.QueryRow(ctx, getActiveJobFreeze, arg.NowMs, arg.Namespace)
 	var id string
@@ -13147,6 +13150,9 @@ type InsertJobFreezeParams struct {
 // a dispatch that reads the active freeze with the same row FOR SHARE waits,
 // and a freeze that this insert makes cannot pass a dispatch that read no
 // freeze. A lock on the freeze row alone locks an existing row only.
+// Defense in depth: the fence check of a write transaction locks the same
+// namespace row FOR UPDATE (GetFailoverVersionForUpdate); this lock stays so
+// that an insert without that fence lock cannot pass a dispatch.
 func (q *Queries) InsertJobFreeze(ctx context.Context, arg InsertJobFreezeParams) (int64, error) {
 	result, err := q.db.Exec(ctx, insertJobFreeze,
 		arg.ID,
