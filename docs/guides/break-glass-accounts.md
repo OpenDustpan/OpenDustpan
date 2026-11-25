@@ -57,7 +57,10 @@ grant in two requests. Each needs a recent sign-in.
    ```
 
    The credential ID and the public key are base64url without padding. The
-   answer is `201` with the account and its passkeys. The route accepts the
+   `displayName` value can be empty. It has a maximum of 255 bytes. It can
+   contain letters, digits, single spaces and the characters
+   `. , ' - _ ( ) & @ + : # /`. It cannot start or end with a space. The
+   server refuses a different value with `400`. The answer is `201` with the account and its passkeys. The route accepts the
    add when no working account exists, and it does not lower any count.
 
 2. Give the account the role `site-administrator` on the installation with
@@ -88,11 +91,11 @@ its passkeys, and the live count:
 }
 ```
 
-`working` is the count of the working paths at the request time. `missing` is
-the count that the installation needs to reach `floor`, and `0` at or above
-it. The count reads the rows at the request time, so an account that stops
-working, by a suspended passkey or a revoked grant, leaves the count without
-a write.
+`working` is the count of the working break-glass accounts at the request
+time. `missing` is the count that the installation needs to reach `floor`,
+and `0` at or above it. The count reads the rows at the request time, so an
+account that stops working, by a suspended passkey or a revoked grant, leaves
+the count without a write.
 
 ## Rotate a passkey
 
@@ -141,8 +144,8 @@ needs no credential ID from the person who sends the response.
 
 ## The rule
 
-The server refuses to disable or delete the last enabled break-glass
-account. This applies to two requests:
+The guard keeps one enabled account. The server refuses to disable or delete
+the last enabled break-glass account. This applies to two requests:
 
 - `POST /api/server/principals/{id}/disable`
 - `DELETE /api/server/principals/{id}`
@@ -212,8 +215,8 @@ not deleted, has a passkey that is not suspended, and holds a current grant
 without a condition of `site-administrator` or `account-administrator` on the
 installation, directly or through a group. The restore stops with the code
 `principal.no-working-break-glass` when it lowers this count and leaves fewer
-than two working accounts. A restore that does not lower the count continues,
-also when the count is below two.
+than two working break-glass accounts. A restore that does not lower the count
+continues, also when the count is below two.
 
 A break-glass account has no password, and no request of the API can give
 it one. A restore writes the rows of the backup, so it checks this rule too.

@@ -609,6 +609,85 @@ func TestBreakGlassAddRefusesHostileSubject(t *testing.T) {
 	}
 }
 
+// TestBreakGlassAddRefusesHostileDisplayName sends a hostile display name to
+// the add. The handler checks it at the boundary. Each refusal answers 400,
+// writes one denied entry on the "break-glass" object and stores no account.
+// The principal service refuses the same values, but its refusal is a failure
+// entry, not a denied one: a row whose guard is removed misses the denied
+// entry, and fails.
+func TestBreakGlassAddRefusesHostileDisplayName(t *testing.T) {
+	t.Parallel()
+
+	cases := []struct {
+		name        string
+		displayName string
+	}{
+		{"display name over the length limit", strings.Repeat("a", 256)},
+		{"display name with CR LF", "Recovery\r\nX-Injected: 1"},
+		{"display name with a NUL byte", "Recovery\x00"},
+		{"display name with leading white space", " Recovery"},
+		{"display name with trailing white space", "Recovery "},
+		{"display name with a bidi override", "Recovery\u202eevil"},
+		{"display name with a line separator", "Recovery\u2028x"},
+		// Rows that only the allowlist refuses: no other check stops them.
+		{"display name with markup", "<script>alert(1)</script>"},
+		{"display name with a quote", `Recovery"x`},
+		{"display name with a backslash", `Recovery\x`},
+		{"display name with a symbol", "Recovery \u2620"},
+		{"display name with a no-break space", "Recovery\u00a0x"},
+		{"display name with two spaces", "Recovery  x"},
+	}
+
+	for _, c := range cases {
+		t.Run(c.name, func(t *testing.T) {
+			t.Parallel()
+
+			f := newAccessFixture(t)
+			f.seedSessionAdmin(t, "admin")
+
+			body := breakGlassBody(t, map[string]any{"subject": "bg-one", "displayName": c.displayName})
+			rec := f.freshPasskeyClient(t, "admin").do(http.MethodPost, breakGlassPath, body)
+
+			if rec.Code != http.StatusBadRequest {
+				t.Fatalf("add with display name %q = %d %s, want 400", c.displayName, rec.Code, rec.Body.String())
+			}
+
+			denied := floorEntries(t, f.store, identity.ActionServerManagePrincipals, audit.OutcomeDenied,
+				"break-glass")
+			if len(denied) != 1 || denied[0].Reason == "" {
+				t.Fatalf("denied entries on break-glass = %+v, want one with a reason", denied)
+			}
+
+			if accounts := breakGlassAccounts(t, f); len(accounts) != 0 {
+				t.Fatalf("accounts = %+v, want none after a refused add", accounts)
+			}
+		})
+	}
+}
+
+// TestBreakGlassAddAcceptsDisplayNames shows that the allowlist of the
+// display name keeps the names that a person writes: letters of any script,
+// digits, single spaces and the listed punctuation.
+func TestBreakGlassAddAcceptsDisplayNames(t *testing.T) {
+	t.Parallel()
+
+	for _, name := range []string{"", "Recovery", "Break-glass account 2", "O'Neil, J. (ops)", "Zoë Ångström", "Équipe d'astreinte", "復旧用"} {
+		t.Run(name, func(t *testing.T) {
+			t.Parallel()
+
+			f := newAccessFixture(t)
+			f.seedSessionAdmin(t, "admin")
+
+			body := breakGlassBody(t, map[string]any{"subject": "bg-one", "displayName": name})
+			rec := f.freshPasskeyClient(t, "admin").do(http.MethodPost, breakGlassPath, body)
+
+			if rec.Code != http.StatusCreated {
+				t.Fatalf("add with display name %q = %d %s, want 201", name, rec.Code, rec.Body.String())
+			}
+		})
+	}
+}
+
 // TestBreakGlassRotateRefusesOtherRecords sends a rotation to an ID that is
 // not a break-glass account of the installation. Each answers 404 with
 // break-glass.not-found and writes one denied entry on the record. The

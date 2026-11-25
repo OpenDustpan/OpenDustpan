@@ -371,7 +371,7 @@ func TestBreakGlassAddPersonRefusesKind(t *testing.T) {
 
 	f := newBreakGlassFixture(t)
 
-	q := principal.Query{After: "", Low: "", High: "", Limit: 100}
+	q := principal.Query{After: "", Low: "", High: "", Limit: 100, InstallationOnly: false}
 
 	persons, _, err := f.store.ListPrincipals(t.Context(), q, principal.KindPerson)
 	if err != nil {
@@ -419,7 +419,7 @@ func listPersons(t *testing.T, f *fixture) []principal.Principal {
 	t.Helper()
 
 	persons, _, err := f.store.ListPrincipals(t.Context(),
-		principal.Query{After: "", Low: "", High: "", Limit: 100}, principal.KindPerson)
+		principal.Query{After: "", Low: "", High: "", Limit: 100, InstallationOnly: false}, principal.KindPerson)
 	if err != nil {
 		t.Fatalf("list the persons: %v", err)
 	}

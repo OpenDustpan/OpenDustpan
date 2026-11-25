@@ -27,7 +27,10 @@ import (
 	"fmt"
 	"net/http"
 	"slices"
+	"strings"
 	"time"
+	"unicode"
+	"unicode/utf8"
 
 	"opendustpan.org/opendustpan/internal/api/problem"
 	"opendustpan.org/opendustpan/internal/errcode"
@@ -322,6 +325,19 @@ func (h *Handler) addBreakGlass(w http.ResponseWriter, r *http.Request, p identi
 		return
 	}
 
+	// Defense in depth: the principal service validates the display name too;
+	// this check stays so that a hostile display name never reaches the
+	// service, and it does not rely on it.
+	if err := checkBreakGlassDisplayName(req.DisplayName); err != nil {
+		h.appendServerChangeReason(r, p, serverChange{
+			at: h.now(), action: identity.ActionServerManagePrincipals, object: tagBreakGlass,
+			outcome: audit.OutcomeDenied,
+		}, "the display name is not valid")
+		h.writeError(ctx, w, err)
+
+		return
+	}
+
 	key, err := passkeyOf(req.passkey())
 	if err != nil {
 		h.appendServerChangeReason(r, p, serverChange{
@@ -498,6 +514,55 @@ func readBreakGlassBody(w http.ResponseWriter, r *http.Request, dst any) error {
 	}
 
 	return decodeBody(body, dst, errBreakGlassBody)
+}
+
+// maxBreakGlassDisplayNameBytes is the length limit of a display name.
+const maxBreakGlassDisplayNameBytes = 255
+
+// breakGlassDisplayNamePunct is the punctuation that a display name can hold
+// in addition to letters, marks, digits and single spaces.
+const breakGlassDisplayNamePunct = ".,'-_()&@+:#/"
+
+// checkBreakGlassDisplayName refuses a display name that is too long, is not
+// UTF-8, starts or ends with white space, holds two spaces in sequence, or
+// holds a character outside the allowlist: letters, marks and digits of any
+// script, the space U+0020 and breakGlassDisplayNamePunct. An empty display
+// name is valid. Each refusal wraps principal.ErrInvalid.
+func checkBreakGlassDisplayName(s string) error {
+	switch {
+	case len(s) > maxBreakGlassDisplayNameBytes:
+		return fmt.Errorf("%w: display name longer than %d bytes", principal.ErrInvalid, maxBreakGlassDisplayNameBytes)
+	case !utf8.ValidString(s):
+		return fmt.Errorf("%w: display name is not UTF-8", principal.ErrInvalid)
+	case strings.TrimSpace(s) != s:
+		return fmt.Errorf("%w: display name starts or ends with white space", principal.ErrInvalid)
+	case strings.Contains(s, "  "):
+		return fmt.Errorf("%w: display name holds two spaces in sequence", principal.ErrInvalid)
+	}
+
+	// Defense in depth: the allowlist below refuses each hidden character
+	// too; this check stays so that a wider allowlist cannot let one in.
+	if err := refuseHidden("display name", s); err != nil {
+		return fmt.Errorf("%w: %w", principal.ErrInvalid, err)
+	}
+
+	for _, r := range s {
+		if !breakGlassDisplayNameRune(r) {
+			return fmt.Errorf(
+				"%w: display name holds the character %U, which is not a letter, a digit, a space or one of %q",
+				principal.ErrInvalid, r, breakGlassDisplayNamePunct,
+			)
+		}
+	}
+
+	return nil
+}
+
+// breakGlassDisplayNameRune reports whether r is in the allowlist of a
+// display name.
+func breakGlassDisplayNameRune(r rune) bool {
+	return unicode.IsLetter(r) || unicode.IsMark(r) || unicode.IsDigit(r) || r == ' ' ||
+		strings.ContainsRune(breakGlassDisplayNamePunct, r)
 }
 
 // passkeyOf returns the passkey of the fields of a break-glass body. The

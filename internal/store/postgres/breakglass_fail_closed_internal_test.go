@@ -142,12 +142,18 @@ func TestSweepInactiveFailsClosed(t *testing.T) {
 	}
 }
 
-// TestSweepInactiveRollsBackOnFailure proves that a failed read or disable
-// in the sweep rolls the transaction back, through the same function that
-// SweepInactive runs. The runner commits only when the function returns nil,
-// as the store does. After each failure the test checks that the runner got
-// the error, did not commit, and that no audit entry was inserted and the
-// entry function was not called.
+// TestSweepInactiveRollsBackOnFailure proves that a failed read or list in
+// SweepInactive rolls back every write that ran before it. The test calls the
+// body of SweepInactive, which takes the lock of @server in runServerAuditTx.
+// The runner of that transaction is pgx.BeginTxFunc, so the rollback is the
+// one that the store runs, not a flag in the test. For a failed clock read,
+// token disable, account disable or list of skipped break-glass accounts, the
+// test checks that no disable and no audit entry is stored and that the entry
+// function was not called.
+//
+// Mutation: replace the runner of sweepInactiveAudited with one that commits
+// on error. The account-disable and the skipped-list cases then store a
+// disable, and the test fails.
 func TestSweepInactiveRollsBackOnFailure(t *testing.T) {
 	t.Parallel()
 
@@ -165,21 +171,33 @@ func TestSweepInactiveRollsBackOnFailure(t *testing.T) {
 	}
 }
 
-// checkSweepRollsBack fails the statement fail in a sweep through
-// sweepInactiveAudited and checks the rollback.
+// checkSweepRollsBack fails the statement fail in the sweep and checks the
+// rollback of the transaction that runServerAuditTx opens.
 func checkSweepRollsBack(t *testing.T, fail string) {
 	t.Helper()
 
-	tx := &scriptTx{fail: fail, rows: nil, count: 1_700_000_000_000, ran: nil}
-	committed := false
-
-	run := func(_ context.Context, fn func(q *db.Queries) error) error {
-		err := fn(db.New(tx))
-		if err == nil {
-			committed = true
-		}
-
-		return err
+	tx := &sweepRollbackTx{
+		Tx: nil,
+		script: &scriptTx{
+			fail:  fail,
+			rows:  nil,
+			count: 1_700_000_000_000,
+			ran:   nil,
+		},
+		pending: nil,
+		stored:  nil,
+	}
+	beginner := sweepRollbackBeginner{tx: tx}
+	run := func(ctx context.Context, fn func(q *db.Queries) error) error {
+		return pgx.BeginTxFunc(ctx, beginner, pgx.TxOptions{
+			IsoLevel:       "",
+			AccessMode:     "",
+			DeferrableMode: "",
+			BeginQuery:     "",
+			CommitQuery:    "",
+		}, func(pgx.Tx) error {
+			return fn(db.New(tx))
+		})
 	}
 
 	called := false
@@ -197,10 +215,6 @@ func checkSweepRollsBack(t *testing.T, fail string) {
 		t.Fatalf("sweepInactiveAudited = %v, want an error that matches %v", err, errScriptedStatement)
 	}
 
-	if committed {
-		t.Fatal("the transaction committed after a failed statement")
-	}
-
 	if !res.At.IsZero() || len(res.Tokens) != 0 || len(res.Principals) != 0 {
 		t.Fatalf("result after the failure = %+v, want the zero result", res)
 	}
@@ -209,12 +223,88 @@ func checkSweepRollsBack(t *testing.T, fail string) {
 		t.Fatal("the sweep built an audit entry after a failed statement")
 	}
 
-	if slices.Contains(tx.ran, "InsertAuditEntry") {
-		t.Fatalf("statements = %v, want no InsertAuditEntry", tx.ran)
+	if len(tx.stored) != 0 {
+		t.Fatalf("stored writes after the failure = %v, want none", tx.stored)
 	}
 
-	if len(tx.ran) == 0 || tx.ran[0] != "LockServerAuditScope" {
-		t.Fatalf("statements = %v, want the lock of @server first", tx.ran)
+	if slices.Contains(tx.script.ran, "InsertAuditEntry") {
+		t.Fatalf("statements = %v, want no InsertAuditEntry", tx.script.ran)
+	}
+
+	if len(tx.script.ran) == 0 || tx.script.ran[0] != "LockServerAuditScope" {
+		t.Fatalf("statements = %v, want the lock of @server first", tx.script.ran)
+	}
+}
+
+// sweepRollbackBeginner starts the transaction of one sweep test.
+type sweepRollbackBeginner struct {
+	tx *sweepRollbackTx
+}
+
+// BeginTx returns the transaction of the test.
+func (b sweepRollbackBeginner) BeginTx(context.Context, pgx.TxOptions) (pgx.Tx, error) {
+	return b.tx, nil
+}
+
+// sweepRollbackTx buffers the writes of the sweep until pgx.BeginTxFunc
+// commits them. A rollback discards the buffer, as a real transaction does.
+type sweepRollbackTx struct {
+	pgx.Tx
+
+	script  *scriptTx
+	pending []string
+	stored  []string
+}
+
+// Exec records one buffered write when the statement succeeds.
+func (t *sweepRollbackTx) Exec(
+	ctx context.Context, sql string, args ...any,
+) (pgconn.CommandTag, error) {
+	tag, err := t.script.Exec(ctx, sql, args...)
+	if err == nil && isSweepWrite(statementName(sql)) {
+		t.pending = append(t.pending, statementName(sql))
+	}
+
+	return tag, err
+}
+
+// Query records one buffered write when the statement succeeds.
+func (t *sweepRollbackTx) Query(ctx context.Context, sql string, args ...any) (pgx.Rows, error) {
+	rows, err := t.script.Query(ctx, sql, args...)
+	if err == nil && isSweepWrite(statementName(sql)) {
+		t.pending = append(t.pending, statementName(sql))
+	}
+
+	return rows, err
+}
+
+// QueryRow sends a single-row statement to the script.
+func (t *sweepRollbackTx) QueryRow(ctx context.Context, sql string, args ...any) pgx.Row {
+	return t.script.QueryRow(ctx, sql, args...)
+}
+
+// Commit stores the writes that the sweep buffered.
+func (t *sweepRollbackTx) Commit(context.Context) error {
+	t.stored = append(t.stored, t.pending...)
+
+	return nil
+}
+
+// Rollback discards the writes that the sweep buffered.
+func (t *sweepRollbackTx) Rollback(context.Context) error {
+	t.pending = nil
+
+	return nil
+}
+
+// isSweepWrite reports whether a statement writes a disable or an audit
+// entry. The advisory lock of @server is not a stored row.
+func isSweepWrite(name string) bool {
+	switch name {
+	case "DisableInactiveAccessTokens", "DisableInactivePrincipals", "InsertAuditEntry":
+		return true
+	default:
+		return false
 	}
 }
 

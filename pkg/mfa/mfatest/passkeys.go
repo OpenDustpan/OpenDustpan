@@ -1099,6 +1099,15 @@ func testAddBreakGlassPersonInsertFails(t *testing.T, s PasskeyStore) {
 	wantEntries(t, s, passkeyObject(2), 0)
 }
 
+// breakGlassPersonGuardCase is one hostile input of AddBreakGlassPerson.
+type breakGlassPersonGuardCase struct {
+	name    string
+	setup   func(t *testing.T, s PasskeyStore)
+	person  func() principal.Principal
+	mutate  func(next *mfa.Passkey)
+	wantErr error
+}
+
 // testAddBreakGlassPersonGuards sends the hostile principals and passkeys of
 // the store guards of AddBreakGlassPerson to the store alone. Each refusal
 // stores no person, no passkey and no entry: every guard runs before the
@@ -1106,13 +1115,7 @@ func testAddBreakGlassPersonInsertFails(t *testing.T, s PasskeyStore) {
 func testAddBreakGlassPersonGuards(t *testing.T, s PasskeyStore) {
 	t.Helper()
 
-	cases := []struct {
-		name    string
-		setup   func(t *testing.T, s PasskeyStore)
-		person  func() principal.Principal
-		mutate  func(next *mfa.Passkey)
-		wantErr error
-	}{
+	cases := []breakGlassPersonGuardCase{
 		{
 			name:    "a principal of another kind",
 			setup:   nil,
@@ -1158,36 +1161,46 @@ func testAddBreakGlassPersonGuards(t *testing.T, s PasskeyStore) {
 	}
 
 	for _, tc := range cases {
-		if tc.setup != nil {
-			tc.setup(t, s)
-		}
-
-		p := tc.person()
-		first := passkeyOf(1, p.ID)
-
-		if tc.mutate != nil {
-			tc.mutate(&first)
-		}
-
-		err := s.AddBreakGlassPerson(t.Context(), p, first,
-			entry(principal.Ref(p.ID), at(0)), entry(passkeyObject(1), at(11)))
-		wantErr(t, "add "+tc.name, err, tc.wantErr)
-
-		if _, err := s.GetPrincipal(t.Context(), p.ID); !errors.Is(err, principal.ErrNotFound) {
-			t.Fatalf("%s: principal after the refused add: err = %v, want ErrNotFound", tc.name, err)
-		}
-
-		if _, err := s.PasskeyByCredentialID(t.Context(), credential(1)); !errors.Is(err, mfa.ErrNotFound) {
-			t.Fatalf("%s: passkey after the refused add: err = %v, want ErrNotFound", tc.name, err)
-		}
-
-		if n := count(t, s, "prn-5"); n != 0 {
-			t.Fatalf("%s: passkeys of the other person = %d, want 0", tc.name, n)
-		}
-
-		wantEntries(t, s, principal.Ref(p.ID), 0)
-		wantEntries(t, s, passkeyObject(1), 0)
+		t.Run(tc.name, func(t *testing.T) {
+			checkBreakGlassPersonGuard(t, s, tc)
+		})
 	}
+}
+
+// checkBreakGlassPersonGuard sends one hostile input to the store alone and
+// checks the refusal and the absence of a row.
+func checkBreakGlassPersonGuard(t *testing.T, s PasskeyStore, tc breakGlassPersonGuardCase) {
+	t.Helper()
+
+	if tc.setup != nil {
+		tc.setup(t, s)
+	}
+
+	p := tc.person()
+	first := passkeyOf(1, p.ID)
+
+	if tc.mutate != nil {
+		tc.mutate(&first)
+	}
+
+	err := s.AddBreakGlassPerson(t.Context(), p, first,
+		entry(principal.Ref(p.ID), at(0)), entry(passkeyObject(1), at(11)))
+	wantErr(t, "add "+tc.name, err, tc.wantErr)
+
+	if _, err := s.GetPrincipal(t.Context(), p.ID); !errors.Is(err, principal.ErrNotFound) {
+		t.Fatalf("%s: principal after the refused add: err = %v, want ErrNotFound", tc.name, err)
+	}
+
+	if _, err := s.PasskeyByCredentialID(t.Context(), credential(1)); !errors.Is(err, mfa.ErrNotFound) {
+		t.Fatalf("%s: passkey after the refused add: err = %v, want ErrNotFound", tc.name, err)
+	}
+
+	if n := count(t, s, "prn-5"); n != 0 {
+		t.Fatalf("%s: passkeys of the other person = %d, want 0", tc.name, n)
+	}
+
+	wantEntries(t, s, principal.Ref(p.ID), 0)
+	wantEntries(t, s, passkeyObject(1), 0)
 }
 
 // testRotate proves that one rotation ends the old passkey and stores the
