@@ -1,7 +1,7 @@
 ## 0. Confirm against the code first
 
 - [ ] 0.1 Read each fact of "What main already does" at its file and line on the current main. Record each difference in the pull request body before the first test. Check: the body lists the differences, or says there are none.
-- [ ] 0.2 Confirm that no route calls `SettingsStore.PutConnection` (`rg PutConnection internal pkg --glob '!*_test.go'`). Check: the output names only the interface.
+- [ ] 0.2 Confirm that `ConnectModel` does not write the connection: `rg 'PutConnection|Promote' internal/agent --glob '!*_test.go'` shows no call in `ConnectModel`.
 
 ## 1. Failing tests first
 

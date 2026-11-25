@@ -1,5 +1,5 @@
 ---
-version: 1
+version: 2
 ---
 
 ## Why
@@ -17,7 +17,7 @@ RFC 121 decision 7: "Dusty is an agent principal with the fixed name `dusty`. Th
 
 ## Out of scope
 
-- The route that connects a model, with the connection document and the probe (ADR 129 decision 29: `PUT /api/agent/connection` answers 202 with a probe ID). No change in `openspec/changes/` writes it, and main has no caller of `SettingsStore.PutConnection` (`internal/agent/settings.go:115`). That change is a dependency to be written. Its last step calls the NEW function `agent.ConnectModel` of this change, in the transaction of its own write.
+- The route that connects a model, with the connection document and the probe (ADR 129 decision 29: `PUT /api/agent/connection` answers 202 with a probe ID). The change `agent-connect-route` writes it. Its last step calls the NEW function `agent.ConnectModel` of this change in the transaction of its own write, and writes the connection with `ConnectionStore.Promote`. This change does not write the connection.
 - The delegation record (person-delegates-dusty), the run that names a delegation (dusty-run-names-delegation), the notification, the disable and the delete of an agent, the sponsor grace period (RFC 121 decisions 4 to 6 after the record), and the installation agent policy (decision 19).
 - A client registration of an agent. Dusty has none (decision 10).
 - A second agent. The kind allows it. Only Dusty has a maker in this change.
@@ -25,7 +25,7 @@ RFC 121 decision 7: "Dusty is an agent principal with the fixed name `dusty`. Th
 ## Depends on
 
 - Main: the kind `agent` (archive 2026-11-15-agent-shapes-before-first-tag) and `ActionServerManageAgent` (`pkg/identity/identity.go:541`).
-- A dependency to be written: the model connection route and probe (ADR 129 decision 29). Until it is on main, the e2e step of this change calls the connect function through the test server.
+- Used by: `agent-connect-route`, which calls `ConnectModel` in its transaction. Until it is on main, the e2e step of this change calls the connect function through the test server.
 
 ## Usability
 
@@ -37,7 +37,7 @@ The persona is the administrator who connects a model. The connect request shows
 - `pkg/principal/service.go:150`: `CreatePrincipal` refuses `KindAgent`.
 - `internal/api/server/principals.go:765`: the create route refuses `agent` and names the list route.
 - `pkg/identity/identity.go:541`: `ActionServerManageAgent` "allows connecting and disconnecting a model".
-- `internal/agent/settings.go:15,115`: `Connection` and `PutConnection` exist. No route calls them.
+- `internal/agent/settings.go:15,115`: `Connection` and `PutConnection` exist. No route calls them. The change `agent-connection-document-and-secrets` removes them.
 - `pkg/access/roles.go:218`: `BuiltInRoles`. It has no role `agent-tools-read` or `agent-tools`.
 - No table holds a sponsor or a fallback group. `rg -i sponsor pkg internal` finds only the two comments above.
 
