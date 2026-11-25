@@ -10,6 +10,7 @@ import (
 	"opendustpan.org/opendustpan/internal/store/jobstore"
 	"opendustpan.org/opendustpan/pkg/audit"
 	"opendustpan.org/opendustpan/pkg/durable"
+	"opendustpan.org/opendustpan/pkg/idempotency"
 	"opendustpan.org/opendustpan/pkg/identity"
 	"opendustpan.org/opendustpan/pkg/job"
 	"opendustpan.org/opendustpan/pkg/namespace"
@@ -316,11 +317,17 @@ type fakeTx struct {
 	now   time.Time
 	rows  map[job.ID]jobstore.Row
 	order []job.ID
+	// keyRead, when set, answers the next call of JobByKey, so that a test
+	// shows a read of a row that another writer replaced before the update.
+	// JobByKey clears it.
+	keyRead *jobstore.Row
+	// audits holds the entries that AppendAudit received, in order.
+	audits []audit.Entry
 }
 
 // newFakeTx returns a transaction over no rows, on the clock time now.
 func newFakeTx(now time.Time) *fakeTx {
-	return &fakeTx{Tx: nil, now: now, rows: map[job.ID]jobstore.Row{}, order: nil}
+	return &fakeTx{Tx: nil, now: now, rows: map[job.ID]jobstore.Row{}, order: nil, keyRead: nil, audits: nil}
 }
 
 // Now implements jobstore.Tx.
@@ -331,6 +338,66 @@ func (f *fakeTx) Job(_ context.Context, id job.ID) (jobstore.Row, bool, error) {
 	r, ok := f.rows[id]
 
 	return r, ok, nil
+}
+
+// JobByKey implements jobstore.Tx.
+func (f *fakeTx) JobByKey(_ context.Context, ns namespace.Name, key string) (jobstore.Row, bool, error) {
+	if f.keyRead != nil {
+		r := *f.keyRead
+		f.keyRead = nil
+
+		return r, true, nil
+	}
+
+	for _, id := range f.order {
+		r := f.rows[id]
+		if r.Namespace == ns && r.Key == key {
+			return r, true, nil
+		}
+	}
+
+	var none jobstore.Row
+
+	return none, false, nil
+}
+
+// InsertJob implements jobstore.Tx.
+func (f *fakeTx) InsertJob(_ context.Context, r jobstore.Row) error {
+	for id := range f.rows {
+		cur := f.rows[id]
+		if r.Key != "" && cur.Namespace == r.Namespace && cur.Key == r.Key {
+			return jobstore.ErrKeyIndex
+		}
+	}
+
+	if _, ok := f.rows[r.ID]; ok {
+		return job.ErrConflict
+	}
+
+	f.rows[r.ID] = r
+	f.order = append(f.order, r.ID)
+
+	return nil
+}
+
+// CountOpen implements jobstore.Tx.
+func (f *fakeTx) CountOpen(_ context.Context, ns namespace.Name, unitID string) (int, error) {
+	n := 0
+
+	for id := range f.rows {
+		r := f.rows[id]
+		if r.Namespace != ns || r.State.Terminal() {
+			continue
+		}
+
+		if unitID != "" && r.UnitID != unitID {
+			continue
+		}
+
+		n++
+	}
+
+	return n, nil
 }
 
 // UpdateJob implements jobstore.Tx.
@@ -368,7 +435,11 @@ func (f *fakeTx) StartOperation(_ context.Context, req *durable.StartRequest) (s
 func (f *fakeTx) CheckClaim(context.Context, durable.Claim) error { return nil }
 
 // AppendAudit implements jobstore.Tx.
-func (f *fakeTx) AppendAudit(context.Context, []audit.Entry) error { return nil }
+func (f *fakeTx) AppendAudit(_ context.Context, e []audit.Entry) error {
+	f.audits = append(f.audits, e...)
+
+	return nil
+}
 
 // put stores j as the row of its ID, as a write of the store would.
 func (f *fakeTx) put(t *testing.T, j *job.Job) {
@@ -489,7 +560,7 @@ func TestUpdateTimeMovesOnEachWritePath(t *testing.T) {
 			t.Parallel()
 
 			tx := newFakeTx(clock)
-			s := jobstore.New(fakeRunner{tx: tx})
+			s := jobstore.New(fakeRunner{tx: tx}, idempotency.JobStartRetention())
 
 			first := tc.first()
 			tx.put(t, &first)
@@ -581,7 +652,7 @@ func TestWritePathsKeepTheClockTime(t *testing.T) {
 			t.Parallel()
 
 			tx := newFakeTx(clock)
-			s := jobstore.New(fakeRunner{tx: tx})
+			s := jobstore.New(fakeRunner{tx: tx}, idempotency.JobStartRetention())
 
 			j := tc.job()
 			tx.put(t, &j)

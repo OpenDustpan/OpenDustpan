@@ -4,17 +4,22 @@ package e2e_test
 
 import (
 	"context"
+	"fmt"
+	"io"
 	"net/http"
+	"strings"
 	"testing"
 
 	"opendustpan.org/opendustpan/e2e"
 )
 
-// TestJobStartIdempotencyRetention proves that a service principal that starts
-// a job with an Idempotency-Key gets the stored job when it sends the same key
-// again after a restart of the real server binary. The retention after 24
-// hours has its test in the job store, which drives the clock of the store.
-func TestJobStartIdempotencyRetention(t *testing.T) {
+// TestJobStartIdempotencyAfterRestart proves that a service principal that
+// starts a job with an Idempotency-Key gets the stored job when it sends the
+// same key again after the real server binary restarted. The job conformance
+// suite has the cases past the retention age, "a key of a job older than the
+// retention starts a new job" and "a retry after the new job replays the new
+// job".
+func TestJobStartIdempotencyAfterRestart(t *testing.T) {
 	t.Parallel()
 
 	if !e2e.UseBinaryServer() {
@@ -42,7 +47,7 @@ func TestJobStartIdempotencyRetention(t *testing.T) {
 	}
 }
 
-// jobStartRetryAfterRestart starts one plan job as a service principal, stops
+// jobStartRetryAfterRestart starts one plan job as a service principal, kills
 // and starts the server, and sends the same request and key again.
 func jobStartRetryAfterRestart(ctx context.Context, t *testing.T, env *e2e.Env) {
 	t.Helper()
@@ -67,15 +72,19 @@ func jobStartRetryAfterRestart(ctx context.Context, t *testing.T, env *e2e.Env) 
 		token: token, key: key, name: "start a plan job as a service principal",
 	})
 
-	env.StopServer(ctx, t)
+	env.KillServer(t)
 	env.StartServer(ctx, t)
 
-	replay := startAsService(ctx, t, env, serviceStart{
+	replay, replayed := retryAsService(ctx, t, env, serviceStart{
 		token: token, key: key, name: "retry the start after the restart",
 	})
 
 	if replay.ID != first.ID {
 		t.Fatalf("the retry after the restart made job %s, not %s", replay.ID, first.ID)
+	}
+
+	if replayed != "true" {
+		t.Fatalf("the retry after the restart answered Idempotent-Replayed %q, want true", replayed)
 	}
 }
 
@@ -135,4 +144,51 @@ func startAsService(ctx context.Context, t *testing.T, env *e2e.Env, req service
 	}, map[string]string{"Idempotency-Key": req.key})
 
 	return started
+}
+
+// retryAsService sends the start of req again with the same key, records the
+// step, and returns the job and the value of the Idempotent-Replayed header.
+func retryAsService(ctx context.Context, t *testing.T, env *e2e.Env, req serviceStart) (jobDoc, string) {
+	t.Helper()
+
+	httpReq, err := http.NewRequestWithContext(ctx, http.MethodPost, env.URL+jobsRoute,
+		strings.NewReader(startBody(jobsPool, "plan")))
+	if err != nil {
+		t.Fatalf("build the retry: %v", err)
+	}
+
+	httpReq.Header.Set("Authorization", "token "+req.token.Secret)
+	httpReq.Header.Set("Content-Type", "application/json")
+	httpReq.Header.Set("Idempotency-Key", req.key)
+	httpReq.Header.Set("User-Agent", jobsAgent)
+
+	resp, err := env.BrowserClient(t).Do(httpReq)
+	if err != nil {
+		t.Fatalf("retry the start: %v", err)
+	}
+
+	defer func() {
+		if closeErr := resp.Body.Close(); closeErr != nil {
+			t.Errorf("close the retry answer: %v", closeErr)
+		}
+	}()
+
+	raw, err := io.ReadAll(resp.Body)
+	if err != nil {
+		t.Fatalf("read the retry answer: %v", err)
+	}
+
+	doc, docErr := checkStarted(string(raw))
+
+	failure := ""
+	if resp.StatusCode != http.StatusCreated {
+		failure = fmt.Sprintf("answers %d, want %d: %s", resp.StatusCode, http.StatusCreated, raw)
+	} else if docErr != nil {
+		failure = docErr.Error()
+	}
+
+	env.RecordExternalStep(t, req.name, http.MethodPost+" "+jobsRoute,
+		e2e.ExternalResult{Stdout: string(raw), Stderr: "", ExitCode: 0}, failure)
+
+	return doc, resp.Header.Get("Idempotent-Replayed")
 }

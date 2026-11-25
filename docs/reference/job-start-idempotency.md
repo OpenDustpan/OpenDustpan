@@ -25,8 +25,11 @@ job.
 
 A start with the same key and another request within the 24 hours fails with
 422 and the code `request.idempotency-key-reused`. To read the jobs of the
-namespace, send `GET /api/dustpan/v1/namespaces/{namespace}/jobs`. To start
-the other request, send a new `Idempotency-Key`.
+namespace, send `GET /api/dustpan/v1/namespaces/{namespace}/jobs`. Add
+`?unit={unit_id}` to read only the jobs of the workspace. Each job has
+`createdAt`. Find the job whose `createdAt` is closest to, and after, the time
+of the first request. The answer does not show the key. To start the other request, send a new
+`Idempotency-Key`.
 
 The retention is 24 hours. This version has no setting for it.
 

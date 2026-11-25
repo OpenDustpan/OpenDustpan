@@ -111,6 +111,7 @@ func newStoredBlobRig(t *testing.T, in storetest.StoredBlobBackupInput) *storete
 				Domain:     &jobDomain{s: st.Store},
 				WriteState: nil,
 				FailAudit:  nil,
+				AgeJob:     nil,
 			},
 			Records: jobs, ItemKeys: st.Store, Blobs: live, Wrapper: in.Key,
 		}),

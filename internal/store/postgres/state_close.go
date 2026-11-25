@@ -77,7 +77,7 @@ func updateJobRow(ctx context.Context, q *db.Queries, r jobstore.Row, prev int64
 	n, err := q.UpdateJob(ctx, db.UpdateJobParams{
 		State: string(r.State), Wait: string(r.Wait), CurrentPhase: int64(r.Phase), CurrentChanges: r.Changes,
 		CurrentOperation: r.Operation, Version: r.Version, Body: r.Body, UpdatedAtMs: r.UpdatedMs,
-		StateChangedAtMs: r.StateChangedMs, ID: string(r.ID), PrevVersion: prev,
+		StateChangedAtMs: r.StateChangedMs, IdempotencyKey: r.Key, ID: string(r.ID), PrevVersion: prev,
 	})
 	if err != nil {
 		return false, jobIndexError("update job", err)

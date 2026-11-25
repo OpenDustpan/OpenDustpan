@@ -12,6 +12,7 @@ import (
 	"opendustpan.org/opendustpan/pkg/audit"
 	"opendustpan.org/opendustpan/pkg/backup"
 	"opendustpan.org/opendustpan/pkg/durable"
+	"opendustpan.org/opendustpan/pkg/idempotency"
 	"opendustpan.org/opendustpan/pkg/identity"
 	"opendustpan.org/opendustpan/pkg/job"
 	"opendustpan.org/opendustpan/pkg/namespace"
@@ -36,7 +37,8 @@ const createAttempts = 2
 
 // Store serves job.Store and job.FreezeStore from one Runner.
 type Store struct {
-	run Runner
+	run  Runner
+	keep idempotency.Retention
 }
 
 var (
@@ -45,9 +47,15 @@ var (
 	_ job.FinalVersionReader = (*Store)(nil)
 )
 
-// New returns the job stores over run.
-func New(run Runner) *Store {
-	return &Store{run: run}
+// KeyExpiredAction is the action of the audit entry that the store appends
+// when it clears the idempotency key of a job that is older than the key
+// retention.
+const KeyExpiredAction = "job:key-expired"
+
+// New returns the job stores over run. keep is the retention of a job-start
+// key: a key names its job for keep from the creation of that job.
+func New(run Runner, keep idempotency.Retention) *Store {
+	return &Store{run: run, keep: keep}
 }
 
 // Create implements job.Store.
@@ -72,51 +80,6 @@ func (s *Store) Create(ctx context.Context, j job.Job, d *durable.StartRequest, 
 
 		return stored, created, err
 	}
-}
-
-// createIn stores j in the transaction tx, or returns the job that its
-// idempotency key already names.
-func createIn(ctx context.Context, tx Tx, j *job.Job, d *durable.StartRequest, e []audit.Entry,
-) (job.Job, bool, error) {
-	first, ok, err := sameKey(ctx, tx, j)
-	if err != nil || ok {
-		return first, false, err
-	}
-
-	if limitErr := checkLimits(ctx, tx, j.Spec.Unit.Namespace(), j.Spec.Unit.UnitID()); limitErr != nil {
-		return job.Job{}, false, limitErr
-	}
-
-	now, err := tx.Now(ctx)
-	if err != nil {
-		return job.Job{}, false, err
-	}
-
-	stored := *j
-	stored.Phases = clonePhases(j.Phases)
-	stored.State, stored.Version, stored.CreatedAt, stored.UpdatedAt = job.StateQueued, 1, now, now
-	stored.StateChangedAt = now
-
-	// A job whose first gate needs approval is stored in awaiting-approval,
-	// in this transaction, so that no queued job with a closed gate is ever
-	// visible to the code that dispatches queued jobs.
-	if j.State == job.StateAwaitingApproval {
-		stored.State, stored.Wait = job.StateAwaitingApproval, job.WaitNone
-	}
-
-	if d != nil {
-		if err := startDispatch(ctx, tx, &stored, d, dispatchTimes{notBefore: time.Time{}, now: now}); err != nil {
-			return job.Job{}, false, err
-		}
-
-		stored.State = job.StateDispatched
-	}
-
-	if err := insert(ctx, tx, &stored); err != nil {
-		return job.Job{}, false, err
-	}
-
-	return stored, true, tx.AppendAudit(ctx, e)
 }
 
 // Get implements job.Store.
@@ -456,6 +419,52 @@ func (s *Store) ListFreezes(ctx context.Context, ns namespace.Name, since time.T
 	return out, err
 }
 
+// createIn stores j in the transaction tx, or returns the job that its
+// idempotency key already names.
+func (s *Store) createIn(ctx context.Context, tx Tx, j *job.Job, d *durable.StartRequest,
+	e []audit.Entry,
+) (job.Job, bool, error) {
+	now, err := tx.Now(ctx)
+	if err != nil {
+		return job.Job{}, false, err
+	}
+
+	first, ok, err := s.sameKey(ctx, tx, j, now, e)
+	if err != nil || ok {
+		return first, false, err
+	}
+
+	if limitErr := checkLimits(ctx, tx, j.Spec.Unit.Namespace(), j.Spec.Unit.UnitID()); limitErr != nil {
+		return job.Job{}, false, limitErr
+	}
+
+	stored := *j
+	stored.Phases = clonePhases(j.Phases)
+	stored.State, stored.Version, stored.CreatedAt, stored.UpdatedAt = job.StateQueued, 1, now, now
+	stored.StateChangedAt = now
+
+	// A job whose first gate needs approval is stored in awaiting-approval,
+	// in this transaction, so that no queued job with a closed gate is ever
+	// visible to the code that dispatches queued jobs.
+	if j.State == job.StateAwaitingApproval {
+		stored.State, stored.Wait = job.StateAwaitingApproval, job.WaitNone
+	}
+
+	if d != nil {
+		if err := startDispatch(ctx, tx, &stored, d, dispatchTimes{notBefore: time.Time{}, now: now}); err != nil {
+			return job.Job{}, false, err
+		}
+
+		stored.State = job.StateDispatched
+	}
+
+	if err := insert(ctx, tx, &stored); err != nil {
+		return job.Job{}, false, err
+	}
+
+	return stored, true, tx.AppendAudit(ctx, e)
+}
+
 // createOnce stores j in one transaction, or returns the job that its
 // idempotency key already names. created is true for a new job.
 func (s *Store) createOnce(ctx context.Context, j *job.Job, d *durable.StartRequest, fence namespace.Fence,
@@ -469,7 +478,7 @@ func (s *Store) createOnce(ctx context.Context, j *job.Job, d *durable.StartRequ
 	err := s.run.Write(ctx, fence, func(tx Tx) error {
 		var err error
 
-		out, created, err = createIn(ctx, tx, j, d, e)
+		out, created, err = s.createIn(ctx, tx, j, d, e)
 
 		return err
 	})
@@ -545,8 +554,13 @@ func checkEntries(e []audit.Entry, fence namespace.Fence) error {
 
 // sameKey returns the job that the idempotency key of j already names, and
 // false when j has no key or the key names no job. It returns
-// job.ErrKeyConflict when the key names a job with another spec.
-func sameKey(ctx context.Context, tx Tx, j *job.Job) (job.Job, bool, error) {
+// job.ErrKeyConflict when the key names a live job with another spec. A job
+// that is older than the retention at now is expired: sameKey clears its key in
+// this transaction, appends an audit entry for the clear, and the new job takes
+// the key. The entry copies the actor of e[0], the entry of the new start.
+func (s *Store) sameKey(ctx context.Context, tx Tx, j *job.Job, now time.Time,
+	e []audit.Entry,
+) (job.Job, bool, error) {
 	if j.IdempotencyKey == "" {
 		return noJob(), false, nil
 	}
@@ -559,6 +573,29 @@ func sameKey(ctx context.Context, tx Tx, j *job.Job) (job.Job, bool, error) {
 	first, err := jobOf(&row)
 	if err != nil {
 		return noJob(), false, err
+	}
+
+	expired, err := s.keep.Expired(first.CreatedAt, now)
+	if err != nil {
+		return noJob(), false, fmt.Errorf("check the retention of the key of job %s: %w", first.ID, err)
+	}
+
+	if expired {
+		old := first
+		old.IdempotencyKey, old.Version = "", first.Version+1
+		old.UpdatedAt = nextUpdateAt(now, first.UpdatedAt)
+
+		if clearErr := update(ctx, tx, &old, first.Version); clearErr != nil {
+			// The clear found a newer version of the old row: another start
+			// took the key. Create runs again and reads the new job.
+			if errors.Is(clearErr, job.ErrConflict) {
+				return noJob(), false, ErrKeyIndex
+			}
+
+			return noJob(), false, clearErr
+		}
+
+		return noJob(), false, tx.AppendAudit(ctx, keyExpiredEntries(e, &first, now))
 	}
 
 	same, err := sameSpec(&first.Spec, &j.Spec)
@@ -574,6 +611,22 @@ func sameKey(ctx context.Context, tx Tx, j *job.Job) (job.Job, bool, error) {
 	}
 
 	return first, true, nil
+}
+
+// keyExpiredEntries returns the audit entry of the clear of the key of the
+// expired job old: it has the actor of the entry of the new start, the ID of
+// old and the reason for the clear. It returns no entry when e is empty.
+func keyExpiredEntries(e []audit.Entry, old *job.Job, now time.Time) []audit.Entry {
+	if len(e) == 0 {
+		return nil
+	}
+
+	entry := e[0]
+	entry.At, entry.Action, entry.Changes = now.UTC(), KeyExpiredAction, nil
+	entry.JobID, entry.Version, entry.PrevHash, entry.Hash, entry.Sequence = string(old.ID), "", "", "", 0
+	entry.Reason = fmt.Sprintf("the idempotency key of job %s is older than the key retention", old.ID)
+
+	return []audit.Entry{entry}
 }
 
 // sameSpec reports whether two specs encode to the same JSON.

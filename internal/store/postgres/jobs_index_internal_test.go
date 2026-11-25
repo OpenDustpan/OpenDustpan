@@ -6,6 +6,7 @@ import (
 
 	"github.com/jackc/pgx/v5/pgconn"
 
+	"opendustpan.org/opendustpan/internal/pgtest"
 	"opendustpan.org/opendustpan/internal/store/jobstore"
 	"opendustpan.org/opendustpan/pkg/job"
 )
@@ -54,4 +55,125 @@ func TestJobIndexError(t *testing.T) {
 			t.Fatalf("jobIndexError(nil) = %v, want nil", got)
 		}
 	})
+}
+
+// TestUpdateJobClearsKeyOnly proves that the UpdateJob query clears the
+// stored key when the update carries an empty key.
+func TestUpdateJobClearsKeyOnly(t *testing.T) {
+	t.Parallel()
+
+	s, err := Open(t.Context(), pgtest.MigratedURL(t, testPostgresURL(t)))
+	if err != nil {
+		t.Fatalf("open store: %v", err)
+	}
+
+	t.Cleanup(s.Close)
+
+	id := seedStagedJobRow(t, s)
+
+	err = s.ExecForTest(t.Context(), `UPDATE jobs SET idempotency_key = $1 WHERE id = $2`, "key-1", string(id))
+	if err != nil {
+		t.Fatalf("set the key: %v", err)
+	}
+
+	row, err := s.queries.GetJob(t.Context(), string(id))
+	if err != nil {
+		t.Fatalf("get the job: %v", err)
+	}
+
+	r := jobRow(row)
+	r.Key = ""
+	r.Version, r.UpdatedMs = row.Version+1, row.UpdatedAtMs+1
+
+	ok, err := updateJobRow(t.Context(), s.queries, r, row.Version)
+	if err != nil || !ok {
+		t.Fatalf("update with the empty key = %t, %v; want a written row", ok, err)
+	}
+
+	if got := storedIdempotencyKey(t, s, id); got != "" {
+		t.Fatalf("the key after the clear = %q, want empty", got)
+	}
+}
+
+// TestUpdateJobKeepsStoredKey proves that the UpdateJob query keeps the
+// stored key when the update carries another key that is not empty.
+func TestUpdateJobKeepsStoredKey(t *testing.T) {
+	t.Parallel()
+
+	s, err := Open(t.Context(), pgtest.MigratedURL(t, testPostgresURL(t)))
+	if err != nil {
+		t.Fatalf("open store: %v", err)
+	}
+
+	t.Cleanup(s.Close)
+
+	id := seedStagedJobRow(t, s)
+
+	err = s.ExecForTest(t.Context(), `UPDATE jobs SET idempotency_key = $1 WHERE id = $2`, "key-1", string(id))
+	if err != nil {
+		t.Fatalf("set the key: %v", err)
+	}
+
+	row, err := s.queries.GetJob(t.Context(), string(id))
+	if err != nil {
+		t.Fatalf("get the job: %v", err)
+	}
+
+	r := jobRow(row)
+	r.Key = "key-2"
+	r.Version, r.UpdatedMs = row.Version+1, row.UpdatedAtMs+1
+
+	ok, err := updateJobRow(t.Context(), s.queries, r, row.Version)
+	if err != nil || !ok {
+		t.Fatalf("update with another key = %t, %v; want a written row", ok, err)
+	}
+
+	if got := storedIdempotencyKey(t, s, id); got != "key-1" {
+		t.Fatalf("the key after another key = %q, want key-1", got)
+	}
+}
+
+// TestUpdateJobNeverSetsKey proves that the UpdateJob query never sets a key
+// on a job that has none.
+func TestUpdateJobNeverSetsKey(t *testing.T) {
+	t.Parallel()
+
+	s, err := Open(t.Context(), pgtest.MigratedURL(t, testPostgresURL(t)))
+	if err != nil {
+		t.Fatalf("open store: %v", err)
+	}
+
+	t.Cleanup(s.Close)
+
+	id := seedStagedJobRow(t, s)
+
+	row, err := s.queries.GetJob(t.Context(), string(id))
+	if err != nil {
+		t.Fatalf("get the job: %v", err)
+	}
+
+	r := jobRow(row)
+	r.Key = "key-2"
+	r.Version, r.UpdatedMs = row.Version+1, row.UpdatedAtMs+1
+
+	ok, err := updateJobRow(t.Context(), s.queries, r, row.Version)
+	if err != nil || !ok {
+		t.Fatalf("update with a key on a job without a key = %t, %v; want a written row", ok, err)
+	}
+
+	if got := storedIdempotencyKey(t, s, id); got != "" {
+		t.Fatalf("the key after a key on a job without a key = %q, want empty", got)
+	}
+}
+
+// storedIdempotencyKey returns the stored idempotency key of the job id.
+func storedIdempotencyKey(t *testing.T, s *Store, id job.ID) string {
+	t.Helper()
+
+	row, err := s.queries.GetJob(t.Context(), string(id))
+	if err != nil {
+		t.Fatalf("get job %s: %v", id, err)
+	}
+
+	return row.IdempotencyKey
 }

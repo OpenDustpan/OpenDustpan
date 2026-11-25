@@ -1,48 +1,52 @@
 package idempotency
 
 import (
-	"errors"
 	"fmt"
 	"time"
 )
 
-// ErrInvalidRetention reports a retention that is shorter than RecordTTL.
-var ErrInvalidRetention = errors.New("invalid idempotency retention")
+// MinRetention is the shortest retention of a job-start key: RecordTTL,
+// which is 24 hours.
+const MinRetention = RecordTTL
 
-// Retention is how long a store keeps a replay record. Make a value with
-// NewRetention: a store cannot keep a record for less than RecordTTL, so a
-// retry that the retention covers always finds its answer.
+// Retention is how long a job-start key names its job. Make a value with
+// NewRetention: a shorter retention is refused. The zero value is not valid,
+// so a store that holds it fails each expiry check instead of skipping it.
 type Retention struct {
-	period time.Duration
+	d time.Duration
 }
 
-// NewRetention returns the retention of period, or ErrInvalidRetention when
-// period is shorter than RecordTTL.
-func NewRetention(period time.Duration) (Retention, error) {
-	if period < RecordTTL {
-		return Retention{}, fmt.Errorf(
-			"%w: the retention is %s, the minimum is %s", ErrInvalidRetention, period, RecordTTL,
-		)
+// NewRetention returns the retention of d, or ErrInvalid when d is shorter
+// than MinRetention.
+func NewRetention(d time.Duration) (Retention, error) {
+	if d < MinRetention {
+		var none Retention
+
+		return none, fmt.Errorf("%w: the retention is %s, the minimum is %s", ErrInvalid, d, MinRetention)
 	}
 
-	return Retention{period: period}, nil
+	return Retention{d: d}, nil
 }
 
-// JobStartRetention returns the retention of a job-start record: RecordTTL,
-// which is 24 hours.
+// JobStartRetention returns the retention of a job-start key: 24 hours.
 func JobStartRetention() Retention {
-	return Retention{period: RecordTTL}
+	r, err := NewRetention(MinRetention)
+	if err != nil {
+		var none Retention
+
+		return none
+	}
+
+	return r
 }
 
-// Period returns the retention period.
-func (r Retention) Period() time.Duration {
-	return r.period
-}
+// Expired reports whether a job created at created is older than the
+// retention at now. A job of exactly the retention age is not expired. It
+// returns ErrInvalid for the zero value.
+func (r Retention) Expired(created, now time.Time) (bool, error) {
+	if r.d < MinRetention {
+		return false, fmt.Errorf("%w: the retention is not set", ErrInvalid)
+	}
 
-// Expired reports whether a record made at created is older than the
-// retention at now. A record that is exactly as old as the retention is not
-// expired: the client that sends the key again after more than the retention
-// gets a new record.
-func (r Retention) Expired(created, now time.Time) bool {
-	return now.Sub(created) > r.period
+	return now.Sub(created) > r.d, nil
 }
