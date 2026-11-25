@@ -29,7 +29,7 @@ An unexported checkedSweepHeader type is built only by its constructor, which ch
 
 ## Diagrams
 
-Today: `GET /api/runners/{namespace}/pools` on main (from the route table and the handler body, route row internal/api/runnerapi/routes.go:97, handler internal/api/runnerapi/admin.go:102).
+Today: `GET /api/dustpan/v1/namespaces/{namespace}/runner-pools` on main (from the route table and the handler body, route row and handler `listPools` in the runner pool adapter). The report stream routes of this change are in `internal/api/runnerapi/routes.go`.
 
 ```mermaid
 sequenceDiagram
@@ -38,7 +38,7 @@ participant R as GET route
 participant H as listPools
 participant AZ as Authorizer
 participant Fpools as pools
-C->>R: GET /api/runners/{namespace}/pools
+C->>R: GET /api/dustpan/v1/namespaces/{namespace}/runner-pools
 R->>AZ: ActionNamespaceReadRunners (ScopeAuthorized)
 R->>H: listPools
 H->>Fpools: Pools
