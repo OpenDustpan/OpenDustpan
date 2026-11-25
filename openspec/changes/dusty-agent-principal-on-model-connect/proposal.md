@@ -1,5 +1,5 @@
 ---
-version: 2
+version: 3
 ---
 
 ## Why
@@ -51,4 +51,6 @@ The persona is the administrator who connects a model. The connect request shows
 - ADR 250 and ADR 364: the layers table in design.md. No new lint rule.
 - ADR 362: every reference is a stable ID (sponsor, fallback group, creator, role grant).
 
-Open questions: none
+## Open questions
+
+none
