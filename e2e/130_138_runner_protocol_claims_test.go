@@ -1,12 +1,16 @@
 //go:build e2e
 
-package e2e
+package e2e_test
 
 import (
+	"bytes"
 	"context"
+	"crypto/ed25519"
+	"crypto/rand"
 	"encoding/json"
 	"errors"
 	"fmt"
+	"io"
 	"log/slog"
 	"net/http"
 	"strings"
@@ -14,6 +18,7 @@ import (
 	"testing"
 	"time"
 
+	"opendustpan.org/opendustpan/e2e"
 	"opendustpan.org/opendustpan/pkg/launcher/session"
 	"opendustpan.org/opendustpan/pkg/runner"
 	"opendustpan.org/opendustpan/pkg/runner/client"
@@ -26,6 +31,10 @@ const (
 	loopAgent = "opendustpan-e2e-runner-loop"
 	loopUnit  = "runner-loop"
 	loopPool  = "runner-loop"
+	// loopRelease is the release that the runner of the step sends. The
+	// server binary of the suite is a development build, which accepts the
+	// releases 0.0.x.
+	loopRelease = "0.0.1"
 	// loopTick is the period of each ticker of the loop in the step: the
 	// renewals, the heartbeats and the waits. The real periods are a third
 	// of the lease and runner.HeartbeatEvery.
@@ -38,6 +47,12 @@ const (
 
 var errRunnerLoop = errors.New("the runner loop step did not end as expected")
 
+// loopRunner is the runner of the step: its ID and its runner key.
+type loopRunner struct {
+	id  string
+	key ed25519.PrivateKey
+}
+
 // TestRunnerLoopPollsRenewsAndHeartbeats runs the runner loop of
 // pkg/runner/client against the server of each store. The runner joins a
 // pool, polls the phase of a plan job, renews its claim and sends heartbeats
@@ -46,7 +61,7 @@ var errRunnerLoop = errors.New("the runner loop step did not end as expected")
 func TestRunnerLoopPollsRenewsAndHeartbeats(t *testing.T) {
 	t.Parallel()
 
-	stores, err := Databases()
+	stores, err := e2e.Databases()
 	if err != nil {
 		t.Fatalf("stores: %v", err)
 	}
@@ -55,22 +70,23 @@ func TestRunnerLoopPollsRenewsAndHeartbeats(t *testing.T) {
 		t.Run(string(store), func(t *testing.T) {
 			t.Parallel()
 
-			runnerLoopScenario(t, NewEnvWithRealTimeSignIn(t.Context(), t, NoCLI(), store))
+			runnerLoopScenario(t, e2e.NewEnvWithRealTimeSignIn(t.Context(), t, e2e.NoCLI(), store))
 		})
 	}
 }
 
 // runnerLoopScenario makes the unit and the pool, starts a plan job, joins a
 // runner and runs the loop until the work ends.
-func runnerLoopScenario(t *testing.T, env *Env) {
+func runnerLoopScenario(t *testing.T, env *e2e.Env) {
 	t.Helper()
 
 	poolID := makeLoopPool(t, env)
 	jobID := startLoopJob(t, env)
-	fake := env.JoinFakeRunner(t.Context(), t, Namespace, poolID, "loop-runner")
-	rec := newLoopRecorder(t, env, fake.id)
+	rec := newLoopRecorder(t, env)
+	rn := joinLoopRunner(t, env, rec, poolID)
+	rec.runnerID = rn.id
 
-	if err := runClaimLoop(t, env, fake, rec); err != nil {
+	if err := runClaimLoop(t, env, rn, rec); err != nil {
 		t.Fatalf("Run = %v, want nil after the context ends", err)
 	}
 
@@ -79,15 +95,17 @@ func runnerLoopScenario(t *testing.T, env *Env) {
 	}
 }
 
-// runClaimLoop runs the runner loop of fake with the transport rec. The work
+// runClaimLoop runs the runner loop of rn with the transport rec. The work
 // ends when the server has answered 200 to a renewal and to a heartbeat.
-func runClaimLoop(t *testing.T, env *Env, fake *FakeRunner, rec *loopRecorder) error {
+func runClaimLoop(t *testing.T, env *e2e.Env, rn loopRunner, rec *loopRecorder) error {
+	t.Helper()
+
 	ctx, stop := context.WithTimeout(t.Context(), loopLimit)
 	defer stop()
 
 	loop, err := client.New(client.Config{
-		Server: env.URL, Transport: rec, RunnerID: fake.id, Key: fake.priv,
-		Release: launcherRelease, Lease: runner.MinLease, Wait: loopPollWait,
+		Server: env.URL, Transport: rec, RunnerID: rn.id, Key: rn.key,
+		Release: loopRelease, Lease: runner.MinLease, Wait: loopPollWait,
 		Ticker: loopTicker, Now: nil,
 		Logger: slog.New(slog.NewTextHandler(loopLogWriter{t: t}, nil)),
 	})
@@ -110,6 +128,69 @@ func runClaimLoop(t *testing.T, env *Env, fake *FakeRunner, rec *loopRecorder) e
 	})
 }
 
+// joinLoopRunner makes a join token of the pool poolID and joins a runner
+// with a new ed25519 key through the transport rec.
+func joinLoopRunner(t *testing.T, env *e2e.Env, rec *loopRecorder, poolID string) loopRunner {
+	t.Helper()
+
+	var token string
+
+	env.APIStepA(t.Context(), t, e2e.APIStepSpec{
+		UserAgent: loopAgent, Name: "runner loop: make a join token", Method: http.MethodPost,
+		Path:   "/api/dustpan/v1/namespaces/" + e2e.Namespace + "/runner-pools/" + poolID + "/join-tokens",
+		Body:   "",
+		Want:   http.StatusCreated,
+		Scheme: "token",
+		Check:  func(body string) error { return decodeJoinToken(body, &token) },
+	})
+
+	pub, priv, err := ed25519.GenerateKey(rand.Reader)
+	if err != nil {
+		t.Fatalf("generate the key of the runner: %v", err)
+	}
+
+	raw, err := json.Marshal(protocol.JoinRequest{
+		Token: token, Pool: poolID, Name: "loop-runner", Kind: string(runner.KindMachine),
+		Isolation: string(runner.IsolationGVisor), Labels: nil, PublicKey: pub,
+		Proof: ed25519.Sign(priv, runner.JoinChallenge(env.URL, poolID, "loop-runner", token)),
+	})
+	if err != nil {
+		t.Fatalf("encode the join request: %v", err)
+	}
+
+	joinClient := &session.Client{Server: env.URL, Transport: rec.inner, Release: loopRelease, Now: nil}
+
+	resp, err := joinClient.Send(t.Context(), &session.Request{
+		Method: http.MethodPost, Path: protocol.PathJoin, Body: raw, Header: nil,
+	})
+	if err != nil || resp.Status != http.StatusOK {
+		t.Fatalf("join = %+v, %v; want 200", resp, err)
+	}
+
+	var joined protocol.JoinResponse
+	if err := json.Unmarshal(resp.Body, &joined); err != nil || joined.Runner == "" {
+		t.Fatalf("decode the join answer: %v", err)
+	}
+
+	return loopRunner{id: joined.Runner, key: priv}
+}
+
+// decodeJoinToken puts the token field of the JSON body in token. The error
+// does not hold the body: the body holds the secret of the token.
+func decodeJoinToken(body string, token *string) error {
+	var doc struct {
+		Token string `json:"token"`
+	}
+
+	if err := json.Unmarshal([]byte(body), &doc); err != nil || doc.Token == "" {
+		return fmt.Errorf("%w: the join token answer has no token", errRunnerLoop)
+	}
+
+	*token = doc.Token
+
+	return nil
+}
+
 // loopTicker is the Ticker of the loop in the step: each ticker has the
 // period loopTick, so that the renewals and the heartbeats come fast.
 func loopTicker(time.Duration) (<-chan time.Time, func()) {
@@ -130,13 +211,44 @@ func (w loopLogWriter) Write(p []byte) (int, error) {
 	return len(p), nil
 }
 
+// httpTransport sends the requests of the runner protocol to the server of
+// the environment, with an HTTP client that trusts the server.
+type httpTransport struct {
+	base   string
+	client *http.Client
+}
+
+// Do implements session.Transport.
+func (h httpTransport) Do(ctx context.Context, req *session.Request) (*session.Response, error) {
+	hr, err := http.NewRequestWithContext(ctx, req.Method, h.base+req.Path, bytes.NewReader(req.Body))
+	if err != nil {
+		return nil, fmt.Errorf("build %s %s: %w", req.Method, req.Path, err)
+	}
+
+	for k, v := range req.Header {
+		hr.Header.Set(k, v)
+	}
+
+	resp, err := h.client.Do(hr)
+	if err != nil {
+		return nil, fmt.Errorf("%s %s: %w", req.Method, req.Path, err)
+	}
+
+	body, readErr := io.ReadAll(resp.Body)
+	if err = errors.Join(readErr, resp.Body.Close()); err != nil {
+		return nil, fmt.Errorf("read %s %s: %w", req.Method, req.Path, err)
+	}
+
+	return &session.Response{Status: resp.StatusCode, Body: body, RetryAfter: 0}, nil
+}
+
 // loopRecorder is the transport of the loop in the step. It sends each
 // request to the server of the environment, logs each poll answer with work,
 // each renewal and each heartbeat, and closes seen when the server answered
 // 200 to a renewal and to a heartbeat.
 type loopRecorder struct {
 	t        *testing.T
-	inner    envTransport
+	inner    httpTransport
 	runnerID string
 	seen     chan struct{}
 
@@ -149,12 +261,13 @@ type loopRecorder struct {
 	closed     bool
 }
 
-func newLoopRecorder(t *testing.T, env *Env, runnerID string) *loopRecorder {
+func newLoopRecorder(t *testing.T, env *e2e.Env) *loopRecorder {
 	t.Helper()
 
 	return &loopRecorder{
-		t: t, inner: envTransport{env: env}, runnerID: runnerID, seen: make(chan struct{}),
-		mu: sync.Mutex{}, works: nil, renewals: 0, heartbeats: 0, unsigned: nil, refused: nil, closed: false,
+		t: t, inner: httpTransport{base: env.URL, client: env.BrowserClient(t)}, runnerID: "",
+		seen: make(chan struct{}),
+		mu:   sync.Mutex{}, works: nil, renewals: 0, heartbeats: 0, unsigned: nil, refused: nil, closed: false,
 	}
 }
 
@@ -235,20 +348,20 @@ func (r *loopRecorder) check(jobID string) error {
 
 // makeLoopPool makes the workspace and the pool of the step and returns the
 // ID of the pool.
-func makeLoopPool(t *testing.T, env *Env) string {
+func makeLoopPool(t *testing.T, env *e2e.Env) string {
 	t.Helper()
 
 	var poolID string
 
-	env.APIStepA(t.Context(), t, APIStepSpec{
+	env.APIStepA(t.Context(), t, e2e.APIStepSpec{
 		UserAgent: loopAgent, Name: "runner loop: create the workspace", Method: http.MethodPost,
-		Path: "/api/v2/organizations/" + Namespace + "/workspaces",
+		Path: "/api/v2/organizations/" + e2e.Namespace + "/workspaces",
 		Body: `{"data":{"type":"workspaces","attributes":{"name":"` + loopUnit + `"}}}`,
 		Want: http.StatusCreated, Scheme: "", Check: nil,
 	})
-	env.APIStepA(t.Context(), t, APIStepSpec{
+	env.APIStepA(t.Context(), t, e2e.APIStepSpec{
 		UserAgent: loopAgent, Name: "runner loop: create the runner pool", Method: http.MethodPost,
-		Path: "/api/dustpan/v1/namespaces/" + Namespace + "/runner-pools",
+		Path: "/api/dustpan/v1/namespaces/" + e2e.Namespace + "/runner-pools",
 		Body: `{"name":"` + loopPool + `","purpose":"jobs"}`,
 		Want: http.StatusCreated, Scheme: "token",
 		Check: func(body string) error { return decodeLoopID(body, &poolID) },
@@ -262,14 +375,14 @@ func makeLoopPool(t *testing.T, env *Env) string {
 }
 
 // startLoopJob starts a plan job in the pool of the step and returns its ID.
-func startLoopJob(t *testing.T, env *Env) string {
+func startLoopJob(t *testing.T, env *e2e.Env) string {
 	t.Helper()
 
 	var jobID string
 
-	env.APIStepA(t.Context(), t, APIStepSpec{
+	env.APIStepA(t.Context(), t, e2e.APIStepSpec{
 		UserAgent: loopAgent, Name: "runner loop: start a plan job", Method: http.MethodPost,
-		Path: "/api/dustpan/v1/namespaces/" + Namespace + "/jobs",
+		Path: "/api/dustpan/v1/namespaces/" + e2e.Namespace + "/jobs",
 		Body: fmt.Sprintf(`{"unit":{"tool":"opentofu","name":%q},"operation":"plan","pool":%q,`+
 			`"location":{"repository":"acme/infra","ref":"main","directory":"net"},"reason":"e2e"}`,
 			loopUnit, loopPool),
