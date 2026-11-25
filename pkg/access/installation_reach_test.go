@@ -1,6 +1,7 @@
 package access_test
 
 import (
+	"errors"
 	"slices"
 	"testing"
 
@@ -296,9 +297,16 @@ func TestInstallationReachFailedReadDenies(t *testing.T) {
 	tests := []struct {
 		name     string
 		settings reachReader
+		wantErr  error
 	}{
-		{name: "a failed read", settings: reachReader{value: new("false"), err: errSettingsGone}},
-		{name: "a value that is not a boolean", settings: reachReader{value: new("maybe"), err: nil}},
+		{
+			name: "a failed read", settings: reachReader{value: new("false"), err: errSettingsGone},
+			wantErr: errSettingsGone,
+		},
+		{
+			name: "a value that is not a boolean", settings: reachReader{value: new("maybe"), err: nil},
+			wantErr: nil,
+		},
 	}
 
 	for _, tc := range tests {
@@ -315,6 +323,10 @@ func TestInstallationReachFailedReadDenies(t *testing.T) {
 			err := f.authz.Authorize(t.Context(), holder, identity.ActionNamespaceRead, acme)
 			if err == nil {
 				t.Fatal("authorize on a namespace = nil, want a denial with an error")
+			}
+
+			if tc.wantErr != nil && !errors.Is(err, tc.wantErr) {
+				t.Fatalf("authorize on a namespace = %v, want an error that wraps %v", err, tc.wantErr)
 			}
 		})
 	}
