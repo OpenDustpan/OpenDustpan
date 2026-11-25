@@ -43,13 +43,9 @@ The client SHALL check each resolved address when the connection opens. It SHALL
 - **WHEN** an allowed host name resolves to a link-local address
 - **THEN** the connection fails and the audit log has an entry
 
-### Requirement: The secret filter is always on
-`agent.SecretFilter` SHALL remove secret-like text from the prompt of a person, each tool result, each model answer and each probe error. No setting, flag or field SHALL turn it off. The filter SHALL NOT change an opaque reasoning part.
-
-#### Scenario: A canary in an answer
-- **WHEN** a model answer holds the exact value of a secret item of the connection
-- **THEN** the transcript holds `[removed: secret-like text]`
+### Requirement: An opaque part is kept and not read
+The store SHALL seal an opaque reasoning part with the run, turn and part as additional data and SHALL give it back byte for byte. The readable record of the part SHALL hold its size and its format only.
 
 #### Scenario: A canary in an opaque part
-- **WHEN** an opaque reasoning part holds the canary
+- **WHEN** an opaque reasoning part holds a canary
 - **THEN** the part comes back byte for byte and no readable record holds the canary

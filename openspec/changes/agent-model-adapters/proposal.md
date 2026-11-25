@@ -15,12 +15,12 @@ ADR 129 (accepted 2026-10-18, owner) says: "One adapter serves every server of i
 - The error mapping, the request ID headers and the rate limit wait (decisions 22 and 23).
 - The dial guard, no proxy, no redirect, and the limits of a call (decisions 27 and 28).
 - The changes to the model port (decision 37): the part kind `opaque`, `ErrModelQuota`, and the stop reasons `model-quota`, `model-rate-limited` and `connection-changed`, with the cases that `agenttest.RunModel` gets.
-- `agent.SecretFilter` (decision 24), always on, with its test corpus.
 - The adapter of the port for a connection: `agent.NewModel(spec ConnectionSpec, open func(SecretRef) ([]byte, error), clock, logger)` that returns the model of ADR 121.
 
 ## Out of scope
 
 - The document, its validation and the secret items: the change `agent-connection-document-and-secrets`.
+- `agent.SecretFilter` (decision 24), its test corpus and its wiring: the change `agent-secret-filter`.
 - The probe (decisions 29 to 31): the change `agent-connection-probe`. The route: the change `agent-connect-route`.
 - The format `responses` (decision 5: a later change).
 - Request signing and token exchange (decision 7). A gateway does them.
@@ -29,6 +29,7 @@ ADR 129 (accepted 2026-10-18, owner) says: "One adapter serves every server of i
 ## Depends on
 
 - `agent-connection-document-and-secrets` (the type `ConnectionSpec`, `SecretItems.Open`, `egress.CheckModelURL`).
+- `agent-secret-filter` (the answer of an adapter is the input of the filter; this change uses no filter code).
 - Main: the model port of ADR 121 (`internal/agent`), `pkg/egress`.
 
 ## Usability
@@ -38,7 +39,6 @@ The persona is the administrator who uses a model server that the project does n
 ## What main already does
 
 - The model port and `agenttest.RunModel` of ADR 121 in `internal/agent`. They have a text part, a tool call part and a tool result part. They have no `opaque` part and no `ErrModelQuota`.
-- `internal/agent/mask.go`: `MaskText` and `RevealedMarker`. No `SecretFilter`.
 - `pkg/egress/egress.go`: `CheckAddr`, `CheckURL`, `ParseAllowedRanges`, `CheckAllowedRange`. No dial guard for a model connection.
 - No `pkg/modeladapter`.
 

@@ -12,8 +12,8 @@ The connection document of ADR 129 names a format and the fields that differ bet
 6. The dial guard is a `net.Dialer.Control` function on a client that the adapter owns. It checks each resolved address: the always-denied list first, then a public address or a CIDR entry on its port (decision 27). The client has `Proxy: nil`, `CheckRedirect` that returns `http.ErrUseLastResponse`, a call timeout of 10 minutes, a stream idle timeout of 2 minutes and a body limit of 4 MiB (decision 28). The client closes idle connections when the allowlist changes.
 7. The error mapping reads `error.type` and `error.code` of the body and never its text. The table of decision 22 is data in `errors.go`, and a table test covers each row.
 8. The rate limit wait parses the four forms of decision 23 with one function and the clock of the adapter. A wait above 5 minutes returns `ErrModelRateLimited` with the wait, and the loop stops the run with `model-rate-limited`.
-9. `agent.SecretFilter` is an immutable value made from the list of secret item values of the connection and the pattern list of the binary. It has `Filter(string) (string, int)` that answers the text and the number of removed values. The pattern list has no rule on entropy alone (decision 24). The filter has no off switch: no option, flag or field.
-10. The opaque part (decision 37) is a new part kind with the format name and the bytes. The store seals it with the run, turn and part as additional data. The filter never changes it. The transcript record of an opaque part holds its size and format only.
+9. The adapters hold no secret filter. The filter is the change `agent-secret-filter` (ADR 129 decision 24). An adapter never logs or returns a secret value, and the answer of an adapter is the input of the filter.
+10. The opaque part (decision 37) is a new part kind with the format name and the bytes. The store seals it with the run, turn and part as additional data. The filter of the later change never changes it. The transcript record of an opaque part holds its size and format only.
 
 ## Structure
 
@@ -33,11 +33,6 @@ const (
 func NewModel(spec ConnectionSpec, open func(context.Context, SecretRef) ([]byte, error),
     guard egress.DialGuard, clk clock.Clock, log *slog.Logger) (Model, error)
 
-// internal/agent/filter.go
-type SecretFilter struct { /* unexported */ }
-func NewSecretFilter(values [][]byte) SecretFilter
-func (f SecretFilter) Filter(text string) (string, int)
-
 // pkg/egress
 type DialGuard interface { Control(network, address string, c syscall.RawConn) error }
 func NewDialGuard(allow Allowlist, publicOnly bool) DialGuard
@@ -50,7 +45,6 @@ No new route. The adapters send HTTP requests to the base address of the documen
 ## Risks
 
 - A server may accept a request that the adapter built and still behave in a way that the format does not say. The probe of a later change shows this; the adapters do not guess.
-- The filter may remove a resource ID that looks like a secret. The pattern list has no entropy rule, and a corpus of IDs from state checks the list.
 - DNS rebinding of an allowed host name to an allowed CIDR is accepted by decision 27, with its reasons.
 
 ## Layers (defense in depth)
@@ -58,8 +52,7 @@ No new route. The adapters send HTTP requests to the base address of the documen
 | Input | Layer | Guard | Hostile test (fails when the guard is removed) |
 |---|---|---|---|
 | model answer body | Boundary | Body limit 4 MiB, strict decode, unknown stop value fails closed | `TestAdapter_OversizeAnswer`, `TestAdapter_UnknownStop` |
-| model answer text | Output | `SecretFilter` on text, tool call arguments and readable reasoning | `TestFilter_CanaryInAnswer`, `TestFilter_CanaryInToolArgs` |
-| opaque part | Store | Sealed with additional data; filter never changes it | `TestOpaque_RoundTripByteForByte`, `TestOpaque_CanaryNotInReadableRecord` |
+| opaque part | Store | Sealed with additional data; the readable record holds size and format only | `TestOpaque_RoundTripByteForByte`, `TestOpaque_RecordHoldsSizeAndFormatOnly` |
 | `providerFields` | Boundary | Owned-path check at each level | `TestProviderFields_OwnedPath_Table` (each owned path, a value that is not an object above an owned path) |
 | `providerFields` | Use | The deep merge never writes over an adapter value | `TestMerge_NeverOverwritesOwned` |
 | end-user field | Boundary and use | `user`, `safety_identifier`, `metadata.user_id` and subject headers refused; adapter never sends one | `TestNoEndUserField` |
