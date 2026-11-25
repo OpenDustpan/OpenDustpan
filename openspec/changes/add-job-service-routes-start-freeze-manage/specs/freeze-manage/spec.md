@@ -62,15 +62,15 @@ While a namespace has an active freeze, the server SHALL refuse the start of a p
 
 #### Scenario: Running jobs keep running at freeze start
 - **WHEN** a freeze starts while jobs are queued or running
-- **THEN** the server keeps each queued and running job unchanged and refuses only each new start, cancel, and phase dispatch
+- **THEN** the server keeps each queued and running job unchanged and refuses only each new start and phase dispatch
 
-### Requirement: Refuse other mutating job actions
+### Requirement: Refuse phase dispatch during a freeze
 
-While a namespace has an active freeze, the server SHALL refuse each cancel and each phase dispatch without the break-freeze action on the namespace.
+While a namespace has an active freeze, the server SHALL refuse each phase dispatch without the break-freeze action on the namespace.
 
-#### Scenario: Cancel during freeze is refused
-- **WHEN** a principal without the break-freeze action on the namespace cancels a job in a namespace with an active freeze
-- **THEN** the server answers 409 with code job.frozen and changes no job
+#### Scenario: Cancel during a freeze succeeds
+- **WHEN** a principal who may cancel a job cancels it in a namespace with an active freeze
+- **THEN** the server cancels the job and does not answer job.frozen
 
 ### Requirement: Permit break-glass start
 

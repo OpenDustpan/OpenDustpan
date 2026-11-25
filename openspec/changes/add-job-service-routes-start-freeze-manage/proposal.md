@@ -1,5 +1,5 @@
 ---
-version: 6
+version: 7
 ---
 
 Issue: #1374.
@@ -27,7 +27,7 @@ Errors the person may hit, and the one command that helps:
 Evidence for the claims above:
 
 - The freeze record and port are in package pkg/job. Proof: package pkg/job where pkg/job/gate.go
-- The pack names a freeze test on main. Proof: test TestFreeze where pkg/job/gate_test.go:796
+- The pack names a freeze test on main. Proof: test TestFreeze where pkg/job/gate_test.go:809
 - The route table already holds job routes on namespaces. Proof: route ANY/GET/POST /api/dustpan/v1/namespaces/{}/jobs where route table or API description
 
 ## What Changes
@@ -35,7 +35,7 @@ Evidence for the claims above:
 - New route POST /api/dustpan/v1/namespaces/{namespace}/freezes creates a freeze with reason, creator subject, and time, with the freeze manage action on the namespace
 - New route POST /api/dustpan/v1/namespaces/{namespace}/freezes/current/end ends the active freeze with end record, with the freeze manage action on the namespace
 - New route GET /api/dustpan/v1/namespaces/{namespace}/freezes lists freezes in time order with active state, with the namespace read action on the namespace
-- Freeze guard on the start of a phase that changes a unit, on cancel, and on phase dispatch (a plan start is not refused: plans still run) with break-glass start through breakFreezeReason for break-freeze holders on the namespace
+- Freeze guard on the start of a phase that changes a unit and on phase dispatch (a plan start and a cancel are not refused) with break-glass start through breakFreezeReason for break-freeze holders on the namespace
 - Audit entries for freeze create, freeze end, and break-glass start
 
 Out of scope:
@@ -62,7 +62,7 @@ Where the path still costs the person time or surprises them:
 
 Each fact names its file, line and function on main. The change specifies only the difference.
 
-- Freeze test exists on main (`pkg/job/gate_test.go:796 (func TestFreeze)`)
+- Freeze test exists on main (`pkg/job/gate_test.go:809 (func TestFreeze)`)
 - Start refused by a freeze answers 409 with code job.frozen on main (`internal/api/jobs/start_test.go:511 (func TestStartMapsTheErrorsOfTheService)`, case at :544)
 - The freeze check of the store applies only to a phase whose Kind.Changes() is true (`internal/store/jobstore/rules.go:82-90 (func checkDispatch)`)
 - The error code job.frozen exists on main (`internal/api/jobs/errcode_test.go:27 (func TestEveryErrorAnswerHasACode)`, case at :53)
@@ -82,9 +82,9 @@ none
 
 Questions considered and answered:
 
-- Does this change include job lifecycle or runner session routes? No. The roadmap split for this part covers freeze create, end, and list routes with guard checks on job start and on other mutating job actions such as cancel and phase dispatch. Job lifecycle routes with cancel, the TFE link, runner session routes, and the launcher binary stay in the sibling change and out of scope here.
-- Does freeze already exist on main? In part. The record (`Freeze`, pkg/job/gate.go:449), the port (`FreezeStore`: CreateFreeze, EndFreeze, ListFreezes, pkg/job/gate.go:494), the table job_freezes and the start refusal (internal/api/jobs/start.go:193, reasonFrozen) exist, and TestFreeze is at pkg/job/gate_test.go:796. The REST routes and the single-active-freeze rule do not exist. The change adds the routes in the jobs adapter, the rule, and the guard on cancel and phase dispatch. internal/freeze is the schedule package and is not the record.
+- Does this change include job lifecycle or runner session routes? No. The roadmap split for this part covers freeze create, end, and list routes with guard checks on job start and on phase dispatch. Job lifecycle routes with cancel, the TFE link, runner session routes, and the launcher binary stay in the sibling change and out of scope here.
+- Does freeze already exist on main? In part. The record (`Freeze`, pkg/job/gate.go:449), the port (`FreezeStore`: CreateFreeze, EndFreeze, ListFreezes, pkg/job/gate.go:494), the table job_freezes and the start refusal (internal/api/jobs/start.go:193, reasonFrozen) exist, and TestFreeze is at pkg/job/gate_test.go:809. The REST routes and the single-active-freeze rule do not exist. The change adds the routes in the jobs adapter, the rule, and the guard on phase dispatch. internal/freeze is the schedule package and is not the record.
 - Which ADR governs freeze? The pack adrs list is empty and names no ADR. No quoted decision applies, so the check is empty.
-- Does the freeze guard stop actions other than job start? No. The guard stops job start and other mutating job actions (cancel and phase dispatch or claim) during an active freeze. Reads, list, and log reads keep working.
+- Does the freeze guard stop actions other than job start? No. The guard stops job start and phase dispatch or claim during an active freeze. A cancel is not refused: a freeze stops only the work that OpenDustpan starts. Reads, list, and log reads keep working.
 
 Drafted by the spec factory of the spec compiler from the roadmap, the issues and the ADRs. Every quote, path and ADR citation was checked by code.
