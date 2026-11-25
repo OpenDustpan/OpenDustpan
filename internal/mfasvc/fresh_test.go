@@ -4,6 +4,7 @@ import (
 	"testing"
 
 	"opendustpan.org/opendustpan/internal/mfasvc"
+	"opendustpan.org/opendustpan/pkg/mfa"
 )
 
 // TestFactorChangeNeedsFreshActor checks the register and the removal of a
@@ -34,13 +35,10 @@ func TestFactorChangeNeedsFreshActor(t *testing.T) {
 
 		_, err = f.svc.BeginRegistration(t.Context(), a, personOf(alice))
 		if err == nil {
-			t.Fatalf("BeginRegistration with no fresh step: err = nil, want a refusal")
+			t.Fatal("BeginRegistration with no fresh step: err = nil, want a refusal")
 		}
 
-		if got := f.entries(t, mfasvc.ActionAddRefused); len(got) == 0 {
-			t.Fatalf("BeginRegistration with no fresh step: no refusal entry with the action %s",
-				mfasvc.ActionAddRefused)
-		}
+		f.wantRefusal(t, "BeginRegistration with no fresh step", err, mfa.ErrFreshStep, mfasvc.ActionAddRefused)
 
 		after, err := f.svc.Passkeys(t.Context(), a)
 		if err != nil || len(after) != len(before) {
@@ -59,13 +57,10 @@ func TestFactorChangeNeedsFreshActor(t *testing.T) {
 
 		err := f.svc.RemovePasskey(t.Context(), a, key.ID)
 		if err == nil {
-			t.Fatalf("RemovePasskey with no fresh step: err = nil, want a refusal")
+			t.Fatal("RemovePasskey with no fresh step: err = nil, want a refusal")
 		}
 
-		if got := f.entries(t, mfasvc.ActionRemoveRefused); len(got) == 0 {
-			t.Fatalf("RemovePasskey with no fresh step: no refusal entry with the action %s",
-				mfasvc.ActionRemoveRefused)
-		}
+		f.wantRefusal(t, "RemovePasskey with no fresh step", err, mfa.ErrFreshStep, mfasvc.ActionRemoveRefused)
 
 		if removed := f.entries(t, mfasvc.ActionPasskeyRemoved); len(removed) != 0 {
 			t.Fatalf("removed entries = %d, want 0", len(removed))

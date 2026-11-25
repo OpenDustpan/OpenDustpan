@@ -146,7 +146,7 @@ func TestRegistrationRefusesEmptyIDs(t *testing.T) {
 		t.Fatalf("register: %v", err)
 	}
 
-	nobody := mfasvc.Actor{Entry: base(time.Now(), "x"), PrincipalID: "", SessionID: ""}
+	nobody := mfasvc.Actor{Entry: base(time.Now(), "x"), PrincipalID: "", SessionID: "", Fresh: true}
 
 	_, err = svc.FinishRegistration(t.Context(), nobody, mfa.Person{ID: "", Name: "x", DisplayName: ""}, "key",
 		response)

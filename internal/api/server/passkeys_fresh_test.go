@@ -50,16 +50,16 @@ func newFactorFixture(t *testing.T) accessFixture {
 	return f
 }
 
-// sessionAt sends one request in a console session of subject whose sign-in
-// is at authTime.
+// sessionAt sends one factor change in a console session of subject whose
+// sign-in is at authTime.
 func (f accessFixture) sessionAt(
-	t *testing.T, subject string, authTime time.Time, method, target string, body []byte,
+	t *testing.T, subject string, authTime time.Time, c factorChange,
 ) *httptest.ResponseRecorder {
 	t.Helper()
 
 	cookie, csrf := f.sessionOf(t, subject, authTime)
 
-	req := httptest.NewRequestWithContext(t.Context(), method, target, strings.NewReader(string(body)))
+	req := httptest.NewRequestWithContext(t.Context(), c.method, c.target, strings.NewReader(c.body))
 	req.AddCookie(cookie)
 	req.Header.Set(apiserver.CSRFHeader, csrf)
 	req.Header.Set("Sec-Fetch-Site", "same-origin")
@@ -79,7 +79,9 @@ func wantFreshRefusal(t *testing.T, who string, rec *httptest.ResponseRecorder) 
 		ErrorCode string `json:"errorCode"`
 	}
 
-	_ = json.Unmarshal(rec.Body.Bytes(), &got)
+	if err := json.Unmarshal(rec.Body.Bytes(), &got); err != nil {
+		t.Fatalf("decode the error body of %s: %v", who, err)
+	}
 
 	if rec.Code != http.StatusForbidden || got.ErrorCode != freshErrorCode {
 		t.Errorf("%s = %d %s, want 403 with errorCode %s", who, rec.Code, rec.Body.String(), freshErrorCode)
@@ -103,6 +105,6 @@ func TestFactorChangeNeedsFreshStepSettingOff(t *testing.T) {
 			f.asToken(t, "admin", c.method, c.target, []byte(c.body)))
 
 		wantFreshRefusal(t, c.name+" with a session with an old sign-in",
-			f.sessionAt(t, "admin", stale, c.method, c.target, []byte(c.body)))
+			f.sessionAt(t, "admin", stale, c))
 	}
 }
