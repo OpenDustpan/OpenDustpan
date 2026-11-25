@@ -50,11 +50,15 @@ When a principal ends a freeze on a namespace with no active freeze, the server 
 
 ### Requirement: Refuse job start during freeze
 
-While a namespace has an active freeze, the server SHALL refuse a job start without the break-freeze action on the namespace.
+While a namespace has an active freeze, the server SHALL refuse the start of a phase that changes resources, state or the code in git without the break-freeze action on the namespace. The server SHALL NOT refuse a plan start.
 
-#### Scenario: Start during freeze is refused
-- **WHEN** a principal without the break-freeze action on the namespace starts a job in a namespace with an active freeze
-- **THEN** the server answers 409 with code job.frozen and starts no job
+#### Scenario: Plan start during freeze runs
+- **WHEN** a principal starts a plan job through the start route in a namespace with an active freeze
+- **THEN** the server answers 201 and starts the job
+
+#### Scenario: Start of a changing phase during freeze is refused
+- **WHEN** a principal without the break-freeze action on the namespace starts a phase that changes a unit in a namespace with an active freeze
+- **THEN** the store returns the frozen error, the server maps it to 409 with code job.frozen, and no phase starts
 
 #### Scenario: Running jobs keep running at freeze start
 - **WHEN** a freeze starts while jobs are queued or running
@@ -100,8 +104,8 @@ When a principal with the namespace read action on the namespace lists the freez
 The server SHALL give the break-freeze action only through a grant on the installation, and the manage-freezes action through a grant on a namespace. A holder of one action SHALL NOT hold the other through it.
 
 #### Scenario: Namespace grant does not give break-freeze
-- **WHEN** a role with the break-freeze action is granted on a namespace and its holder starts a job during an active freeze with breakFreezeReason
-- **THEN** the server answers 409 with code job.frozen and starts no job
+- **WHEN** a role with the break-freeze action is granted on a namespace and its holder starts a phase that changes a unit during an active freeze with breakFreezeReason
+- **THEN** the server answers 409 with code job.frozen and starts no phase
 
 #### Scenario: Manage-freezes without break-freeze
 - **WHEN** a principal with the manage-freezes action and without the break-freeze action starts a job during an active freeze with breakFreezeReason

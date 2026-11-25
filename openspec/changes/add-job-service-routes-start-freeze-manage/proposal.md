@@ -1,5 +1,5 @@
 ---
-version: 5
+version: 6
 ---
 
 Issue: #1374.
@@ -11,7 +11,7 @@ Issue: #1374.
 The user path this change must make work:
 
 1. **API.** Create a freeze on a namespace with a reason through POST on the freeze collection.
-2. **API.** Start a job during the freeze and read the 409 `job.frozen` refusal with the one list command.
+2. **API.** Start a plan job during the freeze and read the 201 answer: plans still run. A phase that changes a unit answers 409 `job.frozen`; the one list command shows the reason.
 3. **API.** List freezes of the namespace and read the active freeze and its reason.
 4. **API.** End the freeze through the end route and start the job again.
 5. **Docs page.** Follow the freeze page to create, list, and end a freeze.
@@ -20,7 +20,7 @@ Errors the person may hit, and the one command that helps:
 
 | Error | What the answer says | The command that helps |
 | --- | --- | --- |
-| 409 job.frozen refuses POST job start during a freeze | The server refused the job start because the namespace has an active freeze. List the freezes to read the reason, then wait for the freeze to end or ask a namespace administrator to end it. | `GET /api/dustpan/v1/namespaces/{namespace}/freezes` (new route of this change) |
+| 409 job.frozen refuses the start of a phase that changes a unit during a freeze | The server refused the phase because the namespace has an active freeze. List the freezes to read the reason, then wait for the freeze to end or ask a namespace administrator to end it. | `GET /api/dustpan/v1/namespaces/{namespace}/freezes` (new route of this change) |
 | 403 no freeze action refuses freeze create or end without the action | The server refused the freeze action because the principal lacks the freeze manage action on the namespace. Ask a namespace administrator for a grant. | `GET /api/dustpan/v1/namespaces/{namespace}/freezes` (new route of this change) |
 | 409 job.frozen refuses break-glass start without break-freeze during a freeze | The server refused the start because break-freeze is missing. Ask a namespace administrator for the break-freeze grant or wait for the freeze to end. | `GET /api/dustpan/v1/namespaces/{namespace}/freezes` (new route of this change) |
 
@@ -35,7 +35,7 @@ Evidence for the claims above:
 - New route POST /api/dustpan/v1/namespaces/{namespace}/freezes creates a freeze with reason, creator subject, and time, with the freeze manage action on the namespace
 - New route POST /api/dustpan/v1/namespaces/{namespace}/freezes/current/end ends the active freeze with end record, with the freeze manage action on the namespace
 - New route GET /api/dustpan/v1/namespaces/{namespace}/freezes lists freezes in time order with active state, with the namespace read action on the namespace
-- Freeze guard on job start, cancel, and phase dispatch with break-glass start through breakFreezeReason for break-freeze holders on the namespace
+- Freeze guard on the start of a phase that changes a unit, on cancel, and on phase dispatch (a plan start is not refused: plans still run) with break-glass start through breakFreezeReason for break-freeze holders on the namespace
 - Audit entries for freeze create, freeze end, and break-glass start
 
 Out of scope:
@@ -64,6 +64,7 @@ Each fact names its file, line and function on main. The change specifies only t
 
 - Freeze test exists on main (`pkg/job/gate_test.go:796 (func TestFreeze)`)
 - Start refused by a freeze answers 409 with code job.frozen on main (`internal/api/jobs/start_test.go:511 (func TestStartMapsTheErrorsOfTheService)`, case at :544)
+- The freeze check of the store applies only to a phase whose Kind.Changes() is true (`internal/store/jobstore/rules.go:82-90 (func checkDispatch)`)
 - The error code job.frozen exists on main (`internal/api/jobs/errcode_test.go:27 (func TestEveryErrorAnswerHasACode)`, case at :53)
 - Route action classification test exists on main (`pkg/access/access_test.go:557 (func TestActionsWithoutRoutesAreUnclassified)`)
 - Session renew path is registered in runnerapi routes (`internal/api/runnerapi/routes.go:103 (func Handler.launcherRoutes)`)
