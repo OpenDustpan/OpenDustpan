@@ -643,6 +643,11 @@ func pgEmptiedBaseTables() []pgCopyTable {
 			},
 			orderBy: []string{pgColUnitID},
 		},
+		{
+			table:   "agent_connection_pending",
+			columns: []string{"probe_id", pgColProxyDocument, pgColVersion, pgColCreatedAtMs},
+			orderBy: []string{"probe_id"},
+		},
 	}
 }
 
@@ -842,11 +847,6 @@ func pgCopyGrantTables() []pgCopyTable {
 			table:   "agent_connection_current",
 			columns: []string{sinkColRef, pgColProxyDocument, pgColVersion, pgColCreatedAtMs, "changed_at_ms"},
 			orderBy: []string{sinkColRef},
-		},
-		{
-			table:   "agent_connection_pending",
-			columns: []string{"probe_id", pgColProxyDocument, pgColVersion, pgColCreatedAtMs},
-			orderBy: []string{"probe_id"},
 		},
 		{
 			table:   "agent_secret_refs",

@@ -655,7 +655,7 @@ func sqliteBlobDeleteLeaseControlTables() []sqliteBackupTable {
 // sqliteEmptiedTables lists the column list of every table of
 // backup.EmptiedTables. CheckCoverage compares each list with the live schema.
 func sqliteEmptiedTables() []sqliteBackupTable {
-	return append(sqliteEmptiedBaseTables(), sqliteClaimBackupTables()...)
+	return slices.Concat(sqliteEmptiedBaseTables(), sqliteClaimBackupTables(), sqliteAgentEmptiedTables())
 }
 
 // sqliteEmptiedBaseTables lists the emptied tables that are not claim tables.
@@ -728,6 +728,17 @@ func sqliteEmptiedBaseTables() []sqliteBackupTable {
 				backupColUnitID, backupColNamespaceID, "version_id", "final_version_id", "final_commit",
 				"final_job", "final_at_ms",
 			},
+		},
+	}
+}
+
+// sqliteAgentEmptiedTables lists the column list of the pending model
+// connection documents. A backup leaves them out.
+func sqliteAgentEmptiedTables() []sqliteBackupTable {
+	return []sqliteBackupTable{
+		{
+			table:   "agent_connection_pending",
+			columns: []string{"probe_id", sqliteProxyColDocument, backupColVersion, backupColCreatedAtMs},
 		},
 	}
 }
@@ -1016,10 +1027,6 @@ func sqliteIdentityBackupTables() []sqliteBackupTable {
 			columns: []string{
 				sinkColRef, sqliteProxyColDocument, backupColVersion, backupColCreatedAtMs, "changed_at_ms",
 			},
-		},
-		{
-			table:   "agent_connection_pending",
-			columns: []string{"probe_id", sqliteProxyColDocument, backupColVersion, backupColCreatedAtMs},
 		},
 		{
 			table:   "agent_secret_refs",

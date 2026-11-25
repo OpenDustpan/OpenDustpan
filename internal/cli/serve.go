@@ -31,6 +31,7 @@ func ServeFlags() []*Setting {
 		"ip-allowlists-include-bootstrap",
 		"git-host-allowed-ranges",
 		"allow-plain-connections",
+		"egress-public-only",
 		"branding-preset",
 		"log-level",
 		"log-format",
