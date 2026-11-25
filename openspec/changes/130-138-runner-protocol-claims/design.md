@@ -1,6 +1,6 @@
 ## Context
 
-Main has the server side of the runner protocol: poll, heartbeat and claim renew, with the short protocol codes and the lease of the pool. It has no runner-side loop that uses them. This change adds that loop and its docs page. It adds no route, no error code and no lease value.
+Main has the server side of the runner protocol: poll, heartbeat and claim renew, with the short protocol codes and the lease of the pool. It has no runner-side loop that uses them. This change adds that loop as a library. It adds no route, no error code and no lease value.
 
 ## Decisions
 
@@ -20,7 +20,7 @@ Main has the server side of the runner protocol: poll, heartbeat and claim renew
 
 ## Structure
 
-Package `pkg/runner/client` (NEW) with an unexported `loop` type and the constructor `New(cfg)`. The constructor rejects an empty runner key, a lease below `runner.MinLease` and a base URL that is not http or https. No field holds an expiry that the server did not send. The command `opendustpan runner poll` calls `New` and `Run`.
+Package `pkg/runner/client` (NEW) with an unexported `loop` type and the constructor `New(cfg)`. The constructor rejects an empty runner key, a lease below `runner.MinLease` and a base URL that is not http or https. No field holds an expiry that the server did not send. The runner binary in `OpenDustpan/dustpan-runner` calls `New` and `Run`. This repository ships no command for it.
 
 ## Risks
 
