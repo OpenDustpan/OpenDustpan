@@ -56,7 +56,7 @@ The persona is the administrator who connects a model. The connect request shows
 - ADR 120 decision 3 (one model connection for the installation) holds: Dusty is one record, made at the first connect, and a later connect makes no second record.
 - ADR 215 (principal home): the record has a principal home like every principal.
 - ADR 129 decision 29 (owner, 2026-10-18): the route answers 202 with a probe. This change adds no route that connects a model and so does not touch those words.
-- ADR 250 and ADR 364: the layers table in design.md. No new lint rule.
+- ADR 250 and ADR 364: the layers table in the design of this change. No new lint rule.
 - ADR 362: every reference is a stable ID (sponsor, fallback group, creator, role grant).
 
 ## Open questions
