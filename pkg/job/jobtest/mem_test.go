@@ -675,8 +675,8 @@ func (m *memDB) CreateFreeze(_ context.Context, f job.Freeze, fence namespace.Fe
 		return err
 	}
 
-	if m.activeFreeze(f.Namespace, time.Now()) {
-		return fmt.Errorf("%w: a freeze of %s is active", job.ErrFreezeActive, f.Namespace)
+	if id, active := m.activeFreeze(f.Namespace, time.Now()); active {
+		return fmt.Errorf("%w: freeze %s is active", job.ErrFreezeActive, id)
 	}
 
 	m.freezes[f.ID] = &f
@@ -738,16 +738,16 @@ type operationEnd struct {
 
 // endedOperation returns the end of the durable operation of the current phase
 // of j.
-// activeFreeze reports whether a freeze of ns is active at now. The caller
-// holds m.mu.
-func (m *memDB) activeFreeze(ns namespace.Name, now time.Time) bool {
+// activeFreeze returns the ID of the freeze of ns that is active at now.
+// The caller holds m.mu.
+func (m *memDB) activeFreeze(ns namespace.Name, now time.Time) (string, bool) {
 	for _, f := range m.freezes {
 		if f.Namespace == ns && f.ActiveAt(now) {
-			return true
+			return f.ID, true
 		}
 	}
 
-	return false
+	return "", false
 }
 
 func (m *memDB) endedOperation(ctx context.Context, j *job.Job) (operationEnd, error) {

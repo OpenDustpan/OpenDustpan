@@ -224,7 +224,7 @@ func (h *Handler) listFreezes(w http.ResponseWriter, r *http.Request, p identity
 	page, err := parseFreezePageQuery(r, t.ns.Name)
 	if err != nil {
 		if errors.Is(err, errPageToken) {
-			h.recordFreezeRefusal(ctx, r, p, t.ns.Name, reasonPageToken)
+			h.recordFreezeListRefusal(ctx, r, p, t.ns.Name, reasonPageToken)
 		}
 
 		h.writeError(ctx, w, err)
@@ -243,7 +243,7 @@ func (h *Handler) listFreezes(w http.ResponseWriter, r *http.Request, p identity
 	if page.after != "" {
 		start = slices.IndexFunc(freezes, func(f job.Freeze) bool { return f.ID == page.after }) + 1
 		if start == 0 {
-			h.recordFreezeRefusal(ctx, r, p, t.ns.Name, reasonPageToken)
+			h.recordFreezeListRefusal(ctx, r, p, t.ns.Name, reasonPageToken)
 			h.writeError(ctx, w, errPageToken)
 
 			return
@@ -328,11 +328,24 @@ const (
 	reasonPageToken      = "the page token of the freeze list is not valid"
 )
 
+// recordFreezeRefusal records a refusal of a freeze write, which checks
+// namespace:manage-freezes.
 func (h *Handler) recordFreezeRefusal(
 	ctx context.Context, r *http.Request, p identity.Principal, ns namespace.Name, reason string,
 ) {
 	h.guard.Record(ctx, r, p, refusal.Denial{
 		Action: identity.ActionNamespaceManageFreezes, Object: identity.NamespaceObject(ns), Reason: reason,
+		ReasonWithin: nil, Window: 0,
+	})
+}
+
+// recordFreezeListRefusal records a refusal of the freeze list, which checks
+// namespace:read.
+func (h *Handler) recordFreezeListRefusal(
+	ctx context.Context, r *http.Request, p identity.Principal, ns namespace.Name, reason string,
+) {
+	h.guard.Record(ctx, r, p, refusal.Denial{
+		Action: identity.ActionNamespaceRead, Object: identity.NamespaceObject(ns), Reason: reason,
 		ReasonWithin: nil, Window: 0,
 	})
 }

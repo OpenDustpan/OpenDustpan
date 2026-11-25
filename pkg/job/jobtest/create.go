@@ -3,6 +3,7 @@ package jobtest
 import (
 	"errors"
 	"slices"
+	"strings"
 	"testing"
 	"time"
 
@@ -507,9 +508,17 @@ func testFreezeSecondCreate(t *testing.T, h Harness) {
 
 	second := newFreeze(f)
 
+	// Layer: the application check of CreateFreeze. The unique index of the
+	// open freezes refuses a second open freeze too, but it names the refused
+	// freeze. The refusal names the active freeze, so it comes from the check:
+	// remove the check and the error names second.ID instead of first.ID.
 	err := h.Freezes.CreateFreeze(t.Context(), second, f.fence, entry(f.unit, job.ActionNamespaceManageFreezes))
 	if !errors.Is(err, job.ErrFreezeActive) {
 		t.Fatalf("second CreateFreeze = %v, want ErrFreezeActive", err)
+	}
+
+	if err == nil || !strings.Contains(err.Error(), first.ID) {
+		t.Fatalf("second CreateFreeze = %v, want the active freeze %s", err, first.ID)
 	}
 
 	listed, err := h.Freezes.ListFreezes(t.Context(), f.fence.Namespace, time.Now().Add(-time.Hour))

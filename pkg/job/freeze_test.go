@@ -141,7 +141,9 @@ func refusesCancelAndDispatch(t *testing.T, st *sqlite.Store) {
 }
 
 // refusesSecondCreate checks that a second create of a freeze in a namespace
-// with an active freeze is job.ErrFreezeActive.
+// with an active freeze is job.ErrFreezeActive that names the active freeze.
+// The unique index refuses a second open freeze too, but it names the refused
+// freeze, so naming the active freeze proves the refusal comes from the check.
 func refusesSecondCreate(t *testing.T, st *sqlite.Store) {
 	t.Helper()
 
@@ -153,6 +155,10 @@ func refusesSecondCreate(t *testing.T, st *sqlite.Store) {
 	err := g.freezes.CreateFreeze(t.Context(), second, g.fence, freezeEntry(g.unit))
 	if !errors.Is(err, job.ErrFreezeActive) {
 		t.Fatalf("second CreateFreeze = %v, want ErrFreezeActive", err)
+	}
+
+	if err == nil || !strings.Contains(err.Error(), g.freeze.ID) {
+		t.Fatalf("second CreateFreeze = %v, want the active freeze %s", err, g.freeze.ID)
 	}
 }
 

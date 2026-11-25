@@ -776,8 +776,10 @@ func checkPageTokenDenial(t *testing.T, f freezeFixture) {
 		t.Fatalf("audit entries = %+v, want one named denial", entries.Entries)
 	}
 
-	if e := entries.Entries[0]; e.Outcome != audit.OutcomeDenied || e.Reason == "" {
-		t.Fatalf("audit entry = %+v, want a named denial", e)
+	// The list route checks namespace:read, so the denial names that action.
+	if e := entries.Entries[0]; e.Outcome != audit.OutcomeDenied || e.Reason == "" ||
+		e.Action != string(identity.ActionNamespaceRead) {
+		t.Fatalf("audit entry = %+v, want a named denial of %s", e, identity.ActionNamespaceRead)
 	}
 }
 
@@ -839,6 +841,8 @@ func TestFreezeRejectsLargeBody(t *testing.T) {
 	if len(f.freezes.freezes) != 0 {
 		t.Fatalf("freezes after the refused create = %d, want 0", len(f.freezes.freezes))
 	}
+
+	checkFreezeDenial(t, f)
 }
 
 func TestFreezeUnknownNamespaceIsRefused(t *testing.T) {
