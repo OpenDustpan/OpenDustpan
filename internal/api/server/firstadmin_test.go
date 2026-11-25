@@ -26,6 +26,7 @@ import (
 	"opendustpan.org/opendustpan/pkg/accesstoken"
 	"opendustpan.org/opendustpan/pkg/audit"
 	"opendustpan.org/opendustpan/pkg/firstadmin"
+	"opendustpan.org/opendustpan/pkg/freshstep"
 	"opendustpan.org/opendustpan/pkg/identity"
 	"opendustpan.org/opendustpan/pkg/maintenance"
 	"opendustpan.org/opendustpan/pkg/namespace"
@@ -216,6 +217,7 @@ func newFAFixture(t *testing.T) faFixture {
 	tokens, err := accesstoken.NewService(accesstoken.Config{
 		TempAdmins: nil, Store: st, Principals: st, Freshness: nil, Authorizer: authz, Reach: reach, Logger: nil,
 		Now: nil, NewID: nil, Makers: nil,
+		Guard: freshstep.Guard{},
 	})
 	if err != nil {
 		t.Fatalf("token service: %v", err)

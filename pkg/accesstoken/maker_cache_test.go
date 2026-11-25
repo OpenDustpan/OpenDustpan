@@ -8,6 +8,7 @@ import (
 
 	"opendustpan.org/opendustpan/pkg/access"
 	"opendustpan.org/opendustpan/pkg/accesstoken"
+	"opendustpan.org/opendustpan/pkg/freshstep"
 	"opendustpan.org/opendustpan/pkg/identity"
 	"opendustpan.org/opendustpan/pkg/principal"
 )
@@ -109,6 +110,7 @@ func wantRevokedAfterCachedRoute(t *testing.T, rf *reachFixture, path cachePath)
 		Makers: authorizerMakers{authz: authz, principals: rf.store}, TempAdmins: nil,
 		Store: rf.store, Principals: rf.store, Freshness: nil, Authorizer: nil, Reach: rf.reach,
 		Logger: nil, Now: rf.clock.Now, NewID: nil,
+		Guard: freshstep.Guard{},
 	})
 	if err != nil {
 		t.Fatalf("token service: %v", err)
