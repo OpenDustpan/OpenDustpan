@@ -470,6 +470,12 @@ func TestPageTokenMemberNames(t *testing.T) {
 		{"an extra name and no b", `{"f":"x","x":1}`, true},
 		{"an extra name and no f", `{"x":1,"b":1}`, true},
 		{"a repeated name", `{"f":"x","b":1,"b":2}`, true},
+		{"trailing object", `{"f":"x","b":1}{"x":1}`, true},
+		{"trailing text", `{"f":"x","b":1}garbage`, true},
+		{"a truncated object", `{"f":"x","b":1`, true},
+		{"a JSON array", `["f","b"]`, true},
+		{"a JSON array with the wire names twice", `["f","b","b","x"]`, true},
+		{"a JSON string", `"f"`, true},
 		{"the exact wire names", `{"f":"x","b":1}`, false},
 	} {
 		t.Run(tc.name, func(t *testing.T) {

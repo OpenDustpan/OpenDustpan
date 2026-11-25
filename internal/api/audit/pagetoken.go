@@ -6,6 +6,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"io"
 
 	"opendustpan.org/opendustpan/internal/api/problem"
 	"opendustpan.org/opendustpan/internal/errcode"
@@ -58,7 +59,9 @@ func decodePageCursor(token string, scope namespace.Name) (pageCursor, error) {
 	// Defense in depth: pagetoken.Decode already refuses a non-canonical token
 	// and a case-variant or repeated member name; this check stays so that the
 	// audit page token accepts only the exact wire member names even if the
-	// shared decoder is changed.
+	// shared decoder is changed. The handler cannot test this call, because
+	// the shared decoder refuses the same inputs; the direct test is
+	// TestPageTokenMemberNames.
 	if err := checkPageTokenMemberNames(token); err != nil {
 		return pageCursor{}, errPageToken
 	}
@@ -134,6 +137,10 @@ func pageTokenMemberNames(token string) ([]string, error) {
 	}
 
 	if _, err = dec.Token(); err != nil {
+		return nil, errPageToken
+	}
+
+	if _, err = dec.Token(); !errors.Is(err, io.EOF) {
 		return nil, errPageToken
 	}
 
