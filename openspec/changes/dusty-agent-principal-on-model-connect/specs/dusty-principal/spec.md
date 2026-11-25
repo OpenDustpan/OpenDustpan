@@ -47,3 +47,20 @@ The server SHALL make an agent record only through the model connect request.
 #### Scenario: create route refuses
 - **WHEN** a caller sends `POST /api/server/principals` with the kind `agent`
 - **THEN** the server answers 400 `principal.invalid` and stores no row
+
+### Requirement: restore-keeps-agent-record-with-principal
+
+The server SHALL back up and restore the agent record and the sponsors together with the principal of the kind `agent`, only in a restore that replaces access, and SHALL refuse a backup in which the three do not match.
+
+#### Scenario: restore replaces access
+- **WHEN** a caller with server:restore-access restores a backup that has an agent principal
+- **THEN** the agent principal, its record and its sponsors come from the backup, and no record or sponsor stays without its principal
+
+#### Scenario: restore without the access action
+- **WHEN** a caller without server:restore-access restores a backup
+- **THEN** the current agent principal, record and sponsors stay unchanged
+
+#### Scenario: backup that does not match
+- **WHEN** a backup has an agent record without its principal, an agent principal without its record, or a record with 0 or 6 sponsors
+- **THEN** the restore is refused and changes no row
+
