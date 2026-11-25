@@ -27,7 +27,7 @@ No new type. The conformance suites of the three ports get the cases of the guar
 
 | Layer | Guard | Hostile test |
 | --- | --- | --- |
-| service | The access, passkey and allowlist services pass the actor and the route action, and return the sentinel unchanged. | Call each service to lower the count below two. The service returns the sentinel. |
+| service | The passkey service (internal/mfasvc) passes the actor and returns the sentinel unchanged. The access and allowlist handlers call their stores directly, so they have no service layer. | Call the passkey service to lower the count below two. The service returns the sentinel. |
 | store adapter | Each adapter counts in the transaction of its write and refuses below the floor. | Call each store method directly to lower the count below two. The store refuses and the row is unchanged. |
 | HTTP handler | The handlers keep their actions and the fresh step, and map the sentinel to 409. | Send each write over HTTP to lower the count below two. The answer is 409 with principal.no-working-break-glass. |
 
@@ -84,7 +84,7 @@ flowchart LR
 | Server to data | D | Two writes run in parallel and each one alone leaves two working paths, but together they leave fewer. | boundary check | The store reads the grant or the person before it counts. | Revoke a grant that does not belong to a break-glass account. The count does not run. |
 | Server to data | D | Two writes run in parallel and each one alone leaves two working paths, but together they leave fewer. | encode or contain | The count reads rows of its own scope with placeholders. | Revoke in namespace A and check that the count of namespace B is unchanged. |
 | Server to data | D | Two writes run in parallel and each one alone leaves two working paths, but together they leave fewer. | limit | The count runs in the write transaction, so the database serializes the two writes on the rows. | Remove two passkeys of two accounts in parallel. One write is refused. |
-| Server to data | D | Two writes run in parallel and each one alone leaves two working paths, but together they leave fewer. | authorize at point of use | Each adapter counts for each caller, whatever the service did. | Call each store method directly. The store refuses. |
+| Server to data | D | Two writes run in parallel and each one alone leaves two working paths, but together they leave fewer. | authorize at point of use | Each adapter counts for each caller, whatever the service or handler did. | Call each store method directly. The store refuses. |
 | Server to data | D | Two writes run in parallel and each one alone leaves two working paths, but together they leave fewer. | fail closed | A refusal rolls back the whole write. | Refuse a revoke and read the grant. It is unchanged. |
 | Client to server | R | A refused write leaves no record of who tried it. | boundary check | The handler sets the actor from the checked identity, never from the body. | Send a body with a forged actor. The entry names the real caller. |
 | Client to server | R | A refused write leaves no record of who tried it. | encode or contain | The audit writer removes CR and LF from each text field. | Send a reason with line breaks. The entry holds one line. |
