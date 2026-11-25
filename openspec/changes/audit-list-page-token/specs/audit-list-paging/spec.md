@@ -68,7 +68,7 @@ The `nextPageToken` SHALL be opaque to the caller. It SHALL hold the last sequen
 
 ### Requirement: A token that is not valid is refused
 
-A token that does not decode, is longer than 4096 bytes, holds a member that is not part of the token, holds a sequence below 1, or holds the fingerprint of another scope SHALL answer `400` with the error code `request.page-token-invalid` and the text "pageToken is not valid for this scope: send the request again without pageToken". A repeated `pageToken` SHALL answer the same error. The refusal SHALL NOT call the store.
+A token that does not decode, is longer than 4096 bytes, holds a member that is not part of the token, holds a sequence below 1, or holds the fingerprint of another scope SHALL answer `400` with the error code `request.page-token-invalid` and the text "pageToken is not valid for this scope: send the request again without pageToken". A repeated `pageToken` SHALL answer the same error. The server SHALL read a token only when it is the canonical form that its encoder writes: base64url text with no byte outside `A-Z`, `a-z`, `0-9`, `-` and `_`, no padding, and no unused bits, that decodes to one JSON object with each member name exactly as the wire struct spells it and no name twice. A token whose canonical form differs from the text that was sent SHALL be refused. The refusal SHALL NOT call the store.
 
 #### Scenario: Token of another scope
 
@@ -85,10 +85,39 @@ A token that does not decode, is longer than 4096 bytes, holds a member that is 
 - **WHEN** the token is not base64url, is valid base64url that is not JSON, is a JSON array, has an unknown member, has a member of another type, has a sequence of 0 or below, or has a sequence above the largest number the server reads
 - **THEN** the answer is `400` with `request.page-token-invalid` and the store is not called
 
+#### Scenario: Token with a byte outside the alphabet
+
+- **WHEN** the token holds a byte outside `A-Z`, `a-z`, `0-9`, `-` and `_`, for example a carriage return or a line feed inside the base64url text
+- **THEN** the answer is `400` with `request.page-token-invalid` and the store is not called
+
+#### Scenario: Token that is not the canonical encoding
+
+- **WHEN** the token decodes, but the base64url text of its decoded bytes is not the same text (a final character with unused bits set, for example `e31` and `e30` for the object `{}`)
+- **THEN** the answer is `400` with `request.page-token-invalid` and the store is not called
+
+#### Scenario: Token with a member name in another case or twice
+
+- **WHEN** the token holds a member name that differs from `b` or `f` only in letter case, or holds a name twice
+- **THEN** the answer is `400` with `request.page-token-invalid` and the store is not called
+
 #### Scenario: Forged token inside the scope
 
 - **WHEN** a caller who may read the scope makes a token with the right fingerprint and any sequence
 - **THEN** the answer holds only entries of the scope of the request below that sequence, and no entry of another scope
+
+### Requirement: A refused page token is recorded
+
+The server SHALL write one audit entry of the outcome denied for each request that it refuses with `request.page-token-invalid`, whatever the cause (a token of another scope, a token that does not decode, a token that is not the canonical form, a repeated `pageToken`). The server SHALL write the entry through the shared refusal recorder, with the action `namespace:read-audit` (or `server:read-audit` for `@server`) on the object of the request, so the denial limiter counts it as for any other refusal. The entry SHALL NOT hold the token. A refusal with `request.page-size-invalid` and with `request.invalid-query` stays unrecorded.
+
+#### Scenario: Token of another scope is recorded
+
+- **WHEN** a caller who may read the audit log sends the token of the scope `acme` with `organization=other`
+- **THEN** the answer is `400` with `request.page-token-invalid`, and the audit log of `other` holds one entry with the outcome denied, the subject of the caller and the reason `request.page-token-invalid`
+
+#### Scenario: Token that does not decode is recorded
+
+- **WHEN** the caller sends `pageToken=not-a-token`
+- **THEN** the answer is `400` with `request.page-token-invalid`, and one entry with the outcome denied is written, with no token text in it
 
 ### Requirement: Authorization runs before the token is read
 
@@ -97,7 +126,7 @@ The server SHALL check the action on the object of the request before it reads `
 #### Scenario: Denied caller with a valid token
 
 - **WHEN** a caller without `namespace:read-audit` on `acme` sends a token that the server made for `acme`
-- **THEN** the answer is `403`, the refusal is recorded as for any refused read, and no token check runs
+- **THEN** the answer is `403`, the refusal is recorded as for any refused read (one entry with the outcome denied, and none for the token), and no token check runs
 
 #### Scenario: Denied caller with a changed token
 

@@ -84,6 +84,7 @@ import (
 	"opendustpan.org/opendustpan/pkg/drift"
 	"opendustpan.org/opendustpan/pkg/egress"
 	"opendustpan.org/opendustpan/pkg/forgelink"
+	"opendustpan.org/opendustpan/pkg/freshstep"
 	"opendustpan.org/opendustpan/pkg/idempotency"
 	"opendustpan.org/opendustpan/pkg/identity"
 	"opendustpan.org/opendustpan/pkg/installation"
@@ -3567,6 +3568,7 @@ func newTokenService(cfg *settings, grants *access.Service) (*accesstoken.Servic
 		Makers: makers,
 		Store:  store, Principals: principals, Freshness: nil, Authorizer: authz, Reach: reach,
 		Logger: cfg.logger, Now: cfg.now, NewID: nil, TempAdmins: tempReaderOf(cfg.namespaceStore),
+		Guard: freshstep.Guard{},
 	})
 	if err != nil {
 		return nil, fmt.Errorf("access token service: %w", err)
