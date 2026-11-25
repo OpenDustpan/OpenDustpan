@@ -45,6 +45,9 @@ func TestRecheckExchangeReadsOnlyTheMatchingRules(t *testing.T) {
 	base := testPostgresURL(t)
 	s := openKeepLockStore(t, base)
 	fix := seedTrustRecheckFixture(t, s)
+	seedTrustRecheckOtherBundleTwin(t, s)
+	seedTrustRecheckCrossNamespaceRule(t, s, fix)
+
 	recorder := &trustRecheckRecorder{DBTX: s.reads, calls: nil}
 	q := db.New(recorder)
 	x := trustRecheckExchange(fix.rule, fix.bundle)
@@ -139,14 +142,7 @@ func TestRecheckExchangeHostileRows(t *testing.T) {
 			name: "a twin of another bundle",
 			mutate: func(t *testing.T, s *Store, _ trustRecheckFixture) {
 				t.Helper()
-				ns := namespace.Name("other-bundle-ns")
-				otherFence, _ := seedStagedTrustNamespace(t, s, ns)
-				otherWorker := seedTrustRecheckWorkerIn(t, s, otherFence, ns)
-				otherBundle := trustrule.BundleID(seedStagedTrustBundle(t, s, otherFence, ns))
-				seedTrustRecheckRuleRow(t, s, trustRecheckRuleSpec{
-					ns: ns, worker: otherWorker, name: "twin-other-bundle",
-					pattern: trustRecheckSPIFFEID, bundle: otherBundle,
-				})
+				seedTrustRecheckOtherBundleTwin(t, s)
 			},
 			wantErr: nil,
 		},
@@ -154,13 +150,7 @@ func TestRecheckExchangeHostileRows(t *testing.T) {
 			name: "the same bundle ID text and pattern in another namespace",
 			mutate: func(t *testing.T, s *Store, fix trustRecheckFixture) {
 				t.Helper()
-				ns := namespace.Name("cross")
-				fence, worker := seedStagedTrustNamespace(t, s, ns)
-				_ = seedStagedTrustBundle(t, s, fence, ns)
-				seedTrustRecheckRuleRowRaw(t, s, trustRecheckRuleSpec{
-					ns: ns, worker: worker, name: "deploy",
-					pattern: trustRecheckSPIFFEID, bundle: trustrule.BundleID(fix.rule.BundleID),
-				})
+				seedTrustRecheckCrossNamespaceRule(t, s, fix)
 			},
 			wantErr: nil,
 		},
@@ -203,6 +193,35 @@ func TestRecheckExchangeHostileRows(t *testing.T) {
 			}
 		})
 	}
+}
+
+// seedTrustRecheckOtherBundleTwin stores a rule that names the SPIFFE ID of
+// the exchange in the bundle of another namespace.
+func seedTrustRecheckOtherBundleTwin(t *testing.T, s *Store) {
+	t.Helper()
+
+	ns := namespace.Name("other-bundle-ns")
+	otherFence, _ := seedStagedTrustNamespace(t, s, ns)
+	otherWorker := seedTrustRecheckWorkerIn(t, s, otherFence, ns)
+	otherBundle := trustrule.BundleID(seedStagedTrustBundle(t, s, otherFence, ns))
+	seedTrustRecheckRuleRow(t, s, trustRecheckRuleSpec{
+		ns: ns, worker: otherWorker, name: "twin-other-bundle",
+		pattern: trustRecheckSPIFFEID, bundle: otherBundle,
+	})
+}
+
+// seedTrustRecheckCrossNamespaceRule stores a rule of another namespace with
+// the same bundle ID text and pattern as the rule of the exchange.
+func seedTrustRecheckCrossNamespaceRule(t *testing.T, s *Store, fix trustRecheckFixture) {
+	t.Helper()
+
+	ns := namespace.Name("cross")
+	fence, worker := seedStagedTrustNamespace(t, s, ns)
+	_ = seedStagedTrustBundle(t, s, fence, ns)
+	seedTrustRecheckRuleRowRaw(t, s, trustRecheckRuleSpec{
+		ns: ns, worker: worker, name: "deploy",
+		pattern: trustRecheckSPIFFEID, bundle: trustrule.BundleID(fix.rule.BundleID),
+	})
 }
 
 // tamperTrustRulePattern changes the stored SPIFFE ID pattern with SQL.
