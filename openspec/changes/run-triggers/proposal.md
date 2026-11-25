@@ -69,8 +69,9 @@ Where the path still costs the person time or surprises them:
 
 Each fact names its file, line and function on main. The change specifies only the difference.
 
-- Cycle error code exists (the trigger catalog of the error codes, line 7)
-- Disabled error code exists (the trigger catalog of the error codes, line 9)
+- The cycle error code `trigger.cycle` exists (`internal/errcode/catalog_trigger.go:7 (const TriggerCycle)`)
+- The disabled error code `trigger.disabled` exists (`internal/errcode/catalog_trigger.go:9 (const TriggerDisabled)`)
+- The authorizer chain holds `identity.NamespaceServiceRule` (`pkg/dustpan/dustpan.go:983 (func newAuthPorts)`)
 
 ## ADR check
 
