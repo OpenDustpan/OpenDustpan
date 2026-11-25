@@ -176,6 +176,7 @@ func jobsScenario(t *testing.T, env *e2e.Env) {
 	defaultsAndPools(ctx, t, env)
 	missingJobsAnswerNotFound(ctx, t, env, started)
 	approvalsRefuseWhatDoesNotWait(ctx, t, env, started)
+	approvalsRejectNeedsCancel(ctx, t, env, started)
 	memberStartsNothing(ctx, t, env, started)
 	aGateStopsAClaim(ctx, t, env)
 	aDisjointClaimsAccepted(ctx, t, env)
@@ -195,7 +196,7 @@ func aDamagedJobIsRefusedAndCanceled(ctx context.Context, t *testing.T, env *e2e
 		name, method, path, body string
 	}{
 		{"read a damaged job", http.MethodGet, jobPath(e2e.Namespace, started.ID), ""},
-		{"approve a damaged job", http.MethodPost, approvalsRoute(e2e.Namespace, started.ID), `{"verdict":"reject"}`},
+		{"approve a damaged job", http.MethodPost, approvalsRoute(started.ID), `{"verdict":"reject"}`},
 		{
 			"confirm a damaged job", http.MethodPost, jobPath(e2e.Namespace, started.ID) + "/confirmations",
 			`{"verdict":"reject"}`,
@@ -220,7 +221,7 @@ func aDamagedJobIsRefusedAndCanceled(ctx context.Context, t *testing.T, env *e2e
 }
 
 // approvalsRoute returns the route that records the verdicts of the job id.
-func approvalsRoute(ns, id string) string { return jobPath(ns, id) + "/approvals" }
+func approvalsRoute(id string) string { return jobPath(e2e.Namespace, id) + "/approvals" }
 
 // approvalsRefuseWhatDoesNotWait proves the approvals route of the server for
 // the cases that this API can make today: the API starts plan jobs only, and a
@@ -255,16 +256,60 @@ func approvalsRefuseWhatDoesNotWait(ctx context.Context, t *testing.T, env *e2e.
 	} {
 		env.APIStepA(ctx, t, e2e.APIStepSpec{
 			UserAgent: jobsAgent, Name: step.name, Method: http.MethodPost,
-			Path: approvalsRoute(e2e.Namespace, step.id), Body: step.body, Want: step.want, Scheme: "token",
+			Path: approvalsRoute(step.id), Body: step.body, Want: step.want, Scheme: "token",
 			Check: codeCheck(step.code),
 		})
 	}
 
 	env.APIStepWithHeaders(ctx, t, e2e.APIStepSpec{
 		UserAgent: jobsAgent, Name: "a verdict with an Idempotency-Key", Method: http.MethodPost,
-		Path: approvalsRoute(e2e.Namespace, started.ID), Body: `{"verdict":"reject"}`,
+		Path: approvalsRoute(started.ID), Body: `{"verdict":"reject"}`,
 		Want: http.StatusBadRequest, Scheme: "token", Check: codeCheck("request.idempotency-key-invalid"),
 	}, map[string]string{"Idempotency-Key": "approve-e2e-key"})
+}
+
+// approvalsRejectNeedsCancel proves that a rejection by a person who is not
+// the starter needs job:cancel. A member with job:approve and job:read, and no
+// job:cancel, rejects the job that the administrator started, and the server
+// answers 403.
+func approvalsRejectNeedsCancel(ctx context.Context, t *testing.T, env *e2e.Env, started jobDoc) {
+	t.Helper()
+
+	var person e2ePrincipal
+
+	principalCall(ctx, t, env, principalStep{
+		method: http.MethodPost, path: "/api/server/principals",
+		body: `{"subject":"` + e2e.SignInSubject("reject-no-cancel") + `","kind":"person"}`,
+		want: http.StatusCreated,
+	}, &person)
+
+	var role e2eRole
+
+	principalCall(ctx, t, env, principalStep{
+		method: http.MethodPost, path: "/api/server/roles",
+		body: `{"name":"reject-no-cancel","description":"approve and read, no cancel",` +
+			`"actions":["namespace:read","unit:read","job:approve","job:read"]}`,
+		want: http.StatusCreated,
+	}, &role)
+
+	principalCall(ctx, t, env, principalStep{
+		method: http.MethodPost, path: "/api/server/namespaces/" + e2e.Namespace + "/grants",
+		body: `{"subject":"principal:` + person.ID + `","role":"` + role.ID + `"}`,
+		want: http.StatusCreated,
+	}, nil)
+
+	token := env.PersonalToken(ctx, t, person.ID, "reject-no-cancel")
+
+	status, body, err := env.ServerAPIStatusAs(
+		ctx, token.Secret, http.MethodPost, approvalsRoute(started.ID), `{"verdict":"reject"}`,
+	)
+	if err != nil {
+		t.Fatalf("reject as a member without job:cancel: %v", err)
+	}
+
+	if status != http.StatusForbidden || !strings.Contains(body, `"errorCode":"access.denied"`) {
+		t.Fatalf("reject as a member without job:cancel = %d %s, want 403 access.denied", status, body)
+	}
 }
 
 // startsAJob starts the plan job, starts it again with the same key, and
