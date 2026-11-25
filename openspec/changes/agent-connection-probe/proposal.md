@@ -1,5 +1,5 @@
 ---
-version: 2
+version: 3
 ---
 
 ## Why
@@ -18,6 +18,7 @@ ADR 129 (accepted 2026-10-18, owner) says: "The capability probe is a durable op
 - The probe API for the connect route: `agent.Probes.Start(ctx, ProbeInput) (ProbeID, error)`, where the input is a pending document ID or a document with no store. The last step promotes a pending document only when the `If-Match` version is current, in one transaction (decision 29).
 - The cancel rules of decision 29: a later start cancels each earlier probe that has a pending document; a disconnect cancels them in one transaction.
 - The audit entry of a probe with no store (decision 33).
+- The first production caller of the NEW function `egress.CheckModelURL` of the change `agent-connection-document-and-secrets`: the check `reach` calls it on the `baseURL` before the first call, and a refusal writes an audit entry.
 
 ## Out of scope
 
