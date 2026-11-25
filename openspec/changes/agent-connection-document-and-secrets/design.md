@@ -15,6 +15,7 @@ ADR 129 defines the model connection as one document that the operator writes, a
 9. The routes carry the action `server:manage-agent` on `@server` (decision 32), except the allowlist routes. Each handler checks the action at the point of use.
 10. Audit entries: kind `change` on `@server` for a disconnect, a secret item (create, replace, delete) and an allowlist change. An entry never holds a value.
 11. This change checks names only. The check of the value of decision 11 (a field that holds the value of a secret item) arrives with the change `agent-secret-filter`, as the NEW function `CheckNoSecretValue`.
+12. Backup. The secret items, the current connection and the allowlist tables go into `backup.Tables`, in the portable files with the sealed `ciphertext` column only, as `notification_sink_secrets` does: the backup holds the sealed value and never a plain one. The pending connection (`agent_connection_pending`) goes into `backup.EmptiedTables`: a pending document belongs to a probe that runs now, and a restore that brought one back would let an old probe promote a document that the restore removed. The reason is in the doc comment of the list.
 
 ## Structure
 
