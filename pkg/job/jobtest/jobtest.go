@@ -76,6 +76,9 @@ type StateWriter func(
 type Domain interface {
 	// CreateNamespace creates the namespace name and returns its fence.
 	CreateNamespace(ctx context.Context, name namespace.Name) (namespace.Fence, error)
+	// CreatePrincipal creates a principal of kind with the subject. The store
+	// reads the kind of an approver from this row.
+	CreatePrincipal(ctx context.Context, subject string, kind identity.Kind) error
 	// CreateUnit creates a unit of tool in the namespace of fence and
 	// returns its reference, with its stable unit ID set.
 	CreateUnit(ctx context.Context, fence namespace.Fence, tool, name string) (identity.Object, error)

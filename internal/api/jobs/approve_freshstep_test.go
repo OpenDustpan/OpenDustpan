@@ -80,6 +80,7 @@ func TestDestroyApprovalByTokenFollowsSetting(t *testing.T) {
 
 	off := freshstep.PolicyFunc(func(context.Context) bool { return false })
 	on := freshstep.PolicyFunc(func(context.Context) bool { return true })
+	const forbidden, fresh = http.StatusForbidden, errcode.MFAFreshStepRequired
 
 	tests := []struct {
 		name      string
@@ -90,12 +91,12 @@ func TestDestroyApprovalByTokenFollowsSetting(t *testing.T) {
 		wantCalls int
 	}{
 		{"setting off", off, identity.KindPerson, http.StatusCreated, "", 1},
-		{"setting on", on, identity.KindPerson, http.StatusForbidden, errcode.MFAFreshStepRequired, 0},
-		{"no policy", nil, identity.KindPerson, http.StatusForbidden, errcode.MFAFreshStepRequired, 0},
-		{"setting off, service principal", off, identity.KindService, http.StatusForbidden, errcode.MFAFreshStepRequired, 0},
-		{"setting off, workload principal", off, identity.KindWorkload, http.StatusForbidden, errcode.MFAFreshStepRequired, 0},
-		{"setting off, agent principal", off, identity.KindAgent, http.StatusForbidden, errcode.MFAFreshStepRequired, 0},
-		{"setting on, agent principal", on, identity.KindAgent, http.StatusForbidden, errcode.MFAFreshStepRequired, 0},
+		{"setting on", on, identity.KindPerson, forbidden, fresh, 0},
+		{"no policy", nil, identity.KindPerson, forbidden, fresh, 0},
+		{"setting off, service principal", off, identity.KindService, forbidden, fresh, 0},
+		{"setting off, workload principal", off, identity.KindWorkload, forbidden, fresh, 0},
+		{"setting off, agent principal", off, identity.KindAgent, forbidden, fresh, 0},
+		{"setting on, agent principal", on, identity.KindAgent, forbidden, fresh, 0},
 	}
 
 	for _, tc := range tests {

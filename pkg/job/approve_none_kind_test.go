@@ -32,6 +32,7 @@ func TestDestroyApprovalWithSettingOffAllowsOnlyPersons(t *testing.T) {
 			return a
 		}
 	}
+	stale := job.ErrAuthStale
 
 	tests := []struct {
 		name    string
@@ -40,12 +41,12 @@ func TestDestroyApprovalWithSettingOffAllowsOnlyPersons(t *testing.T) {
 	}{
 		{"person, no credential", kindActor(identity.KindPerson, "", ""), nil},
 		{"person, access token", kindActor(identity.KindPerson, identity.CredentialAccessToken, "tok-1"), nil},
-		{"service, server credential", kindActor(identity.KindService, identity.CredentialServer, ""), job.ErrAuthStale},
-		{"service, access token", kindActor(identity.KindService, identity.CredentialAccessToken, "tok-2"), job.ErrAuthStale},
-		{"workload, trust token", kindActor(identity.KindWorkload, identity.CredentialTrustToken, "tok-3"), job.ErrAuthStale},
-		{"workload, job token", kindActor(identity.KindWorkload, identity.CredentialJobToken, "tok-4"), job.ErrAuthStale},
-		{"agent kind, no credential", kindActor(identity.KindAgent, "", ""), job.ErrAuthStale},
-		{"person acting as an agent", func(*rig) job.Actor { return agentActor("carol", "dusty") }, job.ErrAuthStale},
+		{"service, server credential", kindActor(identity.KindService, identity.CredentialServer, ""), stale},
+		{"service, access token", kindActor(identity.KindService, identity.CredentialAccessToken, "tok-2"), stale},
+		{"workload, trust token", kindActor(identity.KindWorkload, identity.CredentialTrustToken, "tok-3"), stale},
+		{"workload, job token", kindActor(identity.KindWorkload, identity.CredentialJobToken, "tok-4"), stale},
+		{"agent kind, no credential", kindActor(identity.KindAgent, "", ""), stale},
+		{"person acting as an agent", func(*rig) job.Actor { return agentActor("carol", "dusty") }, stale},
 	}
 
 	for _, tc := range tests {
