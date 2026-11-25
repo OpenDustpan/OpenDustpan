@@ -160,12 +160,11 @@ func newDelegation(t *testing.T, st DelegationStore) *delegation {
 	tokens, err := accesstoken.NewService(accesstoken.Config{
 		Makers:     nil,
 		TempAdmins: nil,
-		Store:      st, Principals: st, Freshness: delegationFreshGuard(t), Authorizer: authz,
+		Store:      st, Principals: st, Guard: delegationFreshGuard(t), Authorizer: authz,
 		Reach: access.ReachConfig{
 			Grants: st, Roles: st, Callers: st, Principals: st, Collections: nil, Units: st,
 		},
 		Logger: nil, Now: nil, NewID: nil,
-		Guard: freshstep.Guard{},
 	})
 	if err != nil {
 		t.Fatalf("token service: %v", err)

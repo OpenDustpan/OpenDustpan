@@ -121,12 +121,11 @@ func hostTokenService(st store) (*accesstoken.Service, error) {
 		Store:      st,
 		Principals: st,
 		TempAdmins: st,
-		Freshness:  fresh,
+		Guard:      fresh,
 		Authorizer: nil,
 		Logger:     nil,
 		Now:        nil,
 		NewID:      nil,
-		Guard:      freshstep.Guard{},
 	})
 	if err != nil {
 		return nil, fmt.Errorf("access token service: %w", err)

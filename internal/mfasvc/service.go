@@ -113,11 +113,13 @@ func New(cfg Config) (*Service, error) {
 // (subject, source address, user agent, channel, request ID), and the
 // principal ID and the session ID of the caller from its console session.
 // Both IDs are empty for the start and the end of a passkey sign-in, which
-// has no session yet.
+// has no session yet. Fresh is true when the caller passed a fresh step; the
+// handler sets it from a check that the installation setting never turns off.
 type Actor struct {
 	Entry       audit.Entry
 	PrincipalID string
 	SessionID   string
+	Fresh       bool
 }
 
 // Binding names what an assertion ceremony belongs to: the person and the
@@ -137,6 +139,12 @@ func (s *Service) BeginRegistration(ctx context.Context, a Actor, p mfa.Person) 
 	if a.PrincipalID == "" || a.SessionID == "" || p.ID != a.PrincipalID {
 		return nil, s.refuse(ctx, a.Entry, on(ActionAddRefused, object), "not the own account in a session",
 			mfa.ErrWrongPerson)
+	}
+
+	// Defense in depth: the handler checks the fresh step too; this check
+	// stays so that a caller with no fresh step gets no ceremony at all.
+	if !a.Fresh {
+		return nil, s.refuse(ctx, a.Entry, on(ActionAddRefused, object), "no fresh step", mfa.ErrFreshStep)
 	}
 
 	keys, err := s.store.Passkeys(ctx, p.ID)
@@ -555,6 +563,12 @@ func (s *Service) RemovePasskey(ctx context.Context, a Actor, id string) error {
 
 	if a.PrincipalID == "" {
 		return s.refuse(ctx, a.Entry, on(ActionRemoveRefused, object), "no caller", mfa.ErrWrongPerson)
+	}
+
+	// Defense in depth: the handler checks the fresh step too; this check
+	// stays so that a caller with no fresh step removes nothing.
+	if !a.Fresh {
+		return s.refuse(ctx, a.Entry, on(ActionRemoveRefused, object), "no fresh step", mfa.ErrFreshStep)
 	}
 
 	// Defense in depth: the HTTP adapter checks the ID of the path. This

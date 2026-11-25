@@ -9,7 +9,6 @@ import (
 	"opendustpan.org/opendustpan/internal/store/sqlite"
 	"opendustpan.org/opendustpan/pkg/access"
 	"opendustpan.org/opendustpan/pkg/accesstoken"
-	"opendustpan.org/opendustpan/pkg/freshstep"
 	"opendustpan.org/opendustpan/pkg/identity"
 	"opendustpan.org/opendustpan/pkg/principal"
 	"opendustpan.org/opendustpan/pkg/store/storetest"
@@ -172,12 +171,11 @@ func TestLeaseRequestsRefuseATokenWhoseMakerRowIsGone(t *testing.T) {
 			tc.seed(t, st, at)
 
 			svc, err := accesstoken.NewService(accesstoken.Config{
-				Makers: makerChecker(t, st), TempAdmins: nil, Store: st, Principals: st, Freshness: noFreshStepGuard(t),
+				Makers: makerChecker(t, st), TempAdmins: nil, Store: st, Principals: st, Guard: noFreshStepGuard(t),
 				Authorizer: nil, Logger: nil, Now: makerAt, NewID: nil,
 				Reach: access.ReachConfig{
 					Grants: nil, Roles: nil, Callers: nil, Principals: nil, Collections: nil, Units: nil,
 				},
-				Guard: freshstep.Guard{},
 			})
 			if err != nil {
 				t.Fatalf("token service: %v", err)

@@ -269,7 +269,7 @@ func (h *Handler) localUserRoutes() []Route {
 		{
 			Method: http.MethodPost, Path: localUserResetPath, Scope: ScopeAuthorized, Actions: manage,
 			Resolve: resolveServer, ActionsFor: nil, OpaqueDenial: false,
-			Serve: h.fresh(identity.ActionServerManageSignIn, h.resetLocalUser),
+			Serve: h.freshAlways(identity.ActionServerManageSignIn, h.resetLocalUser),
 		},
 		{
 			Method: http.MethodPost, Path: localUserUnlockPath, Scope: ScopeAuthorized, Actions: manage,

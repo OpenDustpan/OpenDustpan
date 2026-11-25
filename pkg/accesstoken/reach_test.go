@@ -12,7 +12,6 @@ import (
 	"opendustpan.org/opendustpan/internal/store/sqlite"
 	"opendustpan.org/opendustpan/pkg/access"
 	"opendustpan.org/opendustpan/pkg/accesstoken"
-	"opendustpan.org/opendustpan/pkg/freshstep"
 	"opendustpan.org/opendustpan/pkg/identity"
 	"opendustpan.org/opendustpan/pkg/namespace"
 	"opendustpan.org/opendustpan/pkg/principal"
@@ -284,9 +283,8 @@ func (f *reachFixture) newServiceWith(
 	svc, err := accesstoken.NewService(accesstoken.Config{
 		Makers:     nil,
 		TempAdmins: nil,
-		Store:      f.store, Principals: principals, Freshness: noStepGuard(t), Authorizer: f.authorizerOf(t),
+		Store:      f.store, Principals: principals, Guard: noStepGuard(t), Authorizer: f.authorizerOf(t),
 		Reach: reach, Logger: nil, Now: f.clock.Now, NewID: nil,
-		Guard: freshstep.Guard{},
 	})
 	if err != nil {
 		t.Fatalf("token service: %v", err)

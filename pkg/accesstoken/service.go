@@ -49,12 +49,6 @@ type PrincipalReader interface {
 type Config struct {
 	Store      Store
 	Principals PrincipalReader
-	// Freshness is the guard that asks for a fresh step before a create or
-	// a rotation. Its check returns nil when the caller passed a step inside
-	// the freshness window, and otherwise an error that asks for a new step.
-	// It is required: NewService refuses a Guard that freshstep.NewGuard did
-	// not make.
-	Freshness freshstep.Guard
 	// Guard asks for a fresh step when the fresh step policy requires one.
 	// The zero value requires a fresh step.
 	Guard freshstep.Guard
@@ -113,15 +107,15 @@ type Service struct {
 
 var _ identity.Authenticator = (*Service)(nil)
 
-// NewService returns a Service. Store, Principals and Freshness are required.
-// A zero Freshness guard is an ErrMissingDependency (fail closed).
+// NewService returns a Service. Store, Principals and Guard are required.
+// A zero Guard is an ErrMissingDependency (fail closed).
 func NewService(cfg Config) (*Service, error) {
 	switch {
 	case cfg.Store == nil:
 		return nil, fmt.Errorf("%w: access token store", ErrMissingDependency)
 	case cfg.Principals == nil:
 		return nil, fmt.Errorf("%w: principal reader", ErrMissingDependency)
-	case cfg.Freshness.IsZero():
+	case cfg.Guard.IsZero():
 		return nil, fmt.Errorf("%w: fresh step guard", ErrMissingDependency)
 	}
 
@@ -143,7 +137,7 @@ func NewService(cfg Config) (*Service, error) {
 	s := &Service{
 		store:      cfg.Store,
 		principals: cfg.Principals,
-		freshGuard: cfg.Freshness,
+		freshGuard: cfg.Guard,
 		authz:      cfg.Authorizer,
 		reach:      cfg.Reach,
 		makers:     cfg.Makers,

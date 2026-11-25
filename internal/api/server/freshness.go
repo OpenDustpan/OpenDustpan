@@ -322,3 +322,42 @@ func (h *Handler) fresh(action identity.Action, serve RouteHandler) RouteHandler
 		serve(w, r, p, obj)
 	}
 }
+
+// freshAlways wraps a write that always needs a fresh authentication, whatever
+// the setting freshAuthEnabled says: a passkey change and a local-user reset.
+// A request with an access token gets 403 with the error code
+// mfa.fresh-step-required, and a session with an old sign-in gets the same 403
+// with the path of a new sign-in. The refusal is audited as in fresh.
+func (h *Handler) freshAlways(action identity.Action, serve RouteHandler) RouteHandler {
+	return func(w http.ResponseWriter, r *http.Request, p identity.Principal, obj identity.Object) {
+		ctx := h.withFreshness(r.Context())
+
+		r = r.WithContext(ctx)
+
+		if err := h.requireAlwaysFresh(r); err != nil {
+			h.appendObjectChange(r, p, obj, serverChange{
+				at: h.now(), action: action, object: obj.String(), outcome: audit.OutcomeFailure,
+			})
+			h.writeError(ctx, w, err)
+
+			return
+		}
+
+		serve(w, r, p, obj)
+	}
+}
+
+// requireAlwaysFresh runs the sign-in age check of a write that always needs a
+// fresh authentication. It reads no setting and no policy of the installation,
+// so the setting freshAuthEnabled cannot turn it off. A request with no console
+// session, for example one with an access token, returns errFreshStepRequired.
+func (h *Handler) requireAlwaysFresh(r *http.Request) error {
+	// Defense in depth: checkSignInFreshness refuses a request with no console
+	// session too. This check stays, so that a caller cannot reach the age check
+	// with an access token if checkSignInFreshness changes.
+	if _, ok := sessionFromRequest(r); !ok {
+		return errFreshStepRequired
+	}
+
+	return h.checkSignInFreshness(r)
+}

@@ -20,7 +20,7 @@ func policyConfig(f *fixture, g freshstep.Guard, logger *slog.Logger) accesstoke
 	return accesstoken.Config{
 		Makers:     nil,
 		TempAdmins: nil,
-		Store:      f.store, Principals: f.store, Freshness: g, Authorizer: nil, Reach: access.ReachConfig{
+		Store:      f.store, Principals: f.store, Guard: g, Authorizer: nil, Reach: access.ReachConfig{
 			Grants: nil, Roles: nil, Callers: nil, Principals: nil, Collections: nil, Units: nil,
 		},
 		Logger: logger, Now: f.clock.Now, NewID: nil,

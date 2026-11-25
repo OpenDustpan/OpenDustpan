@@ -11,7 +11,6 @@ import (
 	"opendustpan.org/opendustpan/pkg/access"
 	"opendustpan.org/opendustpan/pkg/accesstoken"
 	"opendustpan.org/opendustpan/pkg/audit"
-	"opendustpan.org/opendustpan/pkg/freshstep"
 	"opendustpan.org/opendustpan/pkg/identity"
 )
 
@@ -176,12 +175,11 @@ func checkMtlsBadPolicy(t *testing.T) {
 
 	svc, svcErr := accesstoken.NewService(accesstoken.Config{
 		Makers:     nil,
-		TempAdmins: nil, Store: badPolicyStore{Store: f.store}, Principals: f.store, Freshness: noStepGuard(t),
+		TempAdmins: nil, Store: badPolicyStore{Store: f.store}, Principals: f.store, Guard: noStepGuard(t),
 		Authorizer: nil, Reach: access.ReachConfig{
 			Grants: nil, Roles: nil, Callers: nil, Principals: nil, Collections: nil, Units: nil,
 		},
 		Logger: nil, Now: f.clock.Now, NewID: nil,
-		Guard: freshstep.Guard{},
 	})
 	if svcErr != nil {
 		t.Fatalf("token service: %v", svcErr)

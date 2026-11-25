@@ -215,9 +215,8 @@ func newFAFixture(t *testing.T) faFixture {
 	}
 
 	tokens, err := accesstoken.NewService(accesstoken.Config{
-		TempAdmins: nil, Store: st, Principals: st, Freshness: noFreshStepGuard(t), Authorizer: authz, Reach: reach,
+		TempAdmins: nil, Store: st, Principals: st, Guard: noFreshStepGuard(t), Authorizer: authz, Reach: reach,
 		Logger: nil, Now: nil, NewID: nil, Makers: nil,
-		Guard: freshstep.Guard{},
 	})
 	if err != nil {
 		t.Fatalf("token service: %v", err)

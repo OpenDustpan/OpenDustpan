@@ -3581,9 +3581,8 @@ func newTokenService(cfg *settings, grants *access.Service) (*accesstoken.Servic
 
 	svc, err := accesstoken.NewService(accesstoken.Config{
 		Makers: makers,
-		Store:  store, Principals: principals, Freshness: freshness, Authorizer: authz, Reach: reach,
+		Store:  store, Principals: principals, Guard: freshness, Authorizer: authz, Reach: reach,
 		Logger: cfg.logger, Now: cfg.now, NewID: nil, TempAdmins: tempReaderOf(cfg.namespaceStore),
-		Guard: freshstep.Guard{},
 	})
 	if err != nil {
 		return nil, fmt.Errorf("access token service: %w", err)

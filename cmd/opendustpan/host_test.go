@@ -20,7 +20,6 @@ import (
 	"opendustpan.org/opendustpan/pkg/accesstoken"
 	"opendustpan.org/opendustpan/pkg/audit"
 	"opendustpan.org/opendustpan/pkg/dustpan"
-	"opendustpan.org/opendustpan/pkg/freshstep"
 	"opendustpan.org/opendustpan/pkg/identity"
 	"opendustpan.org/opendustpan/pkg/installation"
 	"opendustpan.org/opendustpan/pkg/principal"
@@ -242,12 +241,11 @@ func checkHostToken(ctx context.Context, t *testing.T, st *sqlite.Store, token, 
 		Store:      st,
 		Principals: st,
 		TempAdmins: st,
-		Freshness:  noFreshStepGuard(t),
+		Guard:      noFreshStepGuard(t),
 		Authorizer: nil,
 		Logger:     nil,
 		Now:        nil,
 		NewID:      nil,
-		Guard:      freshstep.Guard{},
 	})
 	if err != nil {
 		t.Fatalf("access token service: %v", err)
@@ -373,12 +371,11 @@ func TestHostWorksWhileBreakGlassDisableIsRefused(t *testing.T) {
 		Store:      st,
 		Principals: st,
 		TempAdmins: st,
-		Freshness:  noFreshStepGuard(t),
+		Guard:      noFreshStepGuard(t),
 		Authorizer: nil,
 		Logger:     nil,
 		Now:        nil,
 		NewID:      nil,
-		Guard:      freshstep.Guard{},
 	})
 	if err != nil {
 		st.close()
@@ -424,12 +421,11 @@ func TestHostWorksWhileBreakGlassDisableIsRefused(t *testing.T) {
 		Store:      checkSt,
 		Principals: checkSt,
 		TempAdmins: checkSt,
-		Freshness:  noFreshStepGuard(t),
+		Guard:      noFreshStepGuard(t),
 		Authorizer: nil,
 		Logger:     nil,
 		Now:        nil,
 		NewID:      nil,
-		Guard:      freshstep.Guard{},
 	})
 	if err != nil {
 		t.Fatalf("access token service: %v", err)
@@ -539,12 +535,11 @@ func setHostMaxLifetime(ctx context.Context, t *testing.T, db string, capped tim
 		Store:      st,
 		Principals: st,
 		TempAdmins: st,
-		Freshness:  noFreshStepGuard(t),
+		Guard:      noFreshStepGuard(t),
 		Authorizer: nil,
 		Logger:     nil,
 		Now:        nil,
 		NewID:      nil,
-		Guard:      freshstep.Guard{},
 	})
 	if err != nil {
 		t.Fatalf("access token service: %v", err)
@@ -811,12 +806,11 @@ func requireHostRetry(ctx context.Context, t *testing.T, st store) {
 		Store:      st,
 		Principals: st,
 		TempAdmins: st,
-		Freshness:  noFreshStepGuard(t),
+		Guard:      noFreshStepGuard(t),
 		Authorizer: nil,
 		Logger:     nil,
 		Now:        nil,
 		NewID:      nil,
-		Guard:      freshstep.Guard{},
 	})
 	if err != nil {
 		t.Fatalf("access token service: %v", err)

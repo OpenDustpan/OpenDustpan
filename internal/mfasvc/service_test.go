@@ -110,7 +110,7 @@ func base(at time.Time, object string) audit.Entry {
 
 // actor returns the caller id in the session session.
 func actor(id, session string) mfasvc.Actor {
-	return mfasvc.Actor{Entry: base(time.Now(), "x"), PrincipalID: id, SessionID: session}
+	return mfasvc.Actor{Entry: base(time.Now(), "x"), PrincipalID: id, SessionID: session, Fresh: true}
 }
 
 // anonymous returns the caller of a passkey sign-in.
