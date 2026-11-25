@@ -10,5 +10,5 @@
 
 ## 3. Definition of done
 
-- [ ] 3.1 Agent pre-run (human run-through in person-steps (install-guide-container-images 3.1)): Usability check: an operator follows `docs/guides/install.md` alone, pulls the image by tag and by digest, makes the two Secrets and installs the chart on a cluster. Check: the steps in the pull request. Record the transcript in the pull request body.
+- [x] 3.1 Agent pre-run (human run-through in person-steps (install-guide-container-images 3.1)): Usability check: an operator follows `docs/guides/install.md` alone, pulls the image by tag and by digest, makes the two Secrets and installs the chart on a cluster. Check: the steps in the pull request. Record the transcript in the pull request body.
 - [ ] 3.2 Run the local checks (`Makefile`). Check: `make check` reports zero findings. Confirmed by: CI (the agent runs the fast checks only).
