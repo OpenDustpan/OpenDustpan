@@ -1,5 +1,5 @@
 ---
-version: 1
+version: 2
 ---
 
 Issue: #3289.
@@ -25,13 +25,16 @@ Evidence for the claims above:
 
 ## What Changes
 
-- Coarse placeholder for the setting `access.installationGrantsReachNamespaces` of ADR 216 decision 7.
-- It carries the probe runs with the setting `false` that the change `housekeeping-principals-install` (task 1.6) and the change `housekeeping-principals-sweeps` (task 1.3) leave out.
+- The setting `access.installationGrantsReachNamespaces` (ADR 216 decision 7): default `true`, database layer, live, lockable in the static layer.
+- With `false`, the authorizer, the reach, the lists of objects and the access review give a grant on `@server` only the actions of the operator scope.
+- A failed read of the setting denies the decision.
+- The probe runs with the value `false` that `housekeeping-principals-install` (task 1.6) and `housekeeping-principals-sweeps` (task 1.3) leave out.
 
 Out of scope:
 
 - The housekeeping principals and their grants
 - The lock of the value in the static layer of OpenDustpan Cloud
+- The bootstrap administrator token, which is not a grant (design decision 5)
 
 Depends on:
 
@@ -45,13 +48,16 @@ Builds on (not a change):
 
 Where the path still costs the person time or surprises them:
 
-- No user path changes until the change is refined.
+- A person who sets `false` sees at once that a namespace action of a grant on `@server` answers 403. The 403 names the action and the namespace, and the access review shows the grant.
+- The bootstrap administrator token is not limited by the setting. The guide says so.
 
 ## What main already does
 
 Each fact names its file, line and function on main. The change specifies only the difference.
 
-- The authorizer adds the installation object for a namespace object and reads no setting. (`pkg/access/authorizer.go:967`)
+- The authorizer adds the installation object for a namespace object and reads no setting. (`pkg/access/authorizer.go:967`, function `chainObjects`)
+- The reach and the access review use the same function. (`pkg/access/reach.go:970`, `pkg/access/review_service.go:586`)
+- The only setting of the package is `accessReview.collectionUnitCap`, declared in `SettingDeclarations`. (`pkg/access/settings.go`)
 
 ## ADR check
 
@@ -63,7 +69,8 @@ Each quote is copied from the file in `docs/adr/`. Code adds the owner tags, the
 - Changed by: ADR 273 changes decision 8; ADR 393 changes decision 8. Chain to the end: none.
 - Current rule: this ADR, with ADR 273, 393.
 - Quote: "The installation setting `access.installationGrantsReachNamespaces` is `true` by default."
-- Effect: This change adds the setting with the default `true`.
+- Effect: This change adds the setting with the default `true`, and makes `false` give a grant on `@server` only the operator actions.
+- Bootstrap administrator: not a grant, so decision 7 does not name it. The change leaves it as it is and says so in the guide (design decision 5).
 - Conflict: none.
 
 ## Open questions
@@ -72,6 +79,6 @@ none
 
 Questions considered and answered:
 
-- Does an accepted ADR already decide the setting? Yes. ADR 216 decision 7 gives the name, the default and the effect of the value `false`. This change stays coarse until it is refined into a full change.
+- Does an accepted ADR already decide the setting? Yes. ADR 216 decision 7 gives the name, the default and the effect of the value `false`.
 
-Drafted by the PM from the lead's request for the change that adds the setting.
+Refined by the PM from the lead's request after the first driver run blocked.
