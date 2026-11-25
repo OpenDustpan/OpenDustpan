@@ -54,7 +54,7 @@ Modules that the change touches, and their imports on main:
 
 ```mermaid
 flowchart LR
-P1[pkg/graph]
+P1[internal/unmanaged]
 ```
 
 New imports of this change (each one allowed by the module rules):

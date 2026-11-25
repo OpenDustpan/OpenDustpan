@@ -26,7 +26,7 @@ The path after this change:
   - `internal/api/tfe/freshness.go` (:54), `internal/api/pulumi/freshness.go` (:66), `internal/api/profile/freshness.go` (:62), `internal/api/issuer/freshness.go` (:62)
   - `pkg/accesstoken/service.go` (:165, :418, :873), `pkg/profile/service.go` (:498), `pkg/profile/issuer_settings.go` (:303), `internal/issuersvc/settings.go` (:142)
   - `pkg/setting/change.go` (:153), `pkg/dustpan/auditchain.go` (:557)
-  - `pkg/job/service_approve.go` (:87, `newDestroyFresh`), `pkg/job/gate.go` (:316, `freshAuth`: gated, see task 2.4), `internal/store/jobstore/events.go` (:18, `checkDestroyProof`)
+  - `pkg/job/service_approve.go` (:87, `newDestroyFresh`), `pkg/job/gate.go` (:316, `freshAuth`: gated, the gate takes the setting as a parameter, see task 2.4), `internal/store/jobstore/events.go` (:18, `checkDestroyProof`)
   - `internal/api/server/gate_config.go` (:120, :130, :365, :560, `freshAuthSeconds`)
   - `internal/trustrulesvc/service.go`: `requireFresh` (:586), called by `requireWriter` (`internal/trustrulesvc/service_bundle.go:164`) and by the rule writes at `:263` and `:395`; `internal/api/trustrules/handlers.go` maps `ErrFreshRequired` and `ErrStaleToken` to the refusal (:208-211, :546-551)
 - Open work adds one more such check: the session-limit check of #3286. The trust rule check of #3283 is in the list above.
@@ -54,7 +54,7 @@ Out of scope:
 
 New:
 
-- pkg/freshstep/freshstep.go (existing, extended: main has only the type `Guard`; add the NEW `Policy` and `NewGuard`, and give `Guard` its methods), pkg/freshstep/freshstep_test.go (NEW), pkg/freshstep/leak_test.go (NEW).
+- pkg/freshstep/freshstep.go (existing, extended: main has only the type `Guard`; add the NEW `Policy` and `NewGuard`, and give `Guard` its methods `Require` and `Required`), pkg/freshstep/freshstep_test.go (NEW), pkg/freshstep/leak_test.go (NEW).
 - pkg/job/freshstep_policy_test.go, internal/api/server/freshstep_policy_test.go, internal/store/jobstore/events_freshstep_test.go, pkg/profile/profiletest/freshstep_policy_test.go: the table of each layer with the setting off and on.
 
 Edited (each from the `rg` list of "Evidence"; task 1.1 confirms the list on current main):
@@ -70,6 +70,7 @@ Edited (each from the `rg` list of "Evidence"; task 1.1 confirms the list on cur
 - internal/trustrulesvc/service.go, internal/trustrulesvc/service_bundle.go: `requireFresh` takes the `Guard` and `requireWriter` (`internal/trustrulesvc/service_bundle.go:164`) passes it, so the bundle writes use the same policy.
 - pkg/accesstoken/service.go, pkg/profile/service.go, pkg/profile/issuer_settings.go, internal/issuersvc/settings.go, pkg/dustpan/auditchain.go: hold a `Guard`.
 - pkg/job/service_approve.go, pkg/job/gate.go, internal/store/jobstore/events.go, internal/api/jobs/approve.go: the destroy approval reads the policy.
+- pkg/job/gate.go, pkg/job/match.go, pkg/job/service_approve.go, pkg/job/service_confirm.go, pkg/job/service_start.go, pkg/job/reconcile.go, internal/api/jobs/serve.go, internal/api/jobs/list.go, pkg/dustpan/jobservice.go, pkg/dustpan/jobs.go: the confirmation gate takes the setting as the parameter `freshRequired` (task 2.4), and the reconciler holds the same `Guard` in the NEW field `ReconcilerConfig.FreshGuard`. `Approval` gets no new field. pkg/dustpan/schedules_internal_test.go, pkg/job/jobtest/damaged.go, pkg/job/jobtest/reconcile.go, pkg/job/reconcile_test.go, pkg/store/storetest/job_restore.go: set the new field in each `ReconcilerConfig` literal. pkg/job/jobtest/approve.go, pkg/job/jobtest/rules.go, pkg/store/storetest/devdata_jobs.go, internal/selfservice/request_test.go, pkg/job/gate_test.go, pkg/job/match_test.go: pass the new parameter.
 - pkg/dustpan (wiring): makes the one `Policy` and the `Guard` of each layer.
 - internal/api/apidesc (`internal/api/apidesc/openapi.json`), clients/typescript: regenerated.
 - docs/guides/approval-rules.md, docs/guides/access-tokens.md, docs/guides/console-sign-in.md: the setting and its effect.
@@ -77,6 +78,7 @@ Edited (each from the `rg` list of "Evidence"; task 1.1 confirms the list on cur
 - pkg/job/service.go: the new field `ServiceConfig.FreshGuard` (a `freshstep.Guard`). The zero value requires a fresh step, so a missing field fails closed.  e2e/coverage_jobs.go, internal/api/jobs/ipallow_test.go, internal/api/jobs/pool_answer_test.go, internal/api/jobs/routes_test.go, internal/api/server/githost_fixture_test.go, internal/api/server/signin_test.go, pkg/job/service_test.go: set the new field in each `ServiceConfig` literal, because exhaustruct needs every field.
 - cmd/opendustpan/host.go, pkg/dustpan/dustpan.go: set `accesstoken.Config.Guard` to the real `Guard` of the one `Policy`. The preflight PR adds `Guard` to `accesstoken.Config` in every existing literal (31 files, 40 literals on main) with the zero value; this change does not touch the other 29 files of those literals. A test that needs a ready `Guard` uses the helpers cmd/opendustpan/freshguard_helper_test.go and internal/store/postgres/freshguard_helper_test.go (new). The zero value of `Guard` requires a fresh step, so a literal that the preflight fills fails closed.
 - pkg/job/jobtest/approve.go, pkg/job/jobtest/mem_test.go: the conformance cases of `auth: none` for a person and for a non-person.
+- pkg/job/jobtest/jobtest.go, internal/store/sqlite/jobs_test.go, internal/store/postgres/jobs_test.go: the NEW `Domain` method `CreatePrincipal` that the two cases use to make a principal of a given kind.
 - e2e/passkeys_test.go, e2e/localusers_test.go: the false comments are corrected (see task 2.7).
 - internal/store/jobstore/export_internal_test.go: the test export `CheckDestroyProofStepOn` and `CheckDestroyProofStepOff`, so that the black-box store test can call `checkDestroyProof`.
 - internal/api/tfe/freshstep_policy_test.go, internal/api/pulumi/freshstep_policy_test.go, internal/api/profile/freshstep_policy_test.go, internal/api/issuer/freshstep_policy_test.go, internal/issuersvc/freshstep_policy_test.go, internal/trustrulesvc/freshstep_policy_test.go, pkg/accesstoken/freshstep_policy_test.go (new): the table of each layer with the setting off and on.
@@ -87,6 +89,7 @@ Edited (each from the `rg` list of "Evidence"; task 1.1 confirms the list on cur
 - Test the setting default is false and shows its source: TestFreshAuthEnabledDefault fails on main
 - Test each gated call site passes with the setting off and refuses with it on: one table test for each layer (task 2.x) fails on main for the "off passes" row
 - Test an access token approves a `destroy` with the setting off and is refused with it on: TestDestroyApprovalByTokenFollowsSetting fails on main
+- Test a confirmation that records `auth: none` counts at the gate only with the setting off: TestConfirmationGateFollowsSetting fails on main
 - Test the on-to-off change needs a fresh step and the off-to-on change needs none: TestFreshAuthEnabledChangeNeedsStep fails on main
 - Test the rule and namespace API show `"enforced": false` with the setting off: TestStoredRulesShowNotEnforced fails on main
 - Test no call site asks for a step without the policy: TestEveryFreshCallSiteUsesPolicy fails on main
