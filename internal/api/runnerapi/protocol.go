@@ -339,7 +339,7 @@ func (h *Handler) claimState(r *http.Request, runnerID, operation string) (claim
 func (h *Handler) poll(w http.ResponseWriter, r *http.Request, c *call) {
 	ctx := r.Context()
 
-	var req protocol.ClaimWorkRequest
+	var req protocol.PollRequest
 	if err := decodeBody(c.body, &req); err != nil {
 		h.writeError(ctx, w, err)
 
@@ -367,7 +367,7 @@ func (h *Handler) poll(w http.ResponseWriter, r *http.Request, c *call) {
 	defer deadline.Stop()
 
 	for {
-		work, result, claimErr := h.pollOnce(ctx, &c.runner, &pool, req.AssignmentVersion)
+		work, result, claimErr := h.pollOnce(r, &c.runner, &pool, req.AssignmentVersion)
 
 		switch {
 		case claimErr != nil:
@@ -417,11 +417,11 @@ const (
 // retired now claims nothing: the server reads the runner again, because a
 // drain or a retire may start during a long poll.
 func (h *Handler) pollOnce(
-	ctx context.Context, caller *runner.Runner, pool *runner.Pool, assignmentVersion int,
+	r *http.Request, caller *runner.Runner, pool *runner.Pool, assignmentVersion int,
 ) (protocol.Work, pollResult, error) {
 	var none protocol.Work
 
-	rn, err := h.members.Runner(ctx, caller.ID)
+	rn, err := h.members.Runner(r.Context(), caller.ID)
 	if err != nil {
 		return none, pollIdle, fmt.Errorf("select runner: %w", err)
 	}
@@ -430,14 +430,14 @@ func (h *Handler) pollOnce(
 		return none, pollStop, nil
 	}
 
-	work, found, err := h.tryClaim(ctx, &rn, pool, assignmentVersion)
+	work, found, err := h.tryClaim(r, &rn, pool, assignmentVersion)
 	if !found {
 		return work, pollIdle, err
 	}
 
 	// A drain or a retire that committed during the claim gets the claim
 	// back. The claim then comes before the drain, or the runner gets no work.
-	after, err := h.members.Runner(ctx, caller.ID)
+	after, err := h.members.Runner(r.Context(), caller.ID)
 	if err == nil && !after.Draining && after.RetiredAt.IsZero() {
 		return work, pollWork, nil
 	}
@@ -445,8 +445,8 @@ func (h *Handler) pollOnce(
 	claim := durable.Claim{
 		Operation: durable.ID(work.Operation), Owner: rn.ID, Token: work.Token, ExpiresAt: work.ExpiresAt,
 	}
-	if giveErr := h.giveBack(ctx, &rn, claim); giveErr != nil && !errors.Is(giveErr, runner.ErrClaimLost) {
-		h.logger.WarnContext(ctx, "release of a claim after a drain", slog.String("runner", rn.ID),
+	if giveErr := h.giveBack(r, &rn, claim); giveErr != nil && !errors.Is(giveErr, runner.ErrClaimLost) {
+		h.logger.WarnContext(r.Context(), "release of a claim after a drain", slog.String("runner", rn.ID),
 			slog.String("operation", work.Operation), slog.Any("error", giveErr))
 	}
 
@@ -459,7 +459,7 @@ func (h *Handler) pollOnce(
 
 // tryClaim asks the claimer of the purpose of pool for one phase or sweep.
 func (h *Handler) tryClaim(
-	ctx context.Context, rn *runner.Runner, pool *runner.Pool, assignmentVersion int,
+	r *http.Request, rn *runner.Runner, pool *runner.Pool, assignmentVersion int,
 ) (protocol.Work, bool, error) {
 	kinds, err := runner.ClaimKinds(pool)
 	if err != nil {
@@ -475,9 +475,9 @@ func (h *Handler) tryClaim(
 
 	switch pool.Purpose {
 	case runner.PurposeJobs:
-		return h.claimPhase(ctx, rn, pool, kinds, maxVersions)
+		return h.claimPhase(r, rn, pool, kinds, maxVersions)
 	case runner.PurposeSweeps:
-		return h.claimSweep(ctx, rn, pool, kinds, maxVersions)
+		return h.claimSweep(r, rn, pool, kinds, maxVersions)
 	default:
 		return protocol.Work{}, false, fmt.Errorf("%w: unknown purpose %q", runner.ErrInvalid, pool.Purpose)
 	}
@@ -486,8 +486,10 @@ func (h *Handler) tryClaim(
 // claimPhase takes one phase of the kinds for the runner and records the
 // claim.
 func (h *Handler) claimPhase(
-	ctx context.Context, rn *runner.Runner, pool *runner.Pool, kinds []durable.Kind, maxVersions map[durable.Kind]int,
+	r *http.Request, rn *runner.Runner, pool *runner.Pool, kinds []durable.Kind, maxVersions map[durable.Kind]int,
 ) (protocol.Work, bool, error) {
+	ctx := r.Context()
+
 	var none protocol.Work
 
 	if h.claimer == nil {
@@ -532,8 +534,10 @@ func (h *Handler) claimPhase(
 // claimSweep takes one sweep of the kinds for the runner and records the
 // claim.
 func (h *Handler) claimSweep(
-	ctx context.Context, rn *runner.Runner, pool *runner.Pool, kinds []durable.Kind, maxVersions map[durable.Kind]int,
+	r *http.Request, rn *runner.Runner, pool *runner.Pool, kinds []durable.Kind, maxVersions map[durable.Kind]int,
 ) (protocol.Work, bool, error) {
+	ctx := r.Context()
+
 	var none protocol.Work
 
 	if h.sweeps == nil {
@@ -683,7 +687,7 @@ func (h *Handler) renew(w http.ResponseWriter, r *http.Request, c *call) {
 	case errors.Is(err, runner.ErrSessionWaitPassed):
 		// The store changed nothing. The claimer releases the claim with
 		// its own rules, then the runner gets the claim-lost answer.
-		if giveErr := h.giveBack(ctx, &c.runner, claim); giveErr != nil {
+		if giveErr := h.giveBack(r, &c.runner, claim); giveErr != nil {
 			h.writeError(ctx, w, giveErr)
 
 			return
@@ -724,7 +728,7 @@ func (h *Handler) releaseClaim(w http.ResponseWriter, r *http.Request, c *call) 
 		return
 	}
 
-	if err = h.giveBack(ctx, &c.runner, claim); err != nil {
+	if err = h.giveBack(r, &c.runner, claim); err != nil {
 		h.writeError(ctx, w, err)
 
 		return
@@ -739,7 +743,9 @@ func (h *Handler) releaseClaim(w http.ResponseWriter, r *http.Request, c *call) 
 // purpose of its pool, so the rules of the claimer decide what the release
 // does to the operation: a phase after a started change fails, and a cancel
 // ends the job. A claim with a job session is not released.
-func (h *Handler) giveBack(ctx context.Context, rn *runner.Runner, claim durable.Claim) error {
+func (h *Handler) giveBack(r *http.Request, rn *runner.Runner, claim durable.Claim) error {
+	ctx := r.Context()
+
 	rec, err := h.handoffs.LookupClaim(ctx, claim)
 	if err != nil {
 		return fmt.Errorf("look up claim: %w", err)
@@ -754,12 +760,10 @@ func (h *Handler) giveBack(ctx context.Context, rn *runner.Runner, claim durable
 		return fmt.Errorf("select pool: %w", err)
 	}
 
-	n, fenceErr := h.namespaces.WritableHere(ctx, rn.Namespace)
+	fence, fenceErr := h.fenceOf(r, rn.Namespace)
 	if fenceErr != nil {
-		return fmt.Errorf("namespace of the runner: %w", fenceErr)
+		return fenceErr
 	}
-
-	fence := n.Fence()
 
 	switch pool.Purpose {
 	case runner.PurposeJobs:
