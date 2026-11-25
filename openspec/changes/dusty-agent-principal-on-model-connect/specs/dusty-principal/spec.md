@@ -13,8 +13,8 @@ The server SHALL make one agent principal with the subject `dusty` in the transa
 - **THEN** the server changes the connection only, and the record, the sponsors and the grants stay as they were
 
 #### Scenario: failure rolls back
-- **WHEN** one write of the connect fails
-- **THEN** the server stores none of the writes
+- **WHEN** one write of ConnectModel fails
+- **THEN** the server stores none of the writes of ConnectModel in the caller transaction
 
 ### Requirement: agent-record-sponsors
 
