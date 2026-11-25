@@ -1,5 +1,5 @@
 ---
-version: 11
+version: 12
 ---
 
 Issue: #3257.
@@ -26,7 +26,7 @@ The path after this change:
   - `internal/api/tfe/freshness.go` (:54), `internal/api/pulumi/freshness.go` (:66), `internal/api/profile/freshness.go` (:62), `internal/api/issuer/freshness.go` (:62)
   - `pkg/accesstoken/service.go` (:165, :418, :873), `pkg/profile/service.go` (:498), `pkg/profile/issuer_settings.go` (:303), `internal/issuersvc/settings.go` (:142)
   - `pkg/setting/change.go` (:153), `pkg/dustpan/auditchain.go` (:557)
-  - `pkg/job/service_approve.go` (:87, `newDestroyFresh`), `pkg/job/gate.go` (:279, `freshAuth`), `internal/store/jobstore/events.go` (:18, `checkDestroyProof`)
+  - `pkg/job/service_approve.go` (:87, `newDestroyFresh`), `pkg/job/gate.go` (:316, `freshAuth`: gated, see task 2.4), `internal/store/jobstore/events.go` (:18, `checkDestroyProof`)
   - `internal/api/server/gate_config.go` (:120, :130, :365, :560, `freshAuthSeconds`)
   - `internal/trustrulesvc/service.go`: `requireFresh` (:586), called by `requireWriter` (`internal/trustrulesvc/service_bundle.go:164`) and by the rule writes at `:263` and `:395`; `internal/api/trustrules/handlers.go` maps `ErrFreshRequired` and `ErrStaleToken` to the refusal (:208-211, :546-551)
 - Open work adds one more such check: the session-limit check of #3286. The trust rule check of #3283 is in the list above.
@@ -40,6 +40,7 @@ The path after this change:
 - A stored `freshAuthSeconds` of an approval rule and `freshAuthForApprovals` of a namespace keep their values with the setting off. The settings API and the rule API show `"enforced": false` for them.
 - A change of `freshAuthEnabled` from on to off needs a fresh step while it is on. From off to on needs none. Both write an audit entry with the old and the new value.
 - The change or reset of a factor needs a fresh step whatever the setting says (ADR 385 decision 5: "It stays required, whatever the setting says."). This covers the passkey routes (begin, finish, remove) and the reset of a local user. The route handler checks it with a step check that the setting never turns off, and `internal/mfasvc` checks it again: its `Actor` carries the result of the fresh step, and the register and remove methods refuse with no fresh step. Each layer stops the change alone, so the freshstep `Policy` is not used for these sites.
+- With the setting off, only a person (`identity.KindPerson`) approves a `destroy` with `auth: none`. The handler, the service and the store each allow that one kind and refuse every other kind (a service, a workload, an agent). Before this change only a person's fresh session approved a `destroy`, so a non-person must not gain the approval (ADR 385 decision 7: "an agent holds no right that a person has"; decision 2 names "a person").
 - A guide section at the setting says in one sentence that with the setting off an access token with the right grant may approve a `destroy` and make a setting weaker.
 
 Out of scope:
@@ -75,6 +76,8 @@ Edited (each from the `rg` list of "Evidence"; task 1.1 confirms the list on cur
 - e2e/signin_token.go (on main): add the NEW helper `EnableFreshAuth`. e2e/tokens_test.go, e2e/audit_chain_test.go, e2e/sessionpolicy_test.go, e2e/decision_record_retention_setting_test.go, e2e/restore_access_setting_test.go, e2e/issuer_test.go, e2e/profiles_test.go, e2e/e2e_test.go, e2e/signin_test.go, e2e/approval_rules_test.go, e2e/gate_routes_test.go, e2e/proxy_rules_test.go, e2e/namespace_principals_test.go, e2e/localusers_test.go, e2e/passkeys_test.go: call it, because the default is off and these steps expect a fresh step for an access token.
 - pkg/job/service.go: the new field `ServiceConfig.FreshGuard` (a `freshstep.Guard`). The zero value requires a fresh step, so a missing field fails closed.  e2e/coverage_jobs.go, internal/api/jobs/ipallow_test.go, internal/api/jobs/pool_answer_test.go, internal/api/jobs/routes_test.go, internal/api/server/githost_fixture_test.go, internal/api/server/signin_test.go, pkg/job/service_test.go: set the new field in each `ServiceConfig` literal, because exhaustruct needs every field.
 - cmd/opendustpan/host.go, pkg/dustpan/dustpan.go: set `accesstoken.Config.Guard` to the real `Guard` of the one `Policy`. The preflight PR adds `Guard` to `accesstoken.Config` in every existing literal (31 files, 40 literals on main) with the zero value; this change does not touch the other 29 files of those literals. A test that needs a ready `Guard` uses the helpers cmd/opendustpan/freshguard_helper_test.go and internal/store/postgres/freshguard_helper_test.go (new). The zero value of `Guard` requires a fresh step, so a literal that the preflight fills fails closed.
+- pkg/job/jobtest/approve.go, pkg/job/jobtest/mem_test.go: the conformance cases of `auth: none` for a person and for a non-person.
+- e2e/passkeys_test.go, e2e/localusers_test.go: the false comments are corrected (see task 2.7).
 - internal/store/jobstore/export_internal_test.go: the test export `CheckDestroyProofStepOn` and `CheckDestroyProofStepOff`, so that the black-box store test can call `checkDestroyProof`.
 - internal/api/tfe/freshstep_policy_test.go, internal/api/pulumi/freshstep_policy_test.go, internal/api/profile/freshstep_policy_test.go, internal/api/issuer/freshstep_policy_test.go, internal/issuersvc/freshstep_policy_test.go, internal/trustrulesvc/freshstep_policy_test.go, pkg/accesstoken/freshstep_policy_test.go (new): the table of each layer with the setting off and on.
 - e2e/settings_test.go: the step that changes `freshAuthEnabled` and reads its effective value. No e2e step approves a `destroy` with an access token: the jobs API cannot start a `destroy` job (`job.unsupported`), so `TestDestroyApprovalByTokenFollowsSetting` proves that case.
@@ -150,5 +153,6 @@ Questions considered and answered:
 - Does a lower level (federation, namespace) turn the step off? No. ADR 385 decision 8: "A lower level can turn a requirement on. It cannot turn it off." This change adds the installation level, and the read function is the one place a later level joins.
 - Is the first-administrator code, the enrollment code or the break-glass proof gated? No. ADR 385 decision 5 keeps them. The enrollment code is the reading of the PM, and the owner has not decided it, so the change keeps it as it is.
 - Is the change or reset of a factor gated by the setting? No. ADR 385 decision 5: "the change or reset of a factor (ADR 301 decision 8, ADR 285 decision 17). It stays required, whatever the setting says." With the setting off, a passkey change and a local-user reset still need a fresh step. The handler and `internal/mfasvc` each check it.
+- Does ADR 385 decision 2 ("an access token that holds the grant may approve a `destroy`") let a service or workload principal approve a destroy with the setting off? No, the PM reads it for a person's access token: the same decision says "asks a person for no fresh authentication", decision 7 says the setting "removes the step for a person" and gives an agent no new action, and before this change only a person's fresh session approved a `destroy`. A non-person gains no approval. If the owner means a service or workload token too, that is a new decision and a new change.
 - Is a new silent rule added? No. Each default shows its effective value and source in the API, and each change writes an audit entry (decisions 1 and 4).
 - Does the setting give an agent a new action? No. ADR 385 decision 7 and ADR 354.
