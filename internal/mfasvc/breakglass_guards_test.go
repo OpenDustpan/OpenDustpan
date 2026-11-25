@@ -2,11 +2,16 @@ package mfasvc_test
 
 import (
 	"bytes"
+	"context"
+	"errors"
 	"strings"
 	"testing"
+	"time"
 
 	"opendustpan.org/opendustpan/internal/mfasvc"
 	"opendustpan.org/opendustpan/pkg/mfa"
+	"opendustpan.org/opendustpan/pkg/mfa/gowebauthn"
+	"opendustpan.org/opendustpan/pkg/principal"
 )
 
 // invalidPasskeyCase is a new passkey that Passkey.Validate refuses, after the
@@ -241,4 +246,119 @@ func TestBreakGlassAddStoresForNamedPerson(t *testing.T) {
 	if keys, err := f.store.Passkeys(t.Context(), bob); err != nil || len(keys) != 0 {
 		t.Fatalf("passkeys of %q = %+v, %v; want none", bob, keys, err)
 	}
+}
+
+// passkeyOnlyStore exposes only the passkey port of its store. A service over
+// it has no PrincipalReader, so checkBreakGlassPerson cannot read the person.
+type passkeyOnlyStore struct {
+	mfa.PasskeyStore
+}
+
+// errPrincipalReadFailed is the read error of failingPrincipalStore. It stands
+// for a store failure, which is not the ErrNotFound of an unknown record.
+var errPrincipalReadFailed = errors.New("read failed")
+
+// failingPrincipalStore reads principals and answers errPrincipalReadFailed
+// for every one.
+type failingPrincipalStore struct {
+	mfa.PasskeyStore
+
+	err error
+}
+
+func (s failingPrincipalStore) GetPrincipal(_ context.Context, id string) (principal.Principal, error) {
+	return principal.Principal{
+		CreatedAt: time.Time{}, UpdatedAt: time.Time{}, DisabledAt: time.Time{}, ID: id,
+		Subject: "", DisplayName: "", Kind: principal.KindPerson, Source: "", Namespace: "",
+		GroupCount: 0, BreakGlass: false,
+	}, s.err
+}
+
+// serviceOverStore returns a service over store that writes its entries to the
+// store of f, so a refusal of the service is readable by the fixture.
+func serviceOverStore(t *testing.T, f *fixture, store mfa.PasskeyStore) *mfasvc.Service {
+	t.Helper()
+
+	rp, err := gowebauthn.New(externalURL)
+	if err != nil {
+		t.Fatalf("relying party: %v", err)
+	}
+
+	svc, err := mfasvc.New(mfasvc.Config{Store: store, RP: rp, Audit: f.store, Now: f.clock.now, Log: nil})
+	if err != nil {
+		t.Fatalf("service: %v", err)
+	}
+
+	return svc
+}
+
+// TestBreakGlassFailClosed proves the two branches of checkBreakGlassPerson
+// that refuse without a usable read: a store that is not a PrincipalReader,
+// and a read that fails with an error other than ErrNotFound. Neither writes
+// a passkey or a success entry.
+func TestBreakGlassFailClosed(t *testing.T) {
+	t.Parallel()
+
+	t.Run("store cannot read the principal", func(t *testing.T) {
+		t.Parallel()
+
+		f := newBreakGlassFixture(t)
+		old := storedPasskey(t, f, storedPasskeyInput{
+			personID: glass, id: "pky-old", body: "old-material", name: "old-key",
+		})
+		svc := serviceOverStore(t, f, passkeyOnlyStore{PasskeyStore: f.store})
+
+		_, err := svc.AddPasskey(t.Context(), actor(glass, "ses-glass"), glass, newPasskey("new"))
+		f.wantRefusal(t, "add with a store that cannot read principals", err, mfa.ErrUnavailable,
+			mfasvc.ActionAddRefused)
+
+		refusals := f.entries(t, mfasvc.ActionAddRefused)
+		if cause := refusals[0].Changes; len(cause) != 1 || cause[0].New != "the store cannot read the principal" {
+			t.Fatalf("refusal changes = %+v, want the cause of the reader check", cause)
+		}
+
+		wantGlassUnchanged(t, f, old, mfasvc.ActionPasskeyAdded)
+	})
+
+	t.Run("principal read fails", func(t *testing.T) {
+		t.Parallel()
+
+		f := newBreakGlassFixture(t)
+		old := storedPasskey(t, f, storedPasskeyInput{
+			personID: glass, id: "pky-old", body: "old-material", name: "old-key",
+		})
+		store := failingPrincipalStore{PasskeyStore: f.store, err: errPrincipalReadFailed}
+		svc := serviceOverStore(t, f, store)
+
+		_, err := svc.AddPasskey(t.Context(), actor(glass, "ses-glass"), glass, newPasskey("new"))
+		f.wantRefusal(t, "add with a failing principal read", err, mfa.ErrUnavailable, mfasvc.ActionAddRefused)
+
+		refusals := f.entries(t, mfasvc.ActionAddRefused)
+		if cause := refusals[0].Changes; len(cause) != 1 || cause[0].New != "the principal cannot be read" {
+			t.Fatalf("refusal changes = %+v, want the cause of the read check", cause)
+		}
+
+		wantGlassUnchanged(t, f, old, mfasvc.ActionPasskeyAdded)
+	})
+}
+
+// TestBreakGlassAddNeedsCaller proves that AddPasskey refuses a caller with no
+// principal ID before it reads the person or writes a passkey.
+func TestBreakGlassAddNeedsCaller(t *testing.T) {
+	t.Parallel()
+
+	f := newBreakGlassFixture(t)
+	old := storedPasskey(t, f, storedPasskeyInput{
+		personID: glass, id: "pky-old", body: "old-material", name: "old-key",
+	})
+
+	_, err := f.svc.AddPasskey(t.Context(), actor("", ""), glass, newPasskey("new"))
+	f.wantRefusal(t, "add with no caller", err, mfa.ErrWrongPerson, mfasvc.ActionAddRefused)
+
+	refusals := f.entries(t, mfasvc.ActionAddRefused)
+	if cause := refusals[0].Changes; len(cause) != 1 || cause[0].New != "no caller" {
+		t.Fatalf("refusal changes = %+v, want the cause of the caller check", cause)
+	}
+
+	wantGlassUnchanged(t, f, old, mfasvc.ActionPasskeyAdded)
 }

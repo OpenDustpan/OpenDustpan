@@ -1070,7 +1070,8 @@ func requestFlows() []requestFlow {
 			h.measureStackCall(http.MethodPost, "/rename", body, http.StatusOK)
 		}},
 		// The list reads the break-glass accounts, their passkeys and grants,
-		// and the working count. PostgreSQL measured 5 round trips.
+		// and the working count. The budget of 5 is provisional until a
+		// PostgreSQL run measures it.
 		{"break-glass list", 5, func(h *rtHarness) {
 			h.measure(func() {
 				h.call(http.MethodGet, "/api/dustpan/v1/break-glass/accounts", "", http.StatusOK)

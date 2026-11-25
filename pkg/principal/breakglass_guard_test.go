@@ -8,6 +8,7 @@ import (
 	"time"
 
 	"opendustpan.org/opendustpan/internal/store/sqlite"
+	"opendustpan.org/opendustpan/pkg/audit"
 	"opendustpan.org/opendustpan/pkg/identity"
 	"opendustpan.org/opendustpan/pkg/principal"
 )
@@ -18,11 +19,13 @@ type breakGlassChange func(t *testing.T, svc *principal.Service, id string) erro
 // breakGlassGuardCase is one row of the guard test: the accounts that exist,
 // the write and the refusal that the row wants.
 type breakGlassGuardCase struct {
-	want     error
-	name     string
-	target   string
-	change   breakGlassChange
-	accounts []string
+	want        error
+	name        string
+	target      string
+	change      breakGlassChange
+	accounts    []string
+	wantEnabled int
+	wantEntries int
 }
 
 func TestBreakGlassGuard(t *testing.T) {
@@ -32,18 +35,22 @@ func TestBreakGlassGuard(t *testing.T) {
 		{
 			name: "disable the last enabled account is refused", change: disableBreakGlass,
 			accounts: []string{"prn-bg1"}, target: "prn-bg1", want: principal.ErrLastBreakGlass,
+			wantEnabled: 1, wantEntries: 0,
 		},
 		{
 			name: "delete the last enabled account is refused", change: deleteBreakGlass,
 			accounts: []string{"prn-bg1"}, target: "prn-bg1", want: principal.ErrLastBreakGlass,
+			wantEnabled: 1, wantEntries: 0,
 		},
 		{
 			name: "disable one of two enabled accounts passes", change: disableBreakGlass,
 			accounts: []string{"prn-bg1", "prn-bg2"}, target: "prn-bg1", want: nil,
+			wantEnabled: 1, wantEntries: 1,
 		},
 		{
 			name: "delete one of two enabled accounts passes", change: deleteBreakGlass,
 			accounts: []string{"prn-bg1", "prn-bg2"}, target: "prn-bg1", want: nil,
+			wantEnabled: 1, wantEntries: 1,
 		},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
@@ -55,7 +62,7 @@ func TestBreakGlassGuard(t *testing.T) {
 }
 
 // runBreakGlassGuardCase stores the accounts of the row, sends its change and
-// checks the answer.
+// checks the answer, the live count and the entry that the path writes.
 func runBreakGlassGuardCase(t *testing.T, tc breakGlassGuardCase) {
 	t.Helper()
 
@@ -66,7 +73,19 @@ func runBreakGlassGuardCase(t *testing.T, tc breakGlassGuardCase) {
 	}
 
 	got := tc.change(t, svc.service, tc.target)
-	if tc.want == nil {
+	checkGuardAnswer(t, got, tc.want)
+
+	checkGuardLiveCount(t, svc, tc.wantEnabled)
+	checkGuardAuditEntry(t, svc, tc)
+}
+
+// checkGuardAnswer proves the answer of the row: nil for a change that passes,
+// and the sentinel of the refusal, which also matches the older sentinel, for
+// one that does not.
+func checkGuardAnswer(t *testing.T, got, want error) {
+	t.Helper()
+
+	if want == nil {
 		if got != nil {
 			t.Fatalf("got %v, want nil", got)
 		}
@@ -74,14 +93,69 @@ func runBreakGlassGuardCase(t *testing.T, tc breakGlassGuardCase) {
 		return
 	}
 
-	if !errors.Is(got, tc.want) {
-		t.Fatalf("got %v, want %v", got, tc.want)
+	if !errors.Is(got, want) {
+		t.Fatalf("got %v, want %v", got, want)
 	}
 
 	// The older sentinel keeps its meaning: a change that leaves no enabled
 	// account also leaves too few working accounts.
 	if !errors.Is(got, principal.ErrNoWorkingBreakGlass) {
 		t.Fatalf("got %v, want an error that matches %v", got, principal.ErrNoWorkingBreakGlass)
+	}
+}
+
+// checkGuardLiveCount proves that the number of enabled break-glass accounts
+// after the change is the one of the row. A refused change leaves the count
+// as it was; a disable or a delete lowers it by one.
+func checkGuardLiveCount(t *testing.T, svc breakGlassService, want int) {
+	t.Helper()
+
+	accounts, err := svc.service.ListBreakGlassAccounts(t.Context())
+	if err != nil {
+		t.Fatalf("list break-glass accounts: %v", err)
+	}
+
+	enabled := 0
+	for i := range accounts {
+		if accounts[i].DisabledAt.IsZero() {
+			enabled++
+		}
+	}
+
+	if enabled != want {
+		t.Fatalf("enabled break-glass accounts = %d, want %d", enabled, want)
+	}
+}
+
+// checkGuardAuditEntry proves the entry that the path writes for its target:
+// one change of outcome success for a disable or a delete that passes, and
+// none for one that the store refuses. The denial of a refusal is written by
+// the HTTP handler, not by this service path.
+func checkGuardAuditEntry(t *testing.T, svc breakGlassService, tc breakGlassGuardCase) {
+	t.Helper()
+
+	listing, err := svc.store.List(t.Context(), audit.ServerScope,
+		audit.Page{Size: audit.DefaultPageSize, Before: 0})
+	if err != nil {
+		t.Fatalf("list @server entries: %v", err)
+	}
+
+	object := principal.Ref(tc.target)
+	var entries []audit.Entry
+
+	for i := range listing.Entries {
+		e := &listing.Entries[i]
+		if e.Object == object && e.Action == string(identity.ActionServerManagePrincipals) {
+			entries = append(entries, *e)
+		}
+	}
+
+	if len(entries) != tc.wantEntries {
+		t.Fatalf("entries on %s = %d, want %d", object, len(entries), tc.wantEntries)
+	}
+
+	if tc.wantEntries > 0 && (entries[0].Kind != audit.KindChange || entries[0].Outcome != audit.OutcomeSuccess) {
+		t.Fatalf("entry on %s = %+v, want a change of outcome success", object, entries[0])
 	}
 }
 

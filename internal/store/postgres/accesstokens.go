@@ -432,12 +432,14 @@ func (s *Store) SweepInactive(
 	err := runServerAuditTx(ctx, s.inTx, func(tx serverAuditTx) error {
 		var err error
 
-		res, err = sweepInactive(ctx, tx.q, sw)
+		var skipped []string
+
+		res, skipped, err = sweepInactive(ctx, tx.q, sw)
 		if err != nil {
 			return err
 		}
 
-		return s.appendSweepEntries(ctx, tx, res, entry)
+		return s.appendSweepEntries(ctx, tx, res, skipped, entry)
 	})
 	if err != nil {
 		return accesstoken.SweepResult{}, err
@@ -446,15 +448,23 @@ func (s *Store) SweepInactive(
 	return res, nil
 }
 
+// sweepExemptReason is the reason of the audit record of a break-glass
+// account that the inactivity sweep skipped. The record shows that the
+// sweep saw the account and left it enabled.
+const sweepExemptReason = "break-glass account is exempt"
+
 // sweepInactive disables the inactive tokens and accounts of sw in the
 // transaction of q, at the time of the database clock. The run keeps the
 // temporary administrators that still work, and only their fixed expiry
 // ends them. An expired record is a tombstone, not an exemption: it never
-// keeps a token or a principal.
-func sweepInactive(ctx context.Context, q *db.Queries, sw accesstoken.Sweep) (accesstoken.SweepResult, error) {
+// keeps a token or a principal. It also returns the IDs of the break-glass
+// accounts that the run skipped.
+func sweepInactive(
+	ctx context.Context, q *db.Queries, sw accesstoken.Sweep,
+) (accesstoken.SweepResult, []string, error) {
 	nowMs, err := q.DatabaseNowMs(ctx)
 	if err != nil {
-		return accesstoken.SweepResult{}, fmt.Errorf("read database clock: %w", err)
+		return accesstoken.SweepResult{}, nil, fmt.Errorf("read database clock: %w", err)
 	}
 
 	res := accesstoken.SweepResult{
@@ -463,9 +473,9 @@ func sweepInactive(ctx context.Context, q *db.Queries, sw accesstoken.Sweep) (ac
 	params := db.DisableInactiveAccessTokensParams{AtMs: nowMs, CutoffMs: nowMs - sw.Inactivity.Milliseconds()}
 
 	if sw.Tokens {
-		rows, err := q.DisableInactiveAccessTokens(ctx, params)
-		if err != nil {
-			return accesstoken.SweepResult{}, fmt.Errorf("disable inactive access tokens: %w", err)
+		rows, tokenErr := q.DisableInactiveAccessTokens(ctx, params)
+		if tokenErr != nil {
+			return accesstoken.SweepResult{}, nil, fmt.Errorf("disable inactive access tokens: %w", tokenErr)
 		}
 
 		for _, r := range rows {
@@ -473,22 +483,34 @@ func sweepInactive(ctx context.Context, q *db.Queries, sw accesstoken.Sweep) (ac
 		}
 	}
 
-	if sw.Accounts {
-		ids, err := q.DisableInactivePrincipals(ctx, db.DisableInactivePrincipalsParams(params))
-		if err != nil {
-			return accesstoken.SweepResult{}, fmt.Errorf("disable inactive accounts: %w", err)
-		}
-
-		res.Principals = ids
+	if !sw.Accounts {
+		return res, nil, nil
 	}
 
-	return res, nil
+	ids, err := q.DisableInactivePrincipals(ctx, db.DisableInactivePrincipalsParams(params))
+	if err != nil {
+		return accesstoken.SweepResult{}, nil, fmt.Errorf("disable inactive accounts: %w", err)
+	}
+
+	res.Principals = ids
+
+	skipped, err := q.ListSweepSkippedBreakGlassPrincipals(ctx, db.ListSweepSkippedBreakGlassPrincipalsParams{
+		CutoffMs: params.CutoffMs,
+		AtMs:     params.AtMs,
+	})
+	if err != nil {
+		return accesstoken.SweepResult{}, nil, fmt.Errorf("list skipped break-glass accounts: %w", err)
+	}
+
+	return res, skipped, nil
 }
 
-// appendSweepEntries appends one entry for each record of res, in the locked
+// appendSweepEntries appends one entry for each record of res and one
+// exemption entry for each skipped break-glass account, in the locked
 // transaction tx.
 func (s *Store) appendSweepEntries(
-	ctx context.Context, tx serverAuditTx, res accesstoken.SweepResult, entry accesstoken.SweepEntryFunc,
+	ctx context.Context, tx serverAuditTx, res accesstoken.SweepResult, skipped []string,
+	entry accesstoken.SweepEntryFunc,
 ) error {
 	objects := make([]string, 0, len(res.Tokens)+len(res.Principals))
 	for _, t := range res.Tokens {
@@ -501,6 +523,19 @@ func (s *Store) appendSweepEntries(
 
 	for _, object := range objects {
 		e := entry(res.At, object)
+
+		if _, err := appendServerEntry(ctx, tx, e); err != nil {
+			return fmt.Errorf("append audit entry: %w", err)
+		}
+	}
+
+	// The record of each skipped break-glass account names an account that
+	// the rule would have disabled, so an administrator can audit it. The
+	// store sets the reason: the exemption is a fact of the store rule, not
+	// a wording of the caller.
+	for _, id := range skipped {
+		e := entry(res.At, principal.Ref(id))
+		e.Reason = sweepExemptReason
 
 		if _, err := appendServerEntry(ctx, tx, e); err != nil {
 			return fmt.Errorf("append audit entry: %w", err)

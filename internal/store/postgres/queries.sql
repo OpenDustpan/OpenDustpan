@@ -2850,6 +2850,29 @@ WHERE kind = 'person' AND deleted_at_ms IS NULL AND disabled_at_ms IS NULL
   AND id NOT IN (SELECT principal_id FROM temp_admins WHERE expires_at_ms > sqlc.arg('at_ms')::bigint)
 RETURNING id;
 
+-- name: ListSweepSkippedBreakGlassPrincipals :many
+-- The enabled break-glass persons that the inactivity disable of the same
+-- parameters would disable if the exemption did not keep them. The sweep
+-- writes one audit record for each of them in the transaction of its run.
+-- Every condition of DisableInactivePrincipals is here, with break_glass
+-- flipped, so a record names an account that the rule would have disabled.
+SELECT id FROM principals
+WHERE kind = 'person' AND deleted_at_ms IS NULL AND disabled_at_ms IS NULL
+  AND break_glass = TRUE
+  AND created_at_ms <= sqlc.arg('cutoff_ms')::bigint
+  AND last_active_at_ms <= sqlc.arg('cutoff_ms')::bigint
+  AND COALESCE(last_sign_in_at_ms, 0) <= sqlc.arg('cutoff_ms')::bigint
+  AND NOT EXISTS (
+    SELECT 1 FROM access_tokens t
+    WHERE t.principal_id = principals.id
+      AND (t.created_at_ms > sqlc.arg('cutoff_ms')::bigint OR t.last_used_at_ms > sqlc.arg('cutoff_ms')::bigint)
+  )
+  AND NOT EXISTS (
+    SELECT 1 FROM sessions s
+    WHERE s.principal_id = principals.id AND s.last_seen_at_ms > sqlc.arg('cutoff_ms')::bigint
+  )
+  AND id NOT IN (SELECT principal_id FROM temp_admins WHERE expires_at_ms > sqlc.arg('at_ms')::bigint);
+
 -- name: EnablePrincipal :execrows
 -- An enable also sets the activity baseline from the database clock, the
 -- clock of the sweep, so the next sweep does not disable the principal again.

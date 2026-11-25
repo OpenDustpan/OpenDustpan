@@ -10,7 +10,15 @@ import (
 
 // TestBreakGlassRestoreAndRace proves that a restore whose swap refuses the
 // break-glass floor ends as a failed restore, names the catalog code of the
-// refusal and changes no live data.
+// refusal and changes no live data. It does not run a race. The parallel
+// disable of the last break-glass accounts is TestBreakGlassGuardRace in
+// pkg/principal. The fake of this test does not count the staged rows: it
+// injects the swap error and checks the failed state, the code and that no
+// swap was applied or kept. The count of the staged rows is the case "replace
+// refuses two live working accounts that become one" of the restore
+// conformance suite in pkg/store/storetest/restore.go: it stages a backup with
+// one working account over two live ones, expects ErrNoWorkingBreakGlass from
+// the apply and checks that the live accounts stay unchanged.
 func TestBreakGlassRestoreAndRace(t *testing.T) {
 	t.Parallel()
 

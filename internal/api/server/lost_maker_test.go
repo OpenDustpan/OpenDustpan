@@ -323,6 +323,7 @@ func TestRevokeOfLostMakersSurvivesTheCancelOfTheRequest(t *testing.T) {
 		entries: func(st *sqlite.Store) auditStore { return st }, passkeys: nil, tweak: nil,
 		links: noGitHostLinks, ports: accessPorts{collections: nil, settings: nil},
 		now: nil, logger: nil, noSignIn: false, getGrantErr: nil, afterRevoke: cancel, tokenList: nil,
+		principalReadFails: "",
 	})
 	seedLostMaker(t, f, pathDirect)
 
@@ -377,7 +378,7 @@ func TestRevokeOfLostMakersEndsAtItsTimeout(t *testing.T) {
 		entries: func(st *sqlite.Store) auditStore { return st }, passkeys: nil, tweak: nil,
 		links: noGitHostLinks, ports: accessPorts{collections: nil, settings: nil},
 		now: nil, logger: slog.New(slog.NewTextHandler(&logs, nil)), noSignIn: false, getGrantErr: nil,
-		afterRevoke: nil, tokenList: block,
+		afterRevoke: nil, tokenList: block, principalReadFails: "",
 	})
 	seedLostMaker(t, f, pathDirect)
 	apiserver.SetLostMakerRevokeTimeout(f.handler.Handler, 100*time.Millisecond)

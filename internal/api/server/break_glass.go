@@ -314,10 +314,15 @@ func (h *Handler) rotateBreakGlass(w http.ResponseWriter, r *http.Request, p ide
 
 	account, err := h.breakGlassAccount(ctx, id)
 	if err != nil {
+		reason := "the ID names no break-glass account"
+		if !errors.Is(err, errBreakGlassNotFound) {
+			reason = "the read of the principal failed"
+		}
+
 		h.appendServerChangeReason(r, p, serverChange{
 			at: h.now(), action: identity.ActionServerManagePrincipals, object: principal.Ref(id),
 			outcome: audit.OutcomeDenied,
-		}, "the ID names no break-glass account")
+		}, reason)
 		h.writeError(ctx, w, err)
 
 		return

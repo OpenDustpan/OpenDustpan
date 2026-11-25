@@ -162,6 +162,9 @@ type accessFixtureParts struct {
 	// tokens, and its error is the error of the list. A test blocks the list
 	// until the context ends.
 	tokenList func(ctx context.Context) error
+	// principalReadFails, when not empty, is the ID of a principal whose read
+	// by the principal service fails with a store error.
+	principalReadFails string
 }
 
 // newAccessFixturePorts is newAccessFixture with the collection port and the
@@ -172,7 +175,7 @@ func newAccessFixturePorts(t *testing.T, ports accessPorts) accessFixture {
 	return newAccessFixtureAll(t, accessFixtureParts{
 		entries: func(st *sqlite.Store) auditStore { return st }, passkeys: nil, tweak: nil,
 		links: noGitHostLinks, ports: ports, now: nil, logger: nil,
-		noSignIn: false, getGrantErr: nil, afterRevoke: nil, tokenList: nil,
+		noSignIn: false, getGrantErr: nil, afterRevoke: nil, tokenList: nil, principalReadFails: "",
 	})
 }
 
@@ -188,7 +191,7 @@ func newAccessFixtureSignIn(
 	return newAccessFixtureAll(t, accessFixtureParts{
 		entries: entries, passkeys: passkeys, tweak: tweak, links: noGitHostLinks,
 		ports: accessPorts{collections: nil, settings: nil}, now: nil, logger: nil,
-		noSignIn: false, getGrantErr: nil, afterRevoke: nil, tokenList: nil,
+		noSignIn: false, getGrantErr: nil, afterRevoke: nil, tokenList: nil, principalReadFails: "",
 	})
 }
 
@@ -211,7 +214,7 @@ func newAccessFixtureLinks(
 	return newAccessFixtureAll(t, accessFixtureParts{
 		entries: entries, passkeys: nil, tweak: nil, links: links,
 		ports: accessPorts{collections: nil, settings: nil}, now: nil, logger: nil,
-		noSignIn: false, getGrantErr: nil, afterRevoke: nil, tokenList: nil,
+		noSignIn: false, getGrantErr: nil, afterRevoke: nil, tokenList: nil, principalReadFails: "",
 	})
 }
 
@@ -226,7 +229,7 @@ func newAccessFixtureClock(
 	return newAccessFixtureAll(t, accessFixtureParts{
 		entries: entries, passkeys: nil, tweak: nil, links: noGitHostLinks,
 		ports: accessPorts{collections: nil, settings: nil}, now: now, logger: logger,
-		noSignIn: false, getGrantErr: nil, afterRevoke: nil, tokenList: nil,
+		noSignIn: false, getGrantErr: nil, afterRevoke: nil, tokenList: nil, principalReadFails: "",
 	})
 }
 
@@ -293,7 +296,7 @@ func newAccessFixtureAll(t *testing.T, parts accessFixtureParts) accessFixture {
 	principals, err := principal.NewService(
 		principal.Config{
 			TempAdmins: nil,
-			Store:      st,
+			Store:      readFailPrincipals{Store: st, failID: parts.principalReadFails},
 			Guard:      grants,
 			GroupReach: grants,
 			Namespaces: st,

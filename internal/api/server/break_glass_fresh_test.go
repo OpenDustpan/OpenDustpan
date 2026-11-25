@@ -2,8 +2,11 @@ package server_test
 
 import (
 	"bytes"
+	"context"
+	"database/sql"
 	"encoding/base64"
 	"encoding/json"
+	"errors"
 	"maps"
 	"net/http"
 	"net/http/httptest"
@@ -481,5 +484,167 @@ func TestBreakGlassRotateRefusesOtherRecords(t *testing.T) {
 				t.Fatalf("accounts = %+v, want the old passkey %s only", accounts, account.Passkeys[0].ID)
 			}
 		})
+	}
+}
+
+// plantBreakGlassRecord stores a principal row that holds the break-glass flag
+// but is not a break-glass person of the installation, as a row of another
+// version would. It uses a second connection to the fixture's database file.
+func plantBreakGlassRecord(t *testing.T, f accessFixture, id, kind, namespace string) {
+	t.Helper()
+
+	conn, err := sql.Open("sqlite", f.path)
+	if err != nil {
+		t.Fatalf("open database: %v", err)
+	}
+
+	t.Cleanup(func() {
+		if closeErr := conn.Close(); closeErr != nil {
+			t.Errorf("close database: %v", closeErr)
+		}
+	})
+
+	const query = `INSERT INTO principals
+		(id, subject, display_name, kind, source, created_at_ms, updated_at_ms, namespace, break_glass)
+		VALUES (?, ?, '', ?, 'local', 0, 0, ?, 1)`
+
+	if _, execErr := conn.ExecContext(t.Context(), query, id, id, kind, namespace); execErr != nil {
+		t.Fatalf("plant break-glass record %q: %v", id, execErr)
+	}
+}
+
+// breakGlassMalformedCase is a record that holds the break-glass flag but is
+// not a break-glass person of the installation.
+type breakGlassMalformedCase struct {
+	name      string
+	id        string
+	kind      string
+	namespace string
+}
+
+// TestBreakGlassRotateRefusesMalformedBreakGlassRecord sends a rotation to a
+// record that holds the break-glass flag but is not a person of the
+// installation. No port writes such a row, so it stands for data of another
+// version. The check of the kind and the namespace of breakGlassAccount refuses
+// it with 404 and one denied entry, and keeps the real account unchanged.
+func TestBreakGlassRotateRefusesMalformedBreakGlassRecord(t *testing.T) {
+	t.Parallel()
+
+	cases := []breakGlassMalformedCase{
+		{
+			name: "service with the flag", id: "prn-fake-service",
+			kind: string(principal.KindService), namespace: "",
+		},
+		{
+			name: "person of a namespace with the flag", id: "prn-fake-ns",
+			kind: string(principal.KindPerson), namespace: "acme",
+		},
+	}
+
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			t.Parallel()
+			checkBreakGlassRotateMalformed(t, tc)
+		})
+	}
+}
+
+func checkBreakGlassRotateMalformed(t *testing.T, tc breakGlassMalformedCase) {
+	t.Helper()
+
+	f := newAccessFixture(t)
+	f.seedSessionAdmin(t, "admin")
+	account := addBreakGlassAccount(t, f)
+	plantBreakGlassRecord(t, f, tc.id, tc.kind, tc.namespace)
+
+	body := breakGlassBody(t, map[string]any{"oldPasskey": account.Passkeys[0].ID, "name": "next-key"})
+	rec := f.freshPasskeyClient(t, "admin").do(http.MethodPost, breakGlassPath+"/"+tc.id+"/rotate", body)
+
+	if got := decodeErrorBody(t, rec); rec.Code != http.StatusNotFound || got.ErrorCode != errcode.BreakGlassNotFound {
+		t.Fatalf("rotate %s = %d %s, want 404 with errorCode %s", tc.id, rec.Code, rec.Body.String(),
+			errcode.BreakGlassNotFound)
+	}
+
+	object := principal.Ref(tc.id)
+	denied := floorEntries(t, f.store, identity.ActionServerManagePrincipals, audit.OutcomeDenied, object)
+	if len(denied) != 1 || denied[0].Reason == "" {
+		t.Fatalf("denied entries on %s = %+v, want one with a reason", object, denied)
+	}
+
+	checkBreakGlassKeptPasskey(t, f, account)
+}
+
+// readFailPrincipals is the SQLite store with a read of one ID that fails with
+// a store error that is not principal.ErrNotFound. With an empty failID it
+// fails no read. It embeds the concrete store, so each optional method of the
+// store stays visible to the principal service.
+type readFailPrincipals struct {
+	*sqlite.Store
+
+	failID string
+}
+
+var errPrincipalReadFailed = errors.New("select principal: the database is not available")
+
+func (s readFailPrincipals) GetPrincipal(ctx context.Context, id string) (principal.Principal, error) {
+	if s.failID != "" && id == s.failID {
+		return principal.Principal{}, errPrincipalReadFailed
+	}
+
+	return s.Store.GetPrincipal(ctx, id)
+}
+
+// TestBreakGlassRotateReadFailureReason makes the read of the principal fail
+// with a store error. The denied entry names the failed
+// read as its reason, not an ID that names no account. The failing store hides
+// the list route of the fixture, so the test does not read the passkeys back.
+func TestBreakGlassRotateReadFailureReason(t *testing.T) {
+	t.Parallel()
+
+	const id = "prn-unreadable"
+
+	f := newAccessFixtureAll(t, accessFixtureParts{
+		entries:  func(st *sqlite.Store) auditStore { return st },
+		passkeys: nil, tweak: nil, links: noGitHostLinks,
+		ports: accessPorts{collections: nil, settings: nil}, now: nil, logger: nil,
+		noSignIn: false, getGrantErr: nil, afterRevoke: nil, tokenList: nil, principalReadFails: id,
+	})
+	f.seedSessionAdmin(t, "admin")
+	account := addBreakGlassAccount(t, f)
+
+	body := breakGlassBody(t, map[string]any{"oldPasskey": account.Passkeys[0].ID, "name": "next-key"})
+	rec := f.freshPasskeyClient(t, "admin").do(http.MethodPost, breakGlassPath+"/"+id+"/rotate", body)
+
+	if rec.Code != http.StatusInternalServerError {
+		t.Fatalf("rotate %s = %d %s, want 500", id, rec.Code, rec.Body.String())
+	}
+
+	denied := floorEntries(t, f.store, identity.ActionServerManagePrincipals, audit.OutcomeDenied, principal.Ref(id))
+	if len(denied) != 1 || denied[0].Reason != "the read of the principal failed" {
+		t.Fatalf("denied entries on %s = %+v, want one with the read-failure reason",
+			principal.Ref(id), denied)
+	}
+
+	checkBreakGlassKeptPasskey(t, f, account)
+}
+
+// checkBreakGlassKeptPasskey proves that a refusal left the real account with
+// its old passkey and no other working credential.
+func checkBreakGlassKeptPasskey(t *testing.T, f accessFixture, account breakGlassAccountDoc) {
+	t.Helper()
+
+	accounts := breakGlassAccounts(t, f)
+
+	var kept *breakGlassAccountDoc
+	for i := range accounts {
+		if accounts[i].ID == account.ID {
+			kept = &accounts[i]
+			break
+		}
+	}
+
+	if kept == nil || len(kept.Passkeys) != 1 || kept.Passkeys[0].ID != account.Passkeys[0].ID {
+		t.Fatalf("accounts = %+v, want the old passkey %s of the real account only", accounts,
+			account.Passkeys[0].ID)
 	}
 }
