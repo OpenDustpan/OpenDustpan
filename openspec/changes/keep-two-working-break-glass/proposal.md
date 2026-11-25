@@ -1,18 +1,18 @@
 ---
-version: 8
+version: 10
 ---
 
 Issue: #623, #627, #633.
 
 ## Why
 
-**Persona: site administrator.** A site administrator must recover an installation when the identity provider fails. Without two working break-glass accounts and a guard, one disable, revoke, passkey removal or restore can lock every administrator out.
+**Persona: site administrator.** A site administrator must recover an installation when the identity provider fails. Without two working break-glass accounts and a guard, one disable, delete or restore can lock every administrator out. The guard of the other writes is the change break-glass-floor-other-writes.
 
 The user path this change must make work:
 
 1. **Docs page.** The site administrator opens the guide for break-glass accounts and reads the floor and the guard.
 2. **API.** The site administrator lists the break-glass accounts with the new read route and adds accounts with a passkey or a hardware key. The console and the CLI use the same routes.
-3. **API.** The site administrator tries a change that lowers the count of working paths below the floor and gets 409 with the count.
+3. **API.** The site administrator tries to disable or delete the last enabled break-glass account and gets 409 with the count.
 4. **CLI.** The site administrator rotates a break-glass credential in one call. The new credential works before the old one stops.
 5. **Server start.** The operator restores a backup. A restore that leaves fewer than two working paths is refused before the swap.
 
@@ -20,17 +20,15 @@ Errors the person may hit, and the one command that helps:
 
 | Error | What the answer says | The command that helps |
 | --- | --- | --- |
-| A revoke, credential change, passkey removal, expiry change, policy block or IP allowlist change leaves fewer than two working break-glass paths. | 409 with code break-glass.floor and text that names the live count. The audit log records the refused change. | `GET /api/dustpan/v1/break-glass/accounts` |
-| A disable, delete or sweep removes the last enabled break-glass account. | 409 with code break-glass.last-enabled. The audit log records the refused change. | `GET /api/dustpan/v1/break-glass/accounts` |
-| A restore leaves fewer than two working paths. | 409 with code break-glass.restore-refused before the swap. | `GET /api/dustpan/v1/break-glass/accounts` |
-| A concurrent write holds the lock on the break-glass set past the lock timeout. | 409 with code break-glass.busy. No change is written. A retry is safe. | `GET /api/dustpan/v1/break-glass/accounts` |
+| A disable or delete removes the last enabled break-glass account. | 409 with code principal.no-working-break-glass. The audit log records the refused change. | `GET /api/dustpan/v1/break-glass/accounts` |
+| A restore leaves fewer than two working paths. | 409 with code principal.no-working-break-glass before the swap. | `GET /api/dustpan/v1/break-glass/accounts` |
 | A guarded change comes without a fresh authentication. | 403 with code mfa.fresh-step-required. The text names the page that enrolls a factor. | `GET /api/dustpan/v1/break-glass/accounts` |
 | A rotation names an account that is not a break-glass account or does not exist. | 404 with code break-glass.not-found. | `GET /api/dustpan/v1/break-glass/accounts` |
 
 Evidence for the claims above:
 
 - ADR 70 decisions 23 and 24 require two accounts and a guard that refuses a change that leaves fewer than two working paths. Proof: Pack ADR 70 decisions 23 and 24, and issue 623.
-- ADR 306 decisions 3 and 6 stop disable, delete and sweep at the last enabled account. Proof: Pack ADR 306 decisions 3 and 6.
+- ADR 306 decisions 3 and 6 stop disable and delete at the last enabled account. The sweep never disables a break-glass account on main, and it stays exempt. Proof: Pack ADR 306 decisions 3 and 6.
 - The IP allowlist code is in internal/api/server/ip_allowlist.go and pkg/ipallow. Proof: The pack path list shows both as existing.
 - The principal domain is in pkg/principal and the guides are in docs/guides. Proof: The pack path list shows both as existing.
 - The passkey or hardware key requirement comes from decision 23 of ADR 70, and ADR 320 decision 23 repeats it. Proof: Pack issue 627 and ADR 320 decision 23 text: it signs in with a passkey or a hardware key only.
@@ -40,16 +38,19 @@ Evidence for the claims above:
 
 - New route GET /api/dustpan/v1/break-glass/accounts: lists the break-glass accounts, the live count of working paths and the missing count. The count also drops by time alone when an account expires, and the route shows it. Its action is server:read-principals and its object is @server (ServerObject). No new action exists.
 - New route POST /api/dustpan/v1/break-glass/accounts: adds a break-glass account with a passkey or a hardware key, for first setup and for upgrade. It needs a fresh authentication. Its action is server:manage-principals and its object is @server (ServerObject). The guard never refuses it, because it raises the count, also when the count is zero.
-- A count of working break-glass accounts in pkg/principal with the four properties of ADR 70 decision 24, and the passkey or hardware key of decision 23. On the hosted service it counts principals with the role admin on the namespace. A revoke of that grant, a membership change or a move of a principal runs the guard.
-- A guard in the write transaction of each covered change. Disable, delete and sweep refuse when no enabled account would stay. Each disable writes an audit entry and notifies the other administrators. Re-enable stays checked and a disable works in maintenance mode. Every other lowering change refuses when it lowers the count below two. Each refusal writes an audit entry.
+- A count of working break-glass accounts in pkg/principal with the four properties of ADR 70 decision 24, and the passkey or hardware key of decision 23. On the hosted service it counts principals with the role admin on the namespace. The guard covers disable, delete and restore only. A revoke of that grant, a membership change and a move of a principal go to the change break-glass-floor-other-writes.
+- A guard in the write transaction of disable, delete and restore. Disable and delete refuse when no enabled account would stay. The restore refuses when fewer than two working paths would stay. The three refusals use the one error code principal.no-working-break-glass. Each refusal writes an audit entry. Re-enable stays checked and a disable works in maintenance mode.
+- The sweep stays exempt in SQL, as on main. For each break-glass account that the sweep skips, it writes one audit record: kind change, outcome success, scope @server, object the principal reference of the account, reason "break-glass account is exempt", and the caller fields of the sweep entry (the same entry shape that the sweep writes for a disabled account in pkg/accesstoken/service.go).
 - New route POST /api/dustpan/v1/break-glass/accounts/{id}/rotate: atomic rotation of a break-glass credential.
 - The restore check reads the same count on staged data, and the swap runs in a transaction that counts again.
-- The lock timeout is an installation setting, breakGlassLockSeconds, with a default of 5 and its effective value shown in the settings resource. It is declared in NEW file pkg/principal/breakglass_setting.go, like `pkg/session/breakglass.go`.
+- The guard uses the conditional SQL update of the disable and the delete: the statement changes the row only when another enabled account stays.
 - Rotation is one new method of the passkey port, RotatePasskey in pkg/mfa/mfa.go, with the adapters in internal/store/sqlite/passkeys.go and internal/store/postgres/passkeys.go and a conformance case that two parallel rotations leave exactly one working credential.
 - A guide section for the break-glass accounts, the guard and the floor.
 
 Out of scope:
 
+- The guard of the other writes: access Revoke, RemovePasskey and the IP allowlist writes (change break-glass-floor-other-writes, which depends on this change).
+- The notice to the other administrators on a disable (change break-glass-disable-notice, which depends on this change).
 - The first-setup gate on two break-glass accounts and the shared e2e first-setup step. No setup-finish flow exists on main, so a placeholder change owns both (change keep-two-break-glass-at-setup, which depends on this change).
 - Typed reason, alert and session limit of break-glass sign-in, and the per-use review text (change break-glass-sign-in-typed).
 - Reach recheck and act-as edges, and their guide text (change check-reach-when-grant-membership).
@@ -77,7 +78,7 @@ Each fact names its file, line and function on main. The change specifies only t
 
 - The passkey port removes a passkey in its own transaction. This change adds the rotation method next to it. (`pkg/mfa/mfa.go:227 (func RemovePasskey of PasskeyStore)`)
 - The service removes a passkey of the caller. The rotation service method sits next to it. (`internal/mfasvc/service.go:553 (func RemovePasskey)`)
-- A test shows that the inactivity sweep never disables a break-glass account. This change replaces that rule with the last-enabled rule for the sweep. (`pkg/accesstoken/accesstoken_test.go:1301 (func TestSweepNeverDisablesBreakGlass)`)
+- A test shows that the inactivity sweep never disables a break-glass account. This change keeps that rule and adds one audit record for each skipped account. (`pkg/accesstoken/accesstoken_test.go:1301 (func TestSweepNeverDisablesBreakGlass)`)
 - A test shows that the inactivity sweep disables inactive tokens and accounts. (`pkg/accesstoken/accesstoken_test.go:1248 (func TestSweepDisablesInactiveTokensAndAccounts)`)
 - A temporary administrator test exists for the expiry of recovery access. (`pkg/dustpan/tempadmin_test.go:85 (func TestExpiredTempAdminStaysDenied)`)
 - Restore error codes exist on main. (`internal/errcode/catalog_restore.go:7 (error code restore.blobs-missing)`)
@@ -100,7 +101,7 @@ Each quote is copied from the file in `docs/adr/`. Code adds the owner tags, the
 - Current rule: this ADR, with ADR 142, 210, 216, 222, 227, 245, 306, 320, 321, 332, 354, 369.
 - Quote: "Each installation has break-glass accounts, the hosted service too. An installation has at least two break-glass accounts. Each one belongs to one named person. No account depends on the identity provider. Each account s"
 - Quote: "A guard keeps two working paths. The first setup cannot finish without two break-glass accounts. The server refuses each change that leaves fewer than two working paths, a restore included. It counts only an account that"
-- Effect: Decision 24 gives the four properties of a working account. Decision 23 gives the passkey or hardware key rule. Every lowering change except disable, delete and sweep keeps the floor of two. First setup needs two accounts.
+- Effect: Decision 24 gives the four properties of a working account. Decision 23 gives the passkey or hardware key rule. The restore keeps the floor of two. The other lowering writes keep it in the change break-glass-floor-other-writes. First setup needs two accounts.
 - Conflict: none.
 
 **ADR 306: Break-glass: the session limit, the mass-suspension alert and the disable rules** (owner-tagged (all decisions)).
@@ -109,7 +110,7 @@ Each quote is copied from the file in `docs/adr/`. Code adds the owner tags, the
 - Changed by: -. Chain to the end: none.
 - Current rule: this ADR.
 - Quote: "Delete and sweep (owner, 2026-10-20, accepted as written for now). Delete and sweep follow the same "not the last one" rule. This changes ADR 70 decisions 25 and 26. The sweep may disable or delete a break-glass principal."
-- Effect: Disable, delete and sweep use the rule that one enabled account must stay, with 409 in the write transaction. Each disable is audited and notifies the other administrators. Each sweep action writes an audit record that names the sweep, the account and the reason.
+- Effect: Disable and delete use the rule that one enabled account must stay, with 409 in the write transaction. Decision 6 says the sweep may disable or delete a break-glass principal. This change does not use that permission: the sweep stays exempt, and a sweep that is exempt never leaves fewer enabled accounts than the rule needs. Each skipped account gets one audit record that names the sweep, the account and the reason. The disable notice is the change break-glass-disable-notice.
 - Conflict: none.
 
 **ADR 216: Namespace administration and operator scope: where each installation action goes (owner)** (owner-tagged (all decisions)).
@@ -145,9 +146,9 @@ none
 
 Questions considered and answered:
 
-- Which threshold applies to which change? Owner decision, 13 Nov 2026 (queue P19), provisional and built as the reading: disable, delete and sweep stop at the last enabled account (ADR 306 d3, d6). Every other change keeps the floor of two working paths (ADR 70 d24). First setup needs two, and the change keep-two-break-glass-at-setup builds that part.
-- Does a disable that leaves one enabled account break ADR 70 decision 24? No. ADR 306 decision 3 changes decision 24 for disable, delete and sweep. The change passes and the answer carries the live count.
-- Does ADR 70 decision 25, no job disables a break-glass account, conflict with the sweep? ADR 306 decision 6 changes decisions 25 and 26 for the sweep. The sweep follows the not-the-last-one rule and writes an audit record.
+- Which threshold applies to which change? Owner decision, 13 Nov 2026 (queue P19), provisional and built as the reading: disable and delete stop at the last enabled account (ADR 306 d3), and a restore keeps the floor of two working paths (ADR 70 d24). The sweep stays exempt. The other writes keep the floor of two in the change break-glass-floor-other-writes. First setup needs two, and the change keep-two-break-glass-at-setup builds that part.
+- Does a disable that leaves one enabled account break ADR 70 decision 24? No. ADR 306 decision 3 changes decision 24 for disable and delete. The change passes and the answer carries the live count.
+- Does ADR 70 decision 25, no job disables a break-glass account, conflict with the sweep? ADR 306 decision 6 says the sweep may disable a break-glass principal. It is permission, not a duty. The sweep stays exempt, as on main, and writes one audit record for each account that it skips.
 - What counts as a working account? ADR 70 decision 24 gives enabled, not expired, not blocked by a policy, not dependent on the identity provider. ADR 70 decision 23 and ADR 320 decision 23 give the passkey or hardware key.
 - Which source is authoritative for the count? The live rows are the only source. No stored setup list exists. Time alone can lower the count, so the list route computes it at read time.
 - What does a person with no enrolled factor do? ADR 301 decision 4 and ADR 227 decision 2 apply: 403 with mfa.fresh-step-required and a text that names the enrollment page.

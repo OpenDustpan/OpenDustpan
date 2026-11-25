@@ -2,7 +2,7 @@
 
 ### Requirement: dusty-is-an-agent-principal
 
-The server SHALL make one agent principal with the subject `dusty` in the transaction that stores the first model connection, with the connecting administrator as its creator and first sponsor.
+The server SHALL make one agent principal with the subject `dusty` in one transaction of the store port, with the connecting administrator as its creator and first sponsor.
 
 #### Scenario: first connect makes Dusty
 - **WHEN** an administrator with `server:manage-agent` connects a model and no record with the subject `dusty` exists
@@ -13,8 +13,8 @@ The server SHALL make one agent principal with the subject `dusty` in the transa
 - **THEN** the server changes the connection only, and the record, the sponsors and the grants stay as they were
 
 #### Scenario: failure rolls back
-- **WHEN** one write of the connect fails
-- **THEN** the server stores none of the writes
+- **WHEN** one write of ConnectModel fails
+- **THEN** the server stores none of the writes of ConnectModel, because the store port writes them in one transaction
 
 ### Requirement: agent-record-sponsors
 
