@@ -22,7 +22,7 @@ ADR 129 (accepted 2026-10-18, owner) says: "The capability probe is a durable op
 ## Out of scope
 
 - `PUT /api/agent/connection` and the 202 with a pending document: the change `agent-connect-route`. This change gives the route the `Probes.Start` function and the promote step.
-- The adapters and the secret filter: the change `agent-model-adapters`.
+- The adapters: the change `agent-model-adapters`. The secret filter: the change `agent-secret-filter`.
 - The document and the stored pending document: the change `agent-connection-document-and-secrets`.
 - `agent.ConnectModel` and the principal of Dusty: the change `dusty-agent-principal-on-model-connect`.
 - The console view of a probe.
@@ -30,7 +30,8 @@ ADR 129 (accepted 2026-10-18, owner) says: "The capability probe is a durable op
 ## Depends on
 
 - `agent-connection-document-and-secrets` (`ConnectionStore.PutPending`, `Promote`, `Delete`).
-- `agent-model-adapters` (`agent.NewModel`, `SecretFilter`, the dial guard).
+- `agent-model-adapters` (`agent.NewModel`, the dial guard).
+- `agent-secret-filter` (`SecretFilter`: the probe calls it on each failure text that it builds).
 - Main: the durable operation runner (ADR 72), the token ledger (ADR 120 decision 20).
 
 ## Usability
