@@ -270,8 +270,9 @@ func approvalsRefuseWhatDoesNotWait(ctx context.Context, t *testing.T, env *e2e.
 
 // approvalsRejectNeedsCancel proves that a rejection by a person who is not
 // the starter needs job:cancel. A member with job:approve and job:read, and no
-// job:cancel, rejects the job that the administrator started, and the server
-// answers 403.
+// job:cancel, rejects the job that the administrator started. The grant list
+// shows the role of the member, and the server answers 403 that names
+// job:cancel.
 func approvalsRejectNeedsCancel(ctx context.Context, t *testing.T, env *e2e.Env, started jobDoc) {
 	t.Helper()
 
@@ -298,6 +299,8 @@ func approvalsRejectNeedsCancel(ctx context.Context, t *testing.T, env *e2e.Env,
 		want: http.StatusCreated,
 	}, nil)
 
+	checkRejectorGrant(ctx, t, env, person, role)
+
 	token := env.PersonalToken(ctx, t, person.ID, "reject-no-cancel")
 
 	status, body, err := env.ServerAPIStatusAs(
@@ -307,8 +310,67 @@ func approvalsRejectNeedsCancel(ctx context.Context, t *testing.T, env *e2e.Env,
 		t.Fatalf("reject as a member without job:cancel: %v", err)
 	}
 
-	if status != http.StatusForbidden || !strings.Contains(body, `"errorCode":"access.denied"`) {
-		t.Fatalf("reject as a member without job:cancel = %d %s, want 403 access.denied", status, body)
+	if status != http.StatusForbidden || !strings.Contains(body, `"errorCode":"access.denied"`) ||
+		!strings.Contains(body, "job:cancel") {
+		t.Fatalf("reject as a member without job:cancel = %d %s, want 403 access.denied naming job:cancel",
+			status, body)
+	}
+}
+
+// checkRejectorGrant proves that the grant list shows the role of person, and
+// that the stored role holds job:approve and not job:cancel.
+func checkRejectorGrant(ctx context.Context, t *testing.T, env *e2e.Env, person e2ePrincipal, role e2eRole) {
+	t.Helper()
+
+	var grants e2eGrantList
+
+	principalCall(ctx, t, env, principalStep{
+		method: http.MethodGet,
+		path:   "/api/server/namespaces/" + e2e.Namespace + "/grants?holder=principal:" + person.ID,
+		body:   "",
+		want:   http.StatusOK,
+	}, &grants)
+
+	held := false
+
+	for i := range grants.Grants {
+		if grants.Grants[i].Subject == "principal:"+person.ID && grants.Grants[i].Role == role.ID {
+			held = true
+
+			break
+		}
+	}
+
+	if !held {
+		t.Fatalf("grant list of %s holds no grant of %s with role %s", e2e.Namespace, person.ID, role.ID)
+	}
+
+	// Read the role that the server stored, not the body that the create
+	// answered with.
+	var stored e2eRole
+
+	principalCall(ctx, t, env, principalStep{
+		method: http.MethodGet, path: "/api/server/roles/" + role.ID, body: "", want: http.StatusOK,
+	}, &stored)
+
+	if stored.ID != role.ID {
+		t.Fatalf("GET role %s answered role %q", role.ID, stored.ID)
+	}
+
+	approve, cancel := false, false
+
+	for _, action := range stored.Actions {
+		if action == string(identity.ActionJobApprove) {
+			approve = true
+		}
+
+		if action == string(identity.ActionJobCancel) {
+			cancel = true
+		}
+	}
+
+	if !approve || cancel {
+		t.Fatalf("stored role actions = %q, want job:approve and no job:cancel", stored.Actions)
 	}
 }
 
