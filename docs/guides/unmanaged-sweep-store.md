@@ -56,6 +56,6 @@ The SQLite and PostgreSQL packages also have the test `TestUnmanagedSQLTextStays
 ## What the SQL adapters do not cover
 
 - Soft-deleted namespace: the store has no soft delete of a namespace. The fence case covers a namespace with no row and a purged namespace only.
-- Finding bounds: `RunScanStore` does not run the cases of the findings, and the SQLite and PostgreSQL adapters have no finding store yet. The 1,000-observation bound of `Record` runs only on the memory adapter of the suite. The change `160-165-report-intake-findings` (task 2.1) adds the SQL finding store and runs `RunSweepStore` with this case on SQLite and PostgreSQL.
+- Finding bounds: `RunScanStore` does not run the cases of the findings, and the SQLite and PostgreSQL adapters have no finding store yet. The 1,000-observation bound of `Record` runs only on the memory adapter of the suite. A later release adds the SQL finding store, and the suite then runs this case on SQLite and PostgreSQL.
 - Finding action: the cases of `ErrStatusChanged` and of the audit entry in the transaction of an action are finding cases. They do not run on the SQL adapters for the same reason.
-- Audit of a refused write: the store returns `namespace.ErrFenced` and writes no audit entry. The service audits the refusal. The change `160-165-sweep-targets-lifecycle` adds that service.
+- Audit of a refused write: the store returns `namespace.ErrFenced` and writes no audit entry. The service audits the refusal. A later release adds that service.
