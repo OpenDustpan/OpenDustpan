@@ -366,20 +366,37 @@ func CheckExchangeMatch(rule Row, matches []MatchRow, x *trustrule.Exchange) err
 
 	for i := range matches {
 		// Defense in depth: the query compares the same columns with `=`; this
-		// compare stays so that a wrong query, an index or a driver cannot make
-		// the store accept a row that does not name the SPIFFE ID of the
-		// exchange.
+		// compare stays so that a query, an index or a driver that returns
+		// extra rows cannot make the store count a row of another bundle or of
+		// another SPIFFE ID. It does not rely on the WHERE clause, the index or
+		// the driver. It cannot find a twin that the query left out: the
+		// `namespace`, `bundle_id` and `spiffe_id_pattern` conditions of the
+		// query and its LIMIT 2 must return each twin, and the adapter tests
+		// of the query check that.
 		if matches[i].BundleID == rule.BundleID && matches[i].SpiffeIDPattern == x.SPIFFEID {
 			matched = append(matched, matches[i].ID)
 		}
 	}
 
-	if len(matched) != 1 || matched[0] != string(x.Rule) {
-		return fmt.Errorf("%w: at least %d rules name the SPIFFE ID of the exchange, want only its rule",
+	return matchRefusal(matched, x.Rule)
+}
+
+// matchRefusal returns nil when matched holds only the rule of the exchange,
+// and trustrule.ErrNotFound with the number of the matched rules otherwise.
+// The query reads at most 2 rows, so 2 matched rows can stand for more rules.
+func matchRefusal(matched []string, rule trustrule.ID) error {
+	switch {
+	case len(matched) == 0:
+		return fmt.Errorf("%w: no rule names the SPIFFE ID of the exchange", trustrule.ErrNotFound)
+	case len(matched) == 1 && matched[0] == string(rule):
+		return nil
+	case len(matched) == 1:
+		return fmt.Errorf("%w: 1 rule names the SPIFFE ID of the exchange, but it is not the rule of the exchange",
+			trustrule.ErrNotFound)
+	default:
+		return fmt.Errorf("%w: %d or more rules name the SPIFFE ID of the exchange. Only 1 rule can name it",
 			trustrule.ErrNotFound, len(matched))
 	}
-
-	return nil
 }
 
 // CheckExchangeRule returns trustrule.ErrNotFound when the stored rule row of

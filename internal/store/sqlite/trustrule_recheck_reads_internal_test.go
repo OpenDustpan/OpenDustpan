@@ -4,6 +4,7 @@ package sqlite
 
 import (
 	"errors"
+	"fmt"
 	"strings"
 	"testing"
 
@@ -40,7 +41,7 @@ func TestRecheckExchangeReadsOnlyTheMatchingRules(t *testing.T) {
 
 	s := openInternalTemplated(t)
 	fix := seedTrustRecheckFixture(t, s)
-	seedTrustRecheckOtherBundleTwin(t, s)
+	seedTrustRecheckOtherBundleTwin(t, s, fix)
 	seedTrustRecheckCrossNamespaceRule(t, s, fix)
 
 	recorder := &trustRecheckRecorder{DBTX: s.conn, calls: nil}
@@ -129,10 +130,18 @@ func TestRecheckExchangeHostileRows(t *testing.T) {
 			wantErr: trustrule.ErrNotFound,
 		},
 		{
-			name: "a twin of another bundle",
-			mutate: func(t *testing.T, s *Store, _ trustRecheckFixture) {
+			name: "a twin of another bundle in the same namespace",
+			mutate: func(t *testing.T, s *Store, fix trustRecheckFixture) {
 				t.Helper()
-				seedTrustRecheckOtherBundleTwin(t, s)
+				seedTrustRecheckOtherBundleTwin(t, s, fix)
+			},
+			wantErr: nil,
+		},
+		{
+			name: "a twin with a NULL bundle in the same namespace",
+			mutate: func(t *testing.T, s *Store, fix trustRecheckFixture) {
+				t.Helper()
+				seedTrustRecheckHostileRule(t, s, fix.rule.PrincipalID, "twin-null-bundle", nil)
 			},
 			wantErr: nil,
 		},
@@ -184,19 +193,129 @@ func TestRecheckExchangeHostileRows(t *testing.T) {
 	}
 }
 
-// seedTrustRecheckOtherBundleTwin stores a rule that names the SPIFFE ID of
-// the exchange in the bundle of another namespace.
-func seedTrustRecheckOtherBundleTwin(t *testing.T, s *Store) {
+// TestRecheckExchangeHostileRowsCannotFillTheLimit stores hostile rows of the
+// same namespace and SPIFFE ID with another bundle and with a NULL bundle
+// before the rule of the exchange, so that they come first in the order of
+// each index and of the table. The match query reads at most 2 rows. Only its
+// bundle_id condition keeps the hostile rows out of the 2 slots: without it
+// the rule of the exchange is refused, and a real twin can hide behind them.
+func TestRecheckExchangeHostileRowsCannotFillTheLimit(t *testing.T) {
+	t.Parallel()
+
+	cases := []struct {
+		name    string
+		twin    bool
+		wantErr error
+	}{
+		{"the rule of the exchange alone is accepted", false, nil},
+		{"a real twin of the same bundle is refused", true, trustrule.ErrNotFound},
+	}
+
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			t.Parallel()
+
+			s := openInternalTemplated(t)
+			fix := seedTrustRecheckLimitFixture(t, s)
+			if tc.twin {
+				seedTrustRecheckRuleRow(t, s, trustRecheckRuleSpec{
+					ns: fix.fence.Namespace, worker: fix.rule.PrincipalID, name: "twin",
+					pattern: trustRecheckSPIFFEID, bundle: trustrule.BundleID(fix.rule.BundleID),
+				})
+			}
+
+			x := trustRecheckExchange(fix.rule, fix.bundle)
+
+			err := recheckExchange(t.Context(), db.New(s.conn), fix.fence.Namespace, fix.rule, &x)
+			checkTrustRecheckAnswer(t, s, fix.fence.Namespace, err, tc.wantErr)
+		})
+	}
+}
+
+// seedTrustRecheckLimitFixture makes acme with its bundle, 2 hostile rules of
+// another bundle and 2 hostile rules with a NULL bundle, then the rule of the
+// exchange.
+func seedTrustRecheckLimitFixture(t *testing.T, s *Store) trustRecheckFixture {
 	t.Helper()
 
-	ns := namespace.Name("other-bundle-ns")
-	otherFence, _ := seedTrustNamespace(t, s, ns)
-	otherWorker := seedTrustRecheckWorkerIn(t, s, otherFence, ns)
-	otherBundle := trustrule.BundleID(seedTrustBundle(t, s, otherFence, ns))
-	seedTrustRecheckRuleRow(t, s, trustRecheckRuleSpec{
-		ns: ns, worker: otherWorker, name: "twin-other-bundle",
-		pattern: trustRecheckSPIFFEID, bundle: otherBundle,
-	})
+	fence, _ := seedTrustNamespace(t, s, namespace.Name("acme"))
+	worker := seedTrustRecheckWorker(t, s, fence)
+	seedTrustBundle(t, s, fence, namespace.Name("acme"))
+
+	b, err := s.TrustRules().GetBundle(t.Context(), namespace.Name("acme"))
+	if err != nil {
+		t.Fatalf("read bundle: %v", err)
+	}
+
+	for i := range 2 {
+		seedTrustRecheckHostileRule(t, s, worker, fmt.Sprintf("a-hostile-%d", i), trustRecheckHostileBundle)
+		seedTrustRecheckHostileRule(t, s, worker, fmt.Sprintf("a-hostile-null-%d", i), nil)
+	}
+
+	spec := trustRecheckRuleSpec{
+		ns: namespace.Name("acme"), worker: worker, name: "deploy", pattern: trustRecheckSPIFFEID, bundle: b.ID,
+	}
+	rule := seedTrustRecheckRuleRow(t, s, spec)
+
+	return trustRecheckFixture{
+		fence: fence,
+		rule:  rule,
+		bundle: trustrulestore.BundleRow{
+			ID: string(b.ID), Namespace: "acme", Active: b.Active, Revision: b.Revision,
+			CreatedAtMs: b.CreatedAt.UnixMilli(),
+		},
+	}
+}
+
+// checkTrustRecheckAnswer fails the test when err is not wantErr, or when a
+// refused exchange left a token in ns.
+func checkTrustRecheckAnswer(t *testing.T, s *Store, ns namespace.Name, err, wantErr error) {
+	t.Helper()
+
+	if wantErr == nil {
+		if err != nil {
+			t.Fatalf("recheckExchange = %v, want nil", err)
+		}
+
+		return
+	}
+
+	if !errors.Is(err, wantErr) {
+		t.Fatalf("recheckExchange = %v, want %v", err, wantErr)
+	}
+
+	if n := countTrustRecheckTokens(t, s, ns); n != 0 {
+		t.Fatalf("tokens after refusal = %d, want 0", n)
+	}
+}
+
+// trustRecheckHostileBundle is a bundle ID that no bundle row has. Its text
+// sorts before the IDs of the bundles that the store makes.
+const trustRecheckHostileBundle = "aaa-hostile-bundle"
+
+// seedTrustRecheckHostileRule stores a rule of acme that names the SPIFFE ID
+// of the exchange, with SQL and the foreign keys off, as a hostile backup row
+// would. A nil bundle stores NULL.
+func seedTrustRecheckHostileRule(t *testing.T, s *Store, worker, name string, bundle any) {
+	t.Helper()
+
+	tamperTrustStage(t, s, `
+INSERT INTO trust_rules (
+	id, namespace, name, issuer, audience, key_source, static_keys, conditions_json,
+	principal_id, created_by, created_at_ms, revision, spiffe_id_pattern, bundle_id
+) VALUES (?, 'acme', ?, 'https://token.actions.example.com', 'https://dustpan.example.com',
+	'discovery', '', '[]', ?, 'ana', ?, 1, ?, ?)`,
+		string(trustrule.NewID()), name, worker, trustRecheckTime().UnixMilli(), trustRecheckSPIFFEID, bundle,
+	)
+}
+
+// seedTrustRecheckOtherBundleTwin stores a rule in the namespace of the
+// exchange that names its SPIFFE ID in a bundle that is not the bundle of
+// the rule of the exchange.
+func seedTrustRecheckOtherBundleTwin(t *testing.T, s *Store, fix trustRecheckFixture) {
+	t.Helper()
+
+	seedTrustRecheckHostileRule(t, s, fix.rule.PrincipalID, "twin-other-bundle", trustRecheckHostileBundle)
 }
 
 // seedTrustRecheckCrossNamespaceRule stores a rule of another namespace with

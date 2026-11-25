@@ -131,20 +131,27 @@ func (failingExchanges) RecordExchange(
 	return errDisk
 }
 
-// refusingExchanges is an exchange store whose recheck refuses with
-// trustrule.ErrNotFound while refuse holds true, like a twin rule that
-// another call added after the read of the service.
+// storeRefusal is the refusal of the exchange record in the store. While on
+// holds true, the store refuses the record with err.
+type storeRefusal struct {
+	on  atomic.Bool
+	err error
+}
+
+// refusingExchanges is an exchange store whose recheck refuses with the
+// error of refusal while the refusal is on, like a twin rule that another
+// call added after the read of the service.
 type refusingExchanges struct {
 	trustrule.ExchangeStore
 
-	refuse *atomic.Bool
+	refusal *storeRefusal
 }
 
 func (f refusingExchanges) RecordExchange(
 	ctx context.Context, x trustrule.Exchange, fence namespace.Fence, entry audit.Entry,
 ) error {
-	if f.refuse.Load() {
-		return trustrule.ErrNotFound
+	if f.refusal.on.Load() {
+		return f.refusal.err
 	}
 
 	return f.ExchangeStore.RecordExchange(ctx, x, fence, entry)
@@ -157,8 +164,8 @@ type mtlsOpts struct {
 	// failWrite makes the store fail the exchange write.
 	failWrite bool
 	// refuseRecord, when not nil, makes the recheck of the exchange store
-	// refuse with trustrule.ErrNotFound while it holds true.
-	refuseRecord *atomic.Bool
+	// refuse with its error while it is on.
+	refuseRecord *storeRefusal
 	// limit is the calls of one key in one window.
 	limit int
 	// noMtls leaves the mTLS exchange out of the handler config.
@@ -243,7 +250,7 @@ func (e *env) newMtlsServerWith(
 		exchanges = failingExchanges{ExchangeStore: exchanges}
 	}
 	if o.refuseRecord != nil {
-		exchanges = refusingExchanges{ExchangeStore: exchanges, refuse: o.refuseRecord}
+		exchanges = refusingExchanges{ExchangeStore: exchanges, refusal: o.refuseRecord}
 	}
 
 	var mtlsNamespaces trustrulesvc.Namespaces = namespaces
@@ -1047,17 +1054,59 @@ func (e *env) deniedExchangeEntries() []audit.Entry {
 // TestExchangeMtlsStoreRefusalAnswer checks that a refusal of the exchange
 // record in the store, like a twin rule that another call added after the
 // read of the service, reaches the caller with the answer of the refusal,
-// and not a token.
+// and not a token. A refusal with trustrule.ErrNotFound answers
+// mtls.no-matching-rule. Each other refusal keeps its own answer.
 func TestExchangeMtlsStoreRefusalAnswer(t *testing.T) {
 	t.Parallel()
 
+	rows := []storeRefusalRow{
+		{
+			name: "no rule", err: trustrule.ErrNotFound,
+			status: http.StatusUnauthorized, code: "mtls.no-matching-rule", denied: 1,
+		},
+		{
+			name: "principal refused", err: trustrule.ErrPrincipal,
+			status: http.StatusUnauthorized, code: "mtls.principal-disabled", denied: 1,
+		},
+		{
+			name: "store error", err: errDisk,
+			status: http.StatusInternalServerError, code: "token.issue-failed", denied: 0,
+		},
+	}
+
+	for _, row := range rows {
+		t.Run(row.name, func(t *testing.T) {
+			t.Parallel()
+
+			testStoreRefusal(t, row)
+		})
+	}
+}
+
+// storeRefusalRow is one refusal of the exchange record in the store and
+// the answer that it must get.
+type storeRefusalRow struct {
+	name   string
+	err    error
+	status int
+	code   string
+	// denied is the number of denial entries. A store error that is not a
+	// refusal writes none.
+	denied int
+}
+
+// testStoreRefusal makes the store refuse the exchange record with row.err
+// and checks the answer, the body and the denial entries.
+func testStoreRefusal(t *testing.T, row storeRefusalRow) {
+	t.Helper()
+
 	e, ca, _ := mtlsFixture(t)
-	failing := &atomic.Bool{}
+	refusal := &storeRefusal{on: atomic.Bool{}, err: row.err}
 	m := e.newMtlsServer(
 		mtlsOpts{
 			revocation:   noRevocation,
 			failWrite:    false,
-			refuseRecord: failing,
+			refuseRecord: refusal,
 			limit:        10,
 			noMtls:       false,
 			canceled:     false,
@@ -1068,18 +1117,30 @@ func TestExchangeMtlsStoreRefusalAnswer(t *testing.T) {
 	)
 	cert := ca.goodLeaf(t)
 
-	failing.Store(true)
+	refusal.on.Store(true)
 	status, _, body := m.call(t, mtlsExchangeURL, &cert, nil)
-	failing.Store(false)
+	refusal.on.Store(false)
 
-	if status != http.StatusUnauthorized || errorCode(t, body) != "mtls.no-matching-rule" {
-		t.Fatalf("status, code = %d, %s, want 401 mtls.no-matching-rule: %s", status, errorCode(t, body), body)
+	if code := errorCode(t, body); status != row.status || code != row.code {
+		t.Fatalf("status, code = %d, %s, want %d %s: %s", status, code, row.status, row.code, body)
 	}
+
+	var doc map[string]any
+
+	decode(t, body, &doc)
+
+	for _, key := range []string{"token", "secret"} {
+		if _, ok := doc[key]; ok {
+			t.Fatalf("body holds the field %q: %s", key, body)
+		}
+	}
+
 	if strings.Contains(string(body), "trust-token") {
 		t.Fatalf("body holds a token: %s", body)
 	}
-	if got := len(e.deniedExchangeEntries()); got < 1 {
-		t.Fatalf("denial entries = %d, want at least 1", got)
+
+	if got := len(e.deniedExchangeEntries()); got != row.denied {
+		t.Fatalf("denial entries = %d, want %d", got, row.denied)
 	}
 }
 

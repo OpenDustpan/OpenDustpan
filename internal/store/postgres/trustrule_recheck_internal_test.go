@@ -214,7 +214,7 @@ func seedTrustRecheckRuleRowRaw(t *testing.T, s *Store, spec trustRecheckRuleSpe
 	const conditions = `[{"claim":"repository","values":["acme/infra"]},{"claim":"sub","values":["repo:acme/infra"]}]`
 
 	statements := []string{
-		`ALTER TABLE trust_rules DROP CONSTRAINT trust_rules_namespace_bundle_id_fkey`,
+		`ALTER TABLE trust_rules DROP CONSTRAINT IF EXISTS trust_rules_namespace_bundle_id_fkey`,
 		`INSERT INTO trust_rules (
 	id, namespace, name, issuer, audience, key_source, static_keys, conditions_json,
 	principal_id, created_by, created_at_ms, revision, spiffe_id_pattern, bundle_id
