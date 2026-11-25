@@ -239,7 +239,10 @@ again, and repeat the call with the session.
 
 A job that an approval default covers waits in the state `awaiting-approval`.
 Each approver sends one request. The approver needs the action `job:approve` on
-the stack or workspace of the job, and `job:read` to see the job.
+the stack or workspace of the job, and `job:read` to see the job. A rejection
+by a person who did not start the job also needs `job:cancel` on the stack or
+workspace of the job. The person who started the job can reject that job with
+`job:approve` only.
 
 First read the job. In its plan phase, take the `id` of the plan, the `sha256` of
 the `plan-display` part, the `sha256` of the `plan-apply` part, and the
@@ -269,16 +272,25 @@ The rules:
   and a group that someone made again with the same name does not. If the server
   cannot read the membership, it refuses the approval.
 - The person who started the job cannot approve it, also when an agent started it
-  for that person. That person can reject it.
-- An agent cannot approve. An agent can reject.
+  for that person. That person can reject it with `job:approve` only.
+- An agent cannot approve. An agent can reject as far as the person it acts for
+  can reject.
 - The binding must be the binding of the stored plan. If a new plan replaces the
   plan, the old approvals do not count, and the job waits again.
 - The approval of a `destroy` job needs a fresh MFA step. This version cannot read
   the MFA step of a console session yet, so it refuses the approval of a destroy
   with 403 and the error code `mfa.fresh-step-required`. A rejection works.
-- One `reject` ends the job in the state `rejected`. Any holder of `job:approve` on the
-  unit can reject, also a person who is not in the groups of the default, because a
-  rejection only stops the change.
+- One `reject` ends the job in the state `rejected`. A rejection by a person who
+  did not start the job needs `job:cancel` on the unit. A namespace
+  administrator can add the grant after they check the grant list:
+
+  ```sh
+  curl -H "Authorization: Bearer $DUSTPAN_TOKEN" \
+    "https://dustpan.example/api/server/namespaces/acme/grants"
+  ```
+
+  If the person holds `job:approve` but not `job:cancel`, the answer is 403 with
+  the code `access.denied` and it names `job:cancel`.
 
 When the last approval arrives, the job goes to `queued`, and the server dispatches
 the apply phase when no freeze, lock or other change holds the unit. If the state of

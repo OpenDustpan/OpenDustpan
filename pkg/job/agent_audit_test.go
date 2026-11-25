@@ -18,6 +18,7 @@ func TestApprovalEntryAgentInBlock(t *testing.T) {
 	r := approveRig(t, openPolicy())
 	r.seed(nil)
 
+	r.authz.allow[string(job.ActionJobCancel)+" "+r.unit.String()] = true
 	_, err := r.svc.Approve(t.Context(), agentActor("carol", "dusty"), approveID, job.VerdictReject,
 		noBinding(), "stopped")
 	if err != nil {
@@ -101,6 +102,7 @@ func TestApproveMalformedAgentRefRefused(t *testing.T) {
 
 			r := approveRig(t, openPolicy())
 			r.seed(nil)
+			r.authz.allow[string(job.ActionJobCancel)+" "+r.unit.String()] = true
 
 			a := actorOf("carol")
 			a.Agent = job.AgentRef(tc.ref)
