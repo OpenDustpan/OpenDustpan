@@ -33,7 +33,7 @@ After this change:
 ```mermaid
 sequenceDiagram
 participant L as launcher
-participant P as NEW sweep-report path
+participant P as sweep-report path (PUT)
 participant U as internal/unmanaged
 L->>P: stream report
 P->>U: check and RecordFindings
