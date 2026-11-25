@@ -17,7 +17,7 @@
 
 - [ ] 2.1 `internal/agent`: the types, the port `Probes`, the sentinels.
 - [ ] 2.2 `internal/store/{sqlite,postgres}`: probe rows, the start counter and the ledger origin `probe`, in the one schema file of each dialect.
-- [ ] 2.3 `internal/agentsvc`: the kind `agent.probe`, one step for each check, the promote step and the cancel rules. The service writes the audit entry of a probe with no store. The check `reach` calls `egress.CheckModelURL` on the `baseURL` and writes an audit entry for a refusal.
+- [ ] 2.3 `internal/agentsvc`: the kind `agent.probe`, one step for each check, the promote step and the cancel rules. The service writes the audit entry of a probe with no store. The check `reach` calls `egress.CheckModelURL` on the `baseURL`, resolves the host with its own context, calls `egress.CheckModelAddrs` on the resolved addresses, checks again at connect time, and writes an audit entry for a refusal.
 - [ ] 2.4 `internal/api/server`: the two routes, with the action and the object. Error codes in the catalog file.
 - [ ] 2.5 The domain rule for the new files in `.golangci.yml`.
 
