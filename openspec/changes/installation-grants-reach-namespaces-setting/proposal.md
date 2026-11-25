@@ -17,7 +17,7 @@ Errors the person may hit, and the one command that helps:
 
 | Error | What the answer says | The command that helps |
 | --- | --- | --- |
-| A caller that holds only a grant on `@server` does an action inside a namespace while the setting is `false`. | 403 that names the action and the namespace. The server changes nothing. | `GET /api/server/access-review` |
+| A caller that holds only a grant on `@server` does an action inside a namespace while the setting is `false`. | 403 that names the action and the kind of the object, not the namespace. The server changes nothing. | `GET /api/server/access-review` |
 
 Evidence for the claims above:
 
@@ -48,7 +48,7 @@ Builds on (not a change):
 
 Where the path still costs the person time or surprises them:
 
-- A person who sets `false` sees at once that a namespace action of a grant on `@server` answers 403. The 403 names the action and the namespace, and the access review shows the grant.
+- A person who sets `false` sees at once that a namespace action of a grant on `@server` answers 403. The 403 names the action and the kind of the object ("on this namespace"), not the namespace, and the access review shows the grant.
 - The bootstrap administrator token is not limited by the setting. The guide says so.
 
 ## What main already does
