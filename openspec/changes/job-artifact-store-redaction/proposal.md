@@ -1,5 +1,5 @@
 ---
-version: 5
+version: 6
 ---
 
 Issue: none. This change is the follow-up of pull request #3251 (change `add-job-service-routes-start-1`) and part of issue #1315, which lists RedactLog among the calls that answered ErrUnsupported.

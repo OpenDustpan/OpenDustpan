@@ -58,7 +58,7 @@ If the pool of a target is deleted, then the server SHALL refuse the start of a 
 
 ### Requirement: Finding bounds
 
-If a call to Record holds more than 1,000 observations, then the server SHALL refuse the call.
+If a call to Record holds more than 1,000 observations, then the server SHALL refuse the call. In this change the memory adapter enforces the limit. The SQL adapters meet it in the change 160-165-report-intake-findings (task 2.1), where they hold real findings.
 
 #### Scenario: Oversize batch
 - **WHEN** a caller sends 1,001 observations to Record
@@ -114,11 +114,11 @@ If an action names a status that differs from the stored status of the finding, 
 
 ### Requirement: Target delete
 
-If a target has a sweep not in a final status, then the server SHALL refuse the delete of the target.
+If a target has a sweep not in a final status, then the server SHALL cancel that sweep and delete the target in one transaction.
 
 #### Scenario: Open sweep
 - **WHEN** a caller deletes a target with a running sweep
-- **THEN** the store refuses the delete and keeps the target
+- **THEN** the store cancels the sweep, deletes the target and writes the audit entry in the same transaction
 
 #### Scenario: Duplicate name
 - **WHEN** a caller creates a second target with the same name in a namespace

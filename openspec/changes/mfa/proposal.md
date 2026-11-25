@@ -1,5 +1,5 @@
 ---
-version: 11
+version: 14
 ---
 
 Issue: #4064
@@ -109,7 +109,7 @@ Each quote is copied from the file in `docs/adr/`. Code adds the owner tags, the
 - Decisions that apply: the change of ADR 285 decisions 20 and 21.
 - Changed by: ADR 301 extends decision 1; ADR 333 extends decision 4.
 - Quote: "Changes ADR 285 decisions 5, 17, 19, 20 and 21: "end every session" becomes a bump of the session generation. A good second factor issues cookies, not a stored session. An enroll-only session is a claim of the cookies."
-- Effect: a good second factor issues cookies through `CompletePending`, and the second-factor time of task 3.5 is kept in the sealed cookies.
+- Effect: a good second factor issues cookies through `CompletePending`, and the second-factor time of task 3.9 is kept in the sealed cookies.
 - Conflict: none.
 
 **ADR 56: MFA freshness for token creation and secret reveal** (not owner-tagged).
