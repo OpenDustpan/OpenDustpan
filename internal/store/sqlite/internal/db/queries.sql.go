@@ -2226,6 +2226,33 @@ func (q *Queries) CreateAccessToken(ctx context.Context, arg CreateAccessTokenPa
 	return result.RowsAffected()
 }
 
+const createAgentSecretItem = `-- name: CreateAgentSecretItem :execrows
+INSERT INTO agent_secret_items (ref, name, ciphertext, created_at_ms, changed_at_ms, last_used_at_ms)
+VALUES (?, ?, ?, ?, ?, 0)
+`
+
+type CreateAgentSecretItemParams struct {
+	Ref         string
+	Name        string
+	Ciphertext  []byte
+	CreatedAtMs int64
+	ChangedAtMs int64
+}
+
+func (q *Queries) CreateAgentSecretItem(ctx context.Context, arg CreateAgentSecretItemParams) (int64, error) {
+	result, err := q.db.ExecContext(ctx, createAgentSecretItem,
+		arg.Ref,
+		arg.Name,
+		arg.Ciphertext,
+		arg.CreatedAtMs,
+		arg.ChangedAtMs,
+	)
+	if err != nil {
+		return 0, err
+	}
+	return result.RowsAffected()
+}
+
 const createBackup = `-- name: CreateBackup :execrows
 INSERT INTO backups (id, state, started_at_ms, ended_at_ms, target, error)
 VALUES (?, ?, ?, ?, ?, ?)
@@ -3199,6 +3226,91 @@ func (q *Queries) DatabaseNowMs(ctx context.Context) (int64, error) {
 	var now_ms int64
 	err := row.Scan(&now_ms)
 	return now_ms, err
+}
+
+const deleteAgentConnectionCurrent = `-- name: DeleteAgentConnectionCurrent :execrows
+DELETE FROM agent_connection_current
+WHERE ref = 'cur-1'
+`
+
+func (q *Queries) DeleteAgentConnectionCurrent(ctx context.Context) (int64, error) {
+	result, err := q.db.ExecContext(ctx, deleteAgentConnectionCurrent)
+	if err != nil {
+		return 0, err
+	}
+	return result.RowsAffected()
+}
+
+const deleteAgentConnectionPending = `-- name: DeleteAgentConnectionPending :execrows
+DELETE FROM agent_connection_pending
+WHERE probe_id = ?
+`
+
+func (q *Queries) DeleteAgentConnectionPending(ctx context.Context, probeID string) (int64, error) {
+	result, err := q.db.ExecContext(ctx, deleteAgentConnectionPending, probeID)
+	if err != nil {
+		return 0, err
+	}
+	return result.RowsAffected()
+}
+
+const deleteAgentConnectionPendingAll = `-- name: DeleteAgentConnectionPendingAll :exec
+DELETE FROM agent_connection_pending
+`
+
+func (q *Queries) DeleteAgentConnectionPendingAll(ctx context.Context) error {
+	_, err := q.db.ExecContext(ctx, deleteAgentConnectionPendingAll)
+	return err
+}
+
+const deleteAgentEgressAllowlistHosts = `-- name: DeleteAgentEgressAllowlistHosts :exec
+DELETE FROM agent_egress_allowlist_hosts
+`
+
+func (q *Queries) DeleteAgentEgressAllowlistHosts(ctx context.Context) error {
+	_, err := q.db.ExecContext(ctx, deleteAgentEgressAllowlistHosts)
+	return err
+}
+
+const deleteAgentEgressAllowlistRules = `-- name: DeleteAgentEgressAllowlistRules :exec
+DELETE FROM agent_egress_allowlist_rules
+`
+
+func (q *Queries) DeleteAgentEgressAllowlistRules(ctx context.Context) error {
+	_, err := q.db.ExecContext(ctx, deleteAgentEgressAllowlistRules)
+	return err
+}
+
+const deleteAgentSecretItem = `-- name: DeleteAgentSecretItem :execrows
+DELETE FROM agent_secret_items
+WHERE ref = ?
+`
+
+func (q *Queries) DeleteAgentSecretItem(ctx context.Context, ref string) (int64, error) {
+	result, err := q.db.ExecContext(ctx, deleteAgentSecretItem, ref)
+	if err != nil {
+		return 0, err
+	}
+	return result.RowsAffected()
+}
+
+const deleteAgentSecretRefs = `-- name: DeleteAgentSecretRefs :exec
+DELETE FROM agent_secret_refs
+WHERE ref = ?
+`
+
+func (q *Queries) DeleteAgentSecretRefs(ctx context.Context, ref string) error {
+	_, err := q.db.ExecContext(ctx, deleteAgentSecretRefs, ref)
+	return err
+}
+
+const deleteAgentSecretRefsAll = `-- name: DeleteAgentSecretRefsAll :exec
+DELETE FROM agent_secret_refs
+`
+
+func (q *Queries) DeleteAgentSecretRefsAll(ctx context.Context) error {
+	_, err := q.db.ExecContext(ctx, deleteAgentSecretRefsAll)
+	return err
 }
 
 const deleteAllIdempotencyRecords = `-- name: DeleteAllIdempotencyRecords :exec
@@ -5877,6 +5989,82 @@ func (q *Queries) GetActiveJobFreeze(ctx context.Context, arg GetActiveJobFreeze
 	var id string
 	err := row.Scan(&id)
 	return id, err
+}
+
+const getAgentConnectionCurrent = `-- name: GetAgentConnectionCurrent :one
+SELECT document, version
+FROM agent_connection_current
+WHERE ref = 'cur-1'
+`
+
+type GetAgentConnectionCurrentRow struct {
+	Document []byte
+	Version  int64
+}
+
+func (q *Queries) GetAgentConnectionCurrent(ctx context.Context) (GetAgentConnectionCurrentRow, error) {
+	row := q.db.QueryRowContext(ctx, getAgentConnectionCurrent)
+	var i GetAgentConnectionCurrentRow
+	err := row.Scan(&i.Document, &i.Version)
+	return i, err
+}
+
+const getAgentConnectionPending = `-- name: GetAgentConnectionPending :one
+SELECT document, version
+FROM agent_connection_pending
+WHERE probe_id = ?
+`
+
+type GetAgentConnectionPendingRow struct {
+	Document []byte
+	Version  int64
+}
+
+func (q *Queries) GetAgentConnectionPending(ctx context.Context, probeID string) (GetAgentConnectionPendingRow, error) {
+	row := q.db.QueryRowContext(ctx, getAgentConnectionPending, probeID)
+	var i GetAgentConnectionPendingRow
+	err := row.Scan(&i.Document, &i.Version)
+	return i, err
+}
+
+const getAgentSecretItem = `-- name: GetAgentSecretItem :one
+SELECT ref, name, created_at_ms, changed_at_ms, last_used_at_ms
+FROM agent_secret_items
+WHERE ref = ?
+`
+
+type GetAgentSecretItemRow struct {
+	Ref          string
+	Name         string
+	CreatedAtMs  int64
+	ChangedAtMs  int64
+	LastUsedAtMs int64
+}
+
+func (q *Queries) GetAgentSecretItem(ctx context.Context, ref string) (GetAgentSecretItemRow, error) {
+	row := q.db.QueryRowContext(ctx, getAgentSecretItem, ref)
+	var i GetAgentSecretItemRow
+	err := row.Scan(
+		&i.Ref,
+		&i.Name,
+		&i.CreatedAtMs,
+		&i.ChangedAtMs,
+		&i.LastUsedAtMs,
+	)
+	return i, err
+}
+
+const getAgentSecretItemCiphertext = `-- name: GetAgentSecretItemCiphertext :one
+SELECT ciphertext
+FROM agent_secret_items
+WHERE ref = ?
+`
+
+func (q *Queries) GetAgentSecretItemCiphertext(ctx context.Context, ref string) ([]byte, error) {
+	row := q.db.QueryRowContext(ctx, getAgentSecretItemCiphertext, ref)
+	var ciphertext []byte
+	err := row.Scan(&ciphertext)
+	return ciphertext, err
 }
 
 const getAuditChainCheck = `-- name: GetAuditChainCheck :one
@@ -11218,6 +11406,58 @@ func (q *Queries) HighestUpdateVersion(ctx context.Context, stackID string) (int
 	return column_1, err
 }
 
+const insertAgentEgressAllowlistHost = `-- name: InsertAgentEgressAllowlistHost :exec
+INSERT INTO agent_egress_allowlist_hosts (id, host)
+VALUES (?, ?)
+`
+
+type InsertAgentEgressAllowlistHostParams struct {
+	ID   int64
+	Host string
+}
+
+func (q *Queries) InsertAgentEgressAllowlistHost(ctx context.Context, arg InsertAgentEgressAllowlistHostParams) error {
+	_, err := q.db.ExecContext(ctx, insertAgentEgressAllowlistHost, arg.ID, arg.Host)
+	return err
+}
+
+const insertAgentEgressAllowlistRule = `-- name: InsertAgentEgressAllowlistRule :exec
+INSERT INTO agent_egress_allowlist_rules (id, cidr, port, http)
+VALUES (?, ?, ?, ?)
+`
+
+type InsertAgentEgressAllowlistRuleParams struct {
+	ID   int64
+	Cidr string
+	Port int64
+	Http int64
+}
+
+func (q *Queries) InsertAgentEgressAllowlistRule(ctx context.Context, arg InsertAgentEgressAllowlistRuleParams) error {
+	_, err := q.db.ExecContext(ctx, insertAgentEgressAllowlistRule,
+		arg.ID,
+		arg.Cidr,
+		arg.Port,
+		arg.Http,
+	)
+	return err
+}
+
+const insertAgentSecretRef = `-- name: InsertAgentSecretRef :exec
+INSERT INTO agent_secret_refs (ref, secret)
+VALUES (?, ?)
+`
+
+type InsertAgentSecretRefParams struct {
+	Ref    string
+	Secret string
+}
+
+func (q *Queries) InsertAgentSecretRef(ctx context.Context, arg InsertAgentSecretRefParams) error {
+	_, err := q.db.ExecContext(ctx, insertAgentSecretRef, arg.Ref, arg.Secret)
+	return err
+}
+
 const insertAuditEntry = `-- name: InsertAuditEntry :exec
 INSERT INTO audit_entries (
     namespace, sequence, subject, idp_subject, token_id, action, object, version, value_path,
@@ -14397,6 +14637,113 @@ func (q *Queries) ListActiveGroupNamesOfPrincipal(ctx context.Context, principal
 			return nil, err
 		}
 		items = append(items, name)
+	}
+	if err := rows.Close(); err != nil {
+		return nil, err
+	}
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+	return items, nil
+}
+
+const listAgentEgressAllowlistHosts = `-- name: ListAgentEgressAllowlistHosts :many
+SELECT host
+FROM agent_egress_allowlist_hosts
+ORDER BY id
+`
+
+func (q *Queries) ListAgentEgressAllowlistHosts(ctx context.Context) ([]string, error) {
+	rows, err := q.db.QueryContext(ctx, listAgentEgressAllowlistHosts)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	var items []string
+	for rows.Next() {
+		var host string
+		if err := rows.Scan(&host); err != nil {
+			return nil, err
+		}
+		items = append(items, host)
+	}
+	if err := rows.Close(); err != nil {
+		return nil, err
+	}
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+	return items, nil
+}
+
+const listAgentEgressAllowlistRules = `-- name: ListAgentEgressAllowlistRules :many
+SELECT cidr, port, http
+FROM agent_egress_allowlist_rules
+ORDER BY id
+`
+
+type ListAgentEgressAllowlistRulesRow struct {
+	Cidr string
+	Port int64
+	Http int64
+}
+
+func (q *Queries) ListAgentEgressAllowlistRules(ctx context.Context) ([]ListAgentEgressAllowlistRulesRow, error) {
+	rows, err := q.db.QueryContext(ctx, listAgentEgressAllowlistRules)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	var items []ListAgentEgressAllowlistRulesRow
+	for rows.Next() {
+		var i ListAgentEgressAllowlistRulesRow
+		if err := rows.Scan(&i.Cidr, &i.Port, &i.Http); err != nil {
+			return nil, err
+		}
+		items = append(items, i)
+	}
+	if err := rows.Close(); err != nil {
+		return nil, err
+	}
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+	return items, nil
+}
+
+const listAgentSecretItems = `-- name: ListAgentSecretItems :many
+SELECT ref, name, created_at_ms, changed_at_ms, last_used_at_ms
+FROM agent_secret_items
+ORDER BY created_at_ms DESC, ref
+`
+
+type ListAgentSecretItemsRow struct {
+	Ref          string
+	Name         string
+	CreatedAtMs  int64
+	ChangedAtMs  int64
+	LastUsedAtMs int64
+}
+
+func (q *Queries) ListAgentSecretItems(ctx context.Context) ([]ListAgentSecretItemsRow, error) {
+	rows, err := q.db.QueryContext(ctx, listAgentSecretItems)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	var items []ListAgentSecretItemsRow
+	for rows.Next() {
+		var i ListAgentSecretItemsRow
+		if err := rows.Scan(
+			&i.Ref,
+			&i.Name,
+			&i.CreatedAtMs,
+			&i.ChangedAtMs,
+			&i.LastUsedAtMs,
+		); err != nil {
+			return nil, err
+		}
+		items = append(items, i)
 	}
 	if err := rows.Close(); err != nil {
 		return nil, err
@@ -22062,6 +22409,59 @@ func (q *Queries) PurgeWorkspace(ctx context.Context, arg PurgeWorkspaceParams) 
 	return result.RowsAffected()
 }
 
+const putAgentConnectionCurrent = `-- name: PutAgentConnectionCurrent :exec
+INSERT INTO agent_connection_current (ref, document, version, created_at_ms, changed_at_ms)
+VALUES ('cur-1', ?, ?, ?, ?)
+ON CONFLICT (ref) DO UPDATE SET
+    document = excluded.document,
+    version = excluded.version,
+    changed_at_ms = excluded.changed_at_ms
+`
+
+type PutAgentConnectionCurrentParams struct {
+	Document    []byte
+	Version     int64
+	CreatedAtMs int64
+	ChangedAtMs int64
+}
+
+// The current document keeps its creation time when it is replaced.
+func (q *Queries) PutAgentConnectionCurrent(ctx context.Context, arg PutAgentConnectionCurrentParams) error {
+	_, err := q.db.ExecContext(ctx, putAgentConnectionCurrent,
+		arg.Document,
+		arg.Version,
+		arg.CreatedAtMs,
+		arg.ChangedAtMs,
+	)
+	return err
+}
+
+const putAgentConnectionPending = `-- name: PutAgentConnectionPending :exec
+INSERT INTO agent_connection_pending (probe_id, document, version, created_at_ms)
+VALUES (?, ?, ?, ?)
+ON CONFLICT (probe_id) DO UPDATE SET
+    document = excluded.document,
+    version = excluded.version,
+    created_at_ms = excluded.created_at_ms
+`
+
+type PutAgentConnectionPendingParams struct {
+	ProbeID     string
+	Document    []byte
+	Version     int64
+	CreatedAtMs int64
+}
+
+func (q *Queries) PutAgentConnectionPending(ctx context.Context, arg PutAgentConnectionPendingParams) error {
+	_, err := q.db.ExecContext(ctx, putAgentConnectionPending,
+		arg.ProbeID,
+		arg.Document,
+		arg.Version,
+		arg.CreatedAtMs,
+	)
+	return err
+}
+
 const putCheckpoint = `-- name: PutCheckpoint :one
 INSERT INTO checkpoints (
     stack_id, update_id, lease_digest, schema_version, sequence,
@@ -22771,6 +23171,43 @@ func (q *Queries) RenewWorkspaceClaim(ctx context.Context, arg RenewWorkspaceCla
 		&i.EndedAtMs,
 		&i.LeaseEndsAtMs,
 		&i.RenewedAtMs,
+	)
+	return i, err
+}
+
+const replaceAgentSecretItem = `-- name: ReplaceAgentSecretItem :one
+UPDATE agent_secret_items
+SET ciphertext = ?1,
+    changed_at_ms = MAX(?2, changed_at_ms + 1)
+WHERE ref = ?3
+RETURNING ref, name, created_at_ms, changed_at_ms, last_used_at_ms
+`
+
+type ReplaceAgentSecretItemParams struct {
+	Ciphertext  []byte
+	ChangedAtMs interface{}
+	Ref         string
+}
+
+type ReplaceAgentSecretItemRow struct {
+	Ref          string
+	Name         string
+	CreatedAtMs  int64
+	ChangedAtMs  int64
+	LastUsedAtMs int64
+}
+
+// The new change time is after the old one, also when two writes share one
+// millisecond.
+func (q *Queries) ReplaceAgentSecretItem(ctx context.Context, arg ReplaceAgentSecretItemParams) (ReplaceAgentSecretItemRow, error) {
+	row := q.db.QueryRowContext(ctx, replaceAgentSecretItem, arg.Ciphertext, arg.ChangedAtMs, arg.Ref)
+	var i ReplaceAgentSecretItemRow
+	err := row.Scan(
+		&i.Ref,
+		&i.Name,
+		&i.CreatedAtMs,
+		&i.ChangedAtMs,
+		&i.LastUsedAtMs,
 	)
 	return i, err
 }
@@ -23764,6 +24201,18 @@ func (q *Queries) SetAccessTokenPolicy(ctx context.Context, arg SetAccessTokenPo
 		return 0, err
 	}
 	return result.RowsAffected()
+}
+
+const setAgentEgressAllowlist = `-- name: SetAgentEgressAllowlist :exec
+INSERT INTO agent_egress_allowlist (id, updated_at_ms)
+VALUES (1, ?)
+ON CONFLICT (id) DO UPDATE SET
+    updated_at_ms = excluded.updated_at_ms
+`
+
+func (q *Queries) SetAgentEgressAllowlist(ctx context.Context, updatedAtMs int64) error {
+	_, err := q.db.ExecContext(ctx, setAgentEgressAllowlist, updatedAtMs)
+	return err
 }
 
 const setAuditChainState = `-- name: SetAuditChainState :exec

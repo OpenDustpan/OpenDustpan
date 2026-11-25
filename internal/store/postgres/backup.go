@@ -831,6 +831,43 @@ func pgCopyGrantTables() []pgCopyTable {
 			columns: []string{"id", "idle_ms", "max_length_ms", pgColUpdatedAtMs, "token_freshness_ms"},
 			orderBy: []string{"id"},
 		},
+		{
+			table: "agent_secret_items",
+			columns: []string{
+				sinkColRef, pgColName, sinkColCiphertext, pgColCreatedAtMs, "changed_at_ms", agentColLastUsedAtMs,
+			},
+			orderBy: []string{sinkColRef},
+		},
+		{
+			table:   "agent_connection_current",
+			columns: []string{sinkColRef, pgColProxyDocument, pgColVersion, pgColCreatedAtMs, "changed_at_ms"},
+			orderBy: []string{sinkColRef},
+		},
+		{
+			table:   "agent_connection_pending",
+			columns: []string{"probe_id", pgColProxyDocument, pgColVersion, pgColCreatedAtMs},
+			orderBy: []string{"probe_id"},
+		},
+		{
+			table:   "agent_secret_refs",
+			columns: []string{sinkColRef, "secret"},
+			orderBy: []string{sinkColRef, "secret"},
+		},
+		{
+			table:   "agent_egress_allowlist",
+			columns: []string{"id", pgColUpdatedAtMs},
+			orderBy: []string{"id"},
+		},
+		{
+			table:   "agent_egress_allowlist_hosts",
+			columns: []string{"id", agentColHost},
+			orderBy: []string{"id"},
+		},
+		{
+			table:   "agent_egress_allowlist_rules",
+			columns: []string{"id", "cidr", "port", "http"},
+			orderBy: []string{"id"},
+		},
 	}
 }
 

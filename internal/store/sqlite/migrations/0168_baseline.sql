@@ -329,6 +329,53 @@ CREATE TABLE audit_sink_cursors (
     PRIMARY KEY (sink, namespace)
 ) STRICT;
 
+CREATE TABLE agent_connection_current (
+    ref           TEXT    NOT NULL PRIMARY KEY CHECK (ref = 'cur-1'),
+    document      BLOB    NOT NULL,
+    version       INTEGER NOT NULL,
+    created_at_ms INTEGER NOT NULL,
+    changed_at_ms INTEGER NOT NULL
+) STRICT;
+
+CREATE TABLE agent_connection_pending (
+    probe_id      TEXT    NOT NULL PRIMARY KEY,
+    document      BLOB    NOT NULL,
+    version       INTEGER NOT NULL,
+    created_at_ms INTEGER NOT NULL
+) STRICT;
+
+CREATE TABLE agent_egress_allowlist (
+    id            INTEGER NOT NULL PRIMARY KEY CHECK (id = 1),
+    updated_at_ms INTEGER NOT NULL
+) STRICT;
+
+CREATE TABLE agent_egress_allowlist_hosts (
+    id    INTEGER NOT NULL PRIMARY KEY,
+    host  TEXT    NOT NULL
+) STRICT;
+
+CREATE TABLE agent_egress_allowlist_rules (
+    id    INTEGER NOT NULL PRIMARY KEY,
+    cidr  TEXT    NOT NULL,
+    port  INTEGER NOT NULL,
+    http  INTEGER NOT NULL DEFAULT 0
+) STRICT;
+
+CREATE TABLE agent_secret_items (
+    ref           TEXT    NOT NULL PRIMARY KEY,
+    name          TEXT    NOT NULL,
+    ciphertext    BLOB    NOT NULL,
+    created_at_ms INTEGER NOT NULL,
+    changed_at_ms INTEGER NOT NULL,
+    last_used_at_ms INTEGER NOT NULL DEFAULT 0
+) STRICT;
+
+CREATE TABLE agent_secret_refs (
+    ref    TEXT    NOT NULL,
+    secret TEXT    NOT NULL REFERENCES agent_secret_items (ref),
+    PRIMARY KEY (ref, secret)
+) STRICT;
+
 CREATE TABLE access_token_policy (
     id                  INTEGER NOT NULL PRIMARY KEY CHECK (id = 1),
     max_lifetime_ms     INTEGER NOT NULL,

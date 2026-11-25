@@ -47,7 +47,6 @@ func RunGateStores(t *testing.T, f GateStoresFactory) {
 		{name: "consent of another call", run: caseConsentOther},
 		{name: "lookup is bound to the call", run: caseConsentLookup},
 		{name: "a used consent marks the token", run: caseConsentRevealedToken},
-		{name: "settings defaults", run: caseSettingsDefaults},
 		{name: "settings refuse a zero limit", run: caseSettingsZeroLimit},
 		{name: "settings refuse a zero MCP rate limit", run: caseSettingsZeroRate},
 		{name: "opt-in needs a valid acceptance", run: caseSettingsOptIn},
@@ -72,6 +71,7 @@ func TestEntry(ns namespace.Name, subject, action string) audit.Entry {
 
 	e.At, e.Namespace, e.Subject, e.Action = time.Now(), ns, subject, action
 	e.Kind, e.Outcome, e.Channel = audit.KindChange, audit.OutcomeSuccess, audit.ChannelAPI
+	e.Object = "agent"
 
 	return e
 }
@@ -441,25 +441,6 @@ func caseConsentRevealedToken(t *testing.T, h GateStoresHarness) {
 		if got, err := h.Consents.Revealed(t.Context(), tt.token, tt.session); err != nil || got != tt.want {
 			t.Fatalf("Revealed() for %s = %v, %v, want %v", tt.what, got, err, tt.want)
 		}
-	}
-}
-
-func caseSettingsDefaults(t *testing.T, h GateStoresHarness) {
-	t.Helper()
-
-	if _, err := h.Settings.Connection(t.Context()); !errors.Is(err, agent.ErrDisabled) {
-		t.Fatalf("Connection() = %v, want ErrDisabled: the agent is off until an administrator connects a model", err)
-	}
-
-	got, err := h.Settings.Installation(t.Context())
-	if err != nil || got != agent.DefaultInstallationSettings() ||
-		got.MCPCallsPerMinute != agent.DefaultMCPCallsPerMinute {
-		t.Fatalf("Installation() = %+v, %v, want the defaults: MCP off, no direct changes, 60 MCP calls a minute",
-			got, err)
-	}
-
-	if o, ok, err := h.Settings.AccountSecretOptIn(t.Context()); err != nil || ok || o.Active() {
-		t.Fatalf("AccountSecretOptIn() = %+v, %v, %v, want none", o, ok, err)
 	}
 }
 

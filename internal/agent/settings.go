@@ -9,22 +9,6 @@ import (
 	"opendustpan.org/opendustpan/pkg/namespace"
 )
 
-// Connection is the model connection of an installation. The credential is
-// not in it: the store holds it sealed with the key-encryption key, and no
-// read answers it.
-type Connection struct {
-	// Adapter names the model adapter, for example "anthropic" or
-	// "openai-compatible".
-	Adapter string
-	BaseURL string
-	Model   string
-	// MaxOutputTokens bounds the answer of one model call. 0 takes the
-	// output token limit of the run.
-	MaxOutputTokens int64
-	ConnectedBy     string
-	ConnectedAt     time.Time
-}
-
 // DefaultMCPCallsPerMinute is the default rate limit of the tool calls of
 // one access token on the MCP endpoint.
 const DefaultMCPCallsPerMinute = 60
@@ -106,18 +90,7 @@ func (o AccountSecretOptIn) Active() bool {
 // checks fence, and returns namespace.ErrFenced for a stale one. An opt-in
 // write returns the error of Acceptance.Validate. Each SQL store adapter
 // implements it and runs the conformance suite in package agenttest.
-//
-//nolint:interfacebloat // One port for the agent settings of three scopes, each with a read and a write.
 type SettingsStore interface {
-	// Connection returns the model connection, or ErrDisabled.
-	Connection(ctx context.Context) (Connection, error)
-	// PutConnection sets the connection and its sealed credential.
-	PutConnection(ctx context.Context, c Connection, sealedCredential []byte, e audit.Entry) error
-	// DeleteConnection removes the connection and its credential. A run
-	// then stops at its next check. It returns ErrDisabled when no
-	// connection is set.
-	DeleteConnection(ctx context.Context, e audit.Entry) error
-
 	// Installation returns the settings of the installation, or
 	// DefaultInstallationSettings when none are set.
 	Installation(ctx context.Context) (InstallationSettings, error)

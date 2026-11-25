@@ -290,18 +290,6 @@ func (s fakeConsents) Revealed(_ context.Context, tokenID, sessionID string) (bo
 
 type fakeSettings struct{ f *fakeGateStores }
 
-func (fakeSettings) Connection(context.Context) (agent.Connection, error) {
-	var none agent.Connection
-
-	return none, agent.ErrDisabled
-}
-
-func (fakeSettings) PutConnection(context.Context, agent.Connection, []byte, audit.Entry) error {
-	return nil
-}
-
-func (fakeSettings) DeleteConnection(context.Context, audit.Entry) error { return agent.ErrDisabled }
-
 func (s fakeSettings) Installation(context.Context) (agent.InstallationSettings, error) {
 	s.f.mu.Lock()
 	defer s.f.mu.Unlock()

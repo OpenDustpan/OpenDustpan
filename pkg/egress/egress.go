@@ -21,7 +21,10 @@ import (
 	"time"
 )
 
-const https = "https"
+const (
+	http  = "http"
+	https = "https"
+)
 
 // ipv4MappedBits is the length of the prefix of an IPv4-mapped IPv6 address.
 const ipv4MappedBits = 96
@@ -452,4 +455,286 @@ func CheckPort(raw string, p Ports) error {
 	}
 
 	return nil
+}
+
+// alwaysDeniedList returns the addresses that no allowlist entry may
+// open. ADR 129 decision 25.
+func alwaysDeniedList() []netip.Prefix {
+	return []netip.Prefix{
+		netip.MustParsePrefix("0.0.0.0/8"),
+		netip.MustParsePrefix("127.0.0.0/8"),
+		netip.MustParsePrefix("169.254.0.0/16"),
+		netip.MustParsePrefix("255.255.255.255/32"),
+		netip.MustParsePrefix("100.100.100.200/32"),
+		netip.MustParsePrefix("168.63.129.16/32"),
+		netip.MustParsePrefix("192.0.0.192/32"),
+		netip.MustParsePrefix("224.0.0.0/4"),
+		netip.MustParsePrefix("::/128"),
+		netip.MustParsePrefix("::1/128"),
+		netip.MustParsePrefix("fe80::/10"),
+		netip.MustParsePrefix("fd00:ec2::254/128"),
+		netip.MustParsePrefix("ff00::/8"),
+		// Ranges that embed an IPv4 address, so that a rule for them cannot
+		// open the loopback or the metadata address.
+		netip.MustParsePrefix("::/96"),
+		netip.MustParsePrefix("64:ff9b::/96"),
+		netip.MustParsePrefix("64:ff9b:1::/48"),
+		netip.MustParsePrefix("2002::/16"),
+		netip.MustParsePrefix("2001::/32"),
+	}
+}
+
+// Allowlist holds the host names and CIDR rules that a model call may
+// reach. ADR 129 decisions 25 and 26.
+type Allowlist struct {
+	// Hosts are the host names that pass. A name may start with "*." to
+	// match subdomains.
+	Hosts []string
+	// CIDRs are the CIDR ranges with one port each.
+	CIDRs []CIDRRule
+}
+
+// CIDRRule is one CIDR entry with one port and the http flag.
+type CIDRRule struct {
+	// CIDR is the range.
+	CIDR netip.Prefix
+	// Port is the port of the URL or the default port of the scheme.
+	Port int
+	// HTTP reports whether plain http is allowed for this entry.
+	HTTP bool
+}
+
+// PublicOnly reports whether the flag --egress-public-only is set. With it,
+// private ranges are denied even when the allowlist has a rule for them.
+type PublicOnly bool
+
+// CheckModelURL checks rawURL against the always-denied list and the
+// allowlist. ADR 129 decisions 25 and 26.
+func CheckModelURL(rawURL string, a Allowlist, publicOnly PublicOnly) error {
+	u, err := parseModelURL(rawURL)
+	if err != nil {
+		return err
+	}
+
+	host := strings.TrimSuffix(strings.ToLower(u.Hostname()), ".")
+
+	// A host that is an IP address must be in a CIDR entry.
+	addr, addrErr := netip.ParseAddr(host)
+	if addrErr != nil {
+		return hostURLAllowed(u, host, a)
+	}
+
+	// A zone names an interface on the server. No model URL needs it.
+	if addr.Zone() != "" {
+		return fmt.Errorf("%w: the address has a zone", ErrRefused)
+	}
+
+	return ipURLAllowed(u, addr.Unmap(), a, publicOnly)
+}
+
+// CheckModelAddrs checks the addresses that the host of rawURL resolved to.
+// The caller resolves the host name and calls CheckModelAddrs before it opens
+// a connection, and again with the address of the connection, so that a DNS
+// answer that changes after the first check (DNS rebinding) cannot pass.
+// It refuses the URL when it fails CheckModelURL's checks of shape, when
+// addrs is empty, and when any address in addrs is refused: an address in
+// the always-denied list, a private address with publicOnly set, and a
+// private address that no CIDR entry opens for the port of the URL. A public
+// address passes.
+func CheckModelAddrs(rawURL string, addrs []netip.Addr, a Allowlist, publicOnly PublicOnly) error {
+	u, err := parseModelURL(rawURL)
+	if err != nil {
+		return err
+	}
+
+	if len(addrs) == 0 {
+		return fmt.Errorf("%w: the host has no address", ErrRefused)
+	}
+
+	for _, addr := range addrs {
+		if addr.Zone() != "" {
+			return fmt.Errorf("%w: the address has a zone", ErrRefused)
+		}
+
+		if err := resolvedAddrAllowed(u, addr.Unmap(), a, publicOnly); err != nil {
+			return err
+		}
+	}
+
+	return nil
+}
+
+// resolvedAddrAllowed checks one address of a host name.
+func resolvedAddrAllowed(u *url.URL, addr netip.Addr, a Allowlist, publicOnly PublicOnly) error {
+	if alwaysDenied(addr) {
+		return fmt.Errorf("%w: %s is in the always-denied list", ErrRefused, addr)
+	}
+
+	if CheckAddr(addr) == nil {
+		return nil
+	}
+
+	return ipURLAllowed(u, addr, a, publicOnly)
+}
+
+// parseModelURL checks the shape of a model URL and returns it.
+func parseModelURL(rawURL string) (*url.URL, error) {
+	if len(rawURL) > MaxURLBytes {
+		return nil, fmt.Errorf("%w: the URL is longer than %d bytes", ErrRefused, MaxURLBytes)
+	}
+
+	u, err := url.Parse(rawURL)
+	if err != nil {
+		return nil, fmt.Errorf("%w: the URL does not parse", ErrRefused)
+	}
+
+	switch {
+	case u.Scheme != https && u.Scheme != http:
+		return nil, fmt.Errorf("%w: the scheme %q is not allowed: use https", ErrRefused, u.Scheme)
+	case u.User != nil:
+		return nil, fmt.Errorf("%w: the URL has user information", ErrRefused)
+	case u.Fragment != "" || strings.Contains(rawURL, "#"):
+		return nil, fmt.Errorf("%w: the URL has a fragment", ErrRefused)
+	case u.Hostname() == "":
+		return nil, fmt.Errorf("%w: the URL has no host", ErrRefused)
+	}
+
+	return u, nil
+}
+
+// ipURLAllowed checks the URL of a host that is an IP address against the
+// always-denied list and the CIDR entries.
+func ipURLAllowed(u *url.URL, addr netip.Addr, a Allowlist, publicOnly PublicOnly) error {
+	if alwaysDenied(addr) {
+		return fmt.Errorf("%w: %s is in the always-denied list", ErrRefused, addr)
+	}
+
+	// With the flag, an address that is not public is refused although a CIDR
+	// entry has it.
+	if publicOnly && CheckAddr(addr) != nil {
+		return fmt.Errorf(
+			"%w: %s is not a public address: --egress-public-only denies it",
+			ErrRefused,
+			addr,
+		)
+	}
+
+	port := portOf(u)
+
+	if !cidrAllows(a.CIDRs, addr, port) {
+		return fmt.Errorf("%w: %s is not in a CIDR entry", ErrRefused, addr)
+	}
+
+	if u.Scheme == http && !httpCIDRAllows(a.CIDRs, addr, port) {
+		return fmt.Errorf("%w: plain http is not allowed for %s", ErrRefused, addr)
+	}
+
+	return nil
+}
+
+// hostURLAllowed checks the URL of a host name against the host entries
+// of the allowlist.
+func hostURLAllowed(u *url.URL, host string, a Allowlist) error {
+	// A name that no resolver may read as a host name never passes, also when
+	// an entry of the allowlist names it. Defense in depth: the check of the
+	// resolved addresses refuses the loopback address too.
+	if host == "localhost" || strings.HasSuffix(host, ".localhost") {
+		return fmt.Errorf("%w: the host is localhost", ErrRefused)
+	}
+
+	if !slices.ContainsFunc(strings.Split(host, "."), func(l string) bool { return !numericLabel(l) }) {
+		return fmt.Errorf("%w: the host is a number, not a name", ErrRefused)
+	}
+
+	if !hostAllowed(a.Hosts, host) {
+		return fmt.Errorf("%w: the host %s is not in the allowlist", ErrRefused, host)
+	}
+
+	if u.Scheme == http {
+		return fmt.Errorf("%w: plain http is not allowed for a host name %s: use https", ErrRefused, host)
+	}
+
+	return nil
+}
+
+// alwaysDenied reports whether addr is in the always-denied list.
+func alwaysDenied(addr netip.Addr) bool {
+	addr = addr.Unmap().WithZone("")
+
+	for _, p := range alwaysDeniedList() {
+		if p.Contains(addr) {
+			return true
+		}
+	}
+
+	return false
+}
+
+// cidrAllows reports whether addr is in one CIDR entry with port.
+func cidrAllows(cidrs []CIDRRule, addr netip.Addr, port int) bool {
+	for _, rule := range cidrs {
+		if rule.CIDR.Contains(addr) && rule.Port == port {
+			return true
+		}
+	}
+
+	return false
+}
+
+// httpCIDRAllows reports whether one CIDR entry with port allows plain
+// http for addr.
+func httpCIDRAllows(cidrs []CIDRRule, addr netip.Addr, port int) bool {
+	for _, rule := range cidrs {
+		if rule.CIDR.Contains(addr) && rule.Port == port && rule.HTTP {
+			return true
+		}
+	}
+
+	return false
+}
+
+// The default ports of the schemes of a model URL.
+const (
+	// defaultHTTPSPort is the port of an https URL without an explicit one.
+	defaultHTTPSPort = 443
+	// defaultHTTPPort is the port of an http URL without an explicit one.
+	defaultHTTPPort = 80
+)
+
+// portOf returns the port of u, or the default port of its scheme.
+func portOf(u *url.URL) int {
+	if u.Port() != "" {
+		port, err := strconv.Atoi(u.Port())
+		if err != nil {
+			return 0
+		}
+
+		return port
+	}
+
+	if u.Scheme == https {
+		return defaultHTTPSPort
+	}
+
+	return defaultHTTPPort
+}
+
+func hostAllowed(hosts []string, host string) bool {
+	for _, h := range hosts {
+		h = strings.TrimSuffix(strings.ToLower(h), ".")
+
+		if strings.HasPrefix(h, "*.") {
+			suffix := h[1:]
+
+			if host == suffix[1:] || strings.HasSuffix(host, suffix) {
+				return true
+			}
+		}
+
+		if h == host {
+			return true
+		}
+	}
+
+	return false
 }

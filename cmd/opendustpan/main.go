@@ -345,6 +345,7 @@ type serveFlags struct {
 	ipAllowlistsIncludeBootstrap bool
 	gitHostAllowedRanges         string
 	allowPlainConnections        bool
+	egressPublicOnly             bool
 	blobDir                      string
 	blobStore                    string
 	s3Endpoint                   string
@@ -630,6 +631,7 @@ func (f *serveFlags) registerNet(fs *flag.FlagSet) {
 	cli.ByFlag("ip-allowlists-include-bootstrap").Bool(fs, &f.ipAllowlistsIncludeBootstrap)
 	cli.ByFlag("git-host-allowed-ranges").String(fs, &f.gitHostAllowedRanges)
 	cli.ByFlag("allow-plain-connections").Bool(fs, &f.allowPlainConnections)
+	cli.ByFlag("egress-public-only").Bool(fs, &f.egressPublicOnly)
 	cli.ByFlag("oidc-issuer").String(fs, &f.oidcIssuer)
 	cli.ByFlag("oidc-provider").String(fs, &f.oidcProvider)
 	cli.ByFlag("oidc-display-name").String(fs, &f.oidcDisplayName)
@@ -1279,6 +1281,13 @@ func (f *serveFlags) serverOptions(
 	}
 
 	return append(append(opts, tail...), builtinStoreOption(st)), nil
+}
+
+// publicOnly returns the value of --egress-public-only for egress.CheckModelURL
+// and egress.CheckModelAddrs: with it, a private range is denied also when the
+// allowlist of model URLs has a rule for it.
+func (f *serveFlags) publicOnly() egress.PublicOnly {
+	return egress.PublicOnly(f.egressPublicOnly)
 }
 
 // gitHostOptions returns the option of the address ranges that a connection to

@@ -1000,5 +1000,42 @@ func sqliteIdentityBackupTables() []sqliteBackupTable {
 			table:   "session_policy",
 			columns: []string{"id", "idle_ms", "max_length_ms", backupColUpdatedAtMs, "token_freshness_ms"},
 		},
+		{
+			table: "agent_secret_items",
+			columns: []string{
+				sinkColRef,
+				backupColName,
+				sinkColCiphertext,
+				backupColCreatedAtMs,
+				"changed_at_ms",
+				agentColLastUsedAtMs,
+			},
+		},
+		{
+			table: "agent_connection_current",
+			columns: []string{
+				sinkColRef, sqliteProxyColDocument, backupColVersion, backupColCreatedAtMs, "changed_at_ms",
+			},
+		},
+		{
+			table:   "agent_connection_pending",
+			columns: []string{"probe_id", sqliteProxyColDocument, backupColVersion, backupColCreatedAtMs},
+		},
+		{
+			table:   "agent_secret_refs",
+			columns: []string{sinkColRef, "secret"},
+		},
+		{
+			table:   "agent_egress_allowlist",
+			columns: []string{"id", backupColUpdatedAtMs},
+		},
+		{
+			table:   "agent_egress_allowlist_hosts",
+			columns: []string{"id", "host"},
+		},
+		{
+			table:   "agent_egress_allowlist_rules",
+			columns: []string{"id", "cidr", "port", "http"},
+		},
 	}
 }
