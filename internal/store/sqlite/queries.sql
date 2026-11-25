@@ -5885,6 +5885,17 @@ SELECT id, namespace, name, issuer, audience, key_source, static_keys, condition
 FROM trust_rules
 WHERE namespace = sqlc.arg(namespace) AND id = sqlc.arg(id);
 
+-- name: ListTrustRulesNamingSpiffeID :many
+-- The recheck of an mTLS exchange reads at most 2 rules: the rules of the
+-- bundle that name the same SPIFFE ID. Two rows already refuse the exchange,
+-- so the read stops at 2. No ORDER BY: no row order changes the answer.
+SELECT id, CAST(COALESCE(bundle_id, '') AS TEXT) AS bundle_id, spiffe_id_pattern
+FROM trust_rules
+WHERE namespace = sqlc.arg(namespace)
+  AND bundle_id = CAST(sqlc.arg(bundle_id) AS TEXT)
+  AND spiffe_id_pattern = sqlc.arg(spiffe_id_pattern)
+LIMIT 2;
+
 -- name: ListTrustRulesOfNamespace :many
 SELECT id, namespace, name, issuer, audience, key_source, static_keys, conditions_json, principal_id,
     created_by, created_at_ms, revision, spiffe_id_pattern, CAST(COALESCE(bundle_id, '') AS TEXT) AS bundle_id

@@ -2495,6 +2495,8 @@ CREATE UNIQUE INDEX trust_rules_name ON trust_rules USING btree (namespace, name
 
 CREATE INDEX trust_rules_principal ON trust_rules USING btree (principal_id);
 
+CREATE INDEX trust_rules_spiffe ON trust_rules USING btree (namespace, bundle_id, spiffe_id_pattern);
+
 CREATE INDEX unit_settings_namespace ON unit_settings USING btree (namespace_id);
 
 CREATE INDEX unmanaged_scans_target ON unmanaged_scans USING btree (namespace_id, target, seq DESC);

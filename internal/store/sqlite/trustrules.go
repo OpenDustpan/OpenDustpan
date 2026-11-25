@@ -334,7 +334,8 @@ func (t TrustRules) RecordExchange(
 			return ruleErr
 		}
 
-		if recheckErr := recheckExchange(ctx, q, fence.Namespace, &x); recheckErr != nil {
+		rule := trustRuleRow(row)
+		if recheckErr := recheckExchange(ctx, q, fence.Namespace, rule, &x); recheckErr != nil {
 			return recheckErr
 		}
 
@@ -354,13 +355,16 @@ func (t TrustRules) RecordExchange(
 	})
 }
 
-// recheckExchange reads the rules and the bundle of the namespace again in
-// the transaction of an mTLS exchange, and checks that the rule still names
-// the SPIFFE ID alone, and that the bundle and the version that the service
-// verified are still the bundle of the rule and its active version. A rule or
-// a rotate that another call made after the verify so refuses the exchange.
-// It does nothing for an exchange that is not of the kind mtls-exchange.
-func recheckExchange(ctx context.Context, q *db.Queries, ns namespace.Name, x *trustrule.Exchange) error {
+// recheckExchange reads the rules that name the SPIFFE ID and the bundle of
+// the namespace again in the transaction of an mTLS exchange, and checks that
+// the rule still names the SPIFFE ID alone, and that the bundle and the
+// version that the service verified are still the bundle of the rule and its
+// active version. A rule or a rotate that another call made after the verify
+// so refuses the exchange. It does nothing for an exchange that is not of the
+// kind mtls-exchange.
+func recheckExchange(
+	ctx context.Context, q *db.Queries, ns namespace.Name, rule trustrulestore.Row, x *trustrule.Exchange,
+) error {
 	// Defense in depth: CheckExchange refuses an unknown kind before the
 	// transaction. This switch stays so that a new caller of the recheck
 	// cannot skip a kind: an unknown kind fails closed.
@@ -373,23 +377,18 @@ func recheckExchange(ctx context.Context, q *db.Queries, ns namespace.Name, x *t
 		return nil
 	}
 
-	rows, err := q.ListTrustRulesOfNamespace(ctx, ns.String())
+	matches, err := exchangeMatchRows(ctx, q, ns, rule, x)
 	if err != nil {
-		return fmt.Errorf("select the trust rules of the exchange: %w", err)
+		return err
 	}
 
-	list := make([]trustrulestore.Row, 0, len(rows))
-	for i := range rows {
-		list = append(list, trustRuleListRow(rows[i]))
-	}
-
-	if matchErr := trustrulestore.CheckExchangeMatch(list, x); matchErr != nil {
+	if matchErr := trustrulestore.CheckExchangeMatch(rule, matches, x); matchErr != nil {
 		return matchErr
 	}
 
 	b, err := q.GetTrustBundleOfNamespace(ctx, ns.String())
 	if errors.Is(err, sql.ErrNoRows) {
-		return trustrulestore.CheckExchangeBundle(nil, list, x)
+		return trustrulestore.CheckExchangeBundle(nil, rule, x)
 	}
 
 	if err != nil {
@@ -398,5 +397,32 @@ func recheckExchange(ctx context.Context, q *db.Queries, ns namespace.Name, x *t
 
 	return trustrulestore.CheckExchangeBundle(&trustrulestore.BundleRow{
 		ID: b.ID, Namespace: b.Namespace, Active: b.ActiveVersion, Revision: b.Revision, CreatedAtMs: b.CreatedAtMs,
-	}, list, x)
+	}, rule, x)
+}
+
+// exchangeMatchRows reads the narrow rows that name the same SPIFFE ID in the
+// same bundle. It reads no row when the rule has no bundle: CheckExchangeMatch
+// refuses that case with the same sentinel.
+func exchangeMatchRows(
+	ctx context.Context, q *db.Queries, ns namespace.Name, rule trustrulestore.Row, x *trustrule.Exchange,
+) ([]trustrulestore.MatchRow, error) {
+	if rule.BundleID == "" {
+		return nil, nil
+	}
+
+	rows, err := q.ListTrustRulesNamingSpiffeID(ctx, db.ListTrustRulesNamingSpiffeIDParams{
+		Namespace: ns.String(), BundleID: rule.BundleID, SpiffeIDPattern: x.SPIFFEID,
+	})
+	if err != nil {
+		return nil, fmt.Errorf("select the trust rules of the exchange: %w", err)
+	}
+
+	matches := make([]trustrulestore.MatchRow, 0, len(rows))
+	for i := range rows {
+		matches = append(matches, trustrulestore.MatchRow{
+			ID: rows[i].ID, BundleID: rows[i].BundleID, SpiffeIDPattern: rows[i].SpiffeIDPattern,
+		})
+	}
+
+	return matches, nil
 }

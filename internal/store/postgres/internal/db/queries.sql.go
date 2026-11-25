@@ -20857,6 +20857,50 @@ func (q *Queries) ListTrustBundleVersions(ctx context.Context, bundleID string) 
 	return items, nil
 }
 
+const listTrustRulesNamingSpiffeID = `-- name: ListTrustRulesNamingSpiffeID :many
+SELECT id, CAST(COALESCE(bundle_id, '') AS text) AS bundle_id, spiffe_id_pattern
+FROM trust_rules
+WHERE namespace = $1
+  AND bundle_id = CAST($2 AS text)
+  AND spiffe_id_pattern = $3
+LIMIT 2
+`
+
+type ListTrustRulesNamingSpiffeIDParams struct {
+	Namespace       string
+	BundleID        string
+	SpiffeIDPattern string
+}
+
+type ListTrustRulesNamingSpiffeIDRow struct {
+	ID              string
+	BundleID        string
+	SpiffeIDPattern string
+}
+
+// The recheck of an mTLS exchange reads at most 2 rules: the rules of the
+// bundle that name the same SPIFFE ID. Two rows already refuse the exchange,
+// so the read stops at 2. No ORDER BY: no row order changes the answer.
+func (q *Queries) ListTrustRulesNamingSpiffeID(ctx context.Context, arg ListTrustRulesNamingSpiffeIDParams) ([]ListTrustRulesNamingSpiffeIDRow, error) {
+	rows, err := q.db.Query(ctx, listTrustRulesNamingSpiffeID, arg.Namespace, arg.BundleID, arg.SpiffeIDPattern)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	var items []ListTrustRulesNamingSpiffeIDRow
+	for rows.Next() {
+		var i ListTrustRulesNamingSpiffeIDRow
+		if err := rows.Scan(&i.ID, &i.BundleID, &i.SpiffeIDPattern); err != nil {
+			return nil, err
+		}
+		items = append(items, i)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+	return items, nil
+}
+
 const listTrustRulesOfNamespace = `-- name: ListTrustRulesOfNamespace :many
 SELECT id, namespace, name, issuer, audience, key_source, static_keys, conditions_json, principal_id,
     created_by, created_at_ms, revision, spiffe_id_pattern, CAST(COALESCE(bundle_id, '') AS text) AS bundle_id

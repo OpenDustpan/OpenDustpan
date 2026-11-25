@@ -88,6 +88,15 @@ type Row struct {
 	BundleID        string
 }
 
+// MatchRow is the narrow row that the match query returns. It holds only the
+// fields that the exchange recheck compares, so the recheck cannot read the
+// full list of the rules of a namespace.
+type MatchRow struct {
+	ID              string
+	BundleID        string
+	SpiffeIDPattern string
+}
+
 // RowOf returns the row of r. It fails when the conditions do not encode. A
 // rule with revision 0 is stored with revision 1.
 func RowOf(r *trustrule.Rule) (Row, error) {
@@ -290,16 +299,16 @@ func checkExchangeBundleFields(x *trustrule.Exchange) error {
 
 // CheckExchangeBundle returns trustrule.ErrNotFound unless the bundle of the
 // namespace of the fence exists, is the bundle x.BundleID, is the bundle of the
-// rule of the exchange (the row of x.Rule in rows), and has x.BundleVersion as its active
-// version. The adapters call it in the transaction of the exchange with the
-// stored bundle row of that namespace, so a rotate that came after the verify
-// of the chain still refuses the exchange. An exchange of the kind
-// jwt-exchange has no bundle, so it passes with no check. Any other kind
-// returns trustrule.ErrInvalid.
-func CheckExchangeBundle(row *BundleRow, rows []Row, x *trustrule.Exchange) error {
+// rule of the exchange, and has x.BundleVersion as its active version. The
+// adapters call it in the transaction of the exchange with the stored bundle
+// row of that namespace, so a rotate that came after the verify of the chain
+// still refuses the exchange. An exchange of the kind jwt-exchange has no
+// bundle, so it passes with no check. Any other kind returns
+// trustrule.ErrInvalid.
+func CheckExchangeBundle(row *BundleRow, rule Row, x *trustrule.Exchange) error {
 	switch x.Token.Kind {
 	case accesstoken.KindMTLSExchange:
-		return checkMtlsExchangeBundle(row, rows, x)
+		return checkMtlsExchangeBundle(row, rule, x)
 	case accesstoken.KindJWTExchange:
 		return nil
 	case accesstoken.KindPersonal, accesstoken.KindService:
@@ -318,19 +327,11 @@ func unknownExchangeKind(kind accesstoken.Kind) error {
 
 // checkMtlsExchangeBundle is the bundle check of CheckExchangeBundle for the
 // kind mtls-exchange.
-func checkMtlsExchangeBundle(row *BundleRow, rows []Row, x *trustrule.Exchange) error {
-	ruleBundleID := ""
-
-	for i := range rows {
-		if rows[i].ID == string(x.Rule) {
-			ruleBundleID = rows[i].BundleID
-		}
-	}
-
+func checkMtlsExchangeBundle(row *BundleRow, rule Row, x *trustrule.Exchange) error {
 	switch {
 	case row == nil:
 		return fmt.Errorf("%w: the namespace has no trust bundle", trustrule.ErrNotFound)
-	case row.ID != string(x.BundleID) || ruleBundleID != string(x.BundleID):
+	case row.ID != string(x.BundleID) || rule.BundleID != string(x.BundleID):
 		return fmt.Errorf("%w: the bundle of the exchange is not the bundle of its rule and its namespace",
 			trustrule.ErrNotFound)
 	case row.Active != x.BundleVersion:
@@ -341,40 +342,40 @@ func checkMtlsExchangeBundle(row *BundleRow, rows []Row, x *trustrule.Exchange) 
 	}
 }
 
-// CheckExchangeMatch returns trustrule.ErrNotFound unless exactly one row of
-// rows has the SPIFFE ID pattern x.SPIFFEID and the bundle of the row of
-// x.Rule, and that row is the row of x.Rule. The adapters call it in the
-// transaction of the exchange with the rule rows of the namespace of the
-// fence, so a rule that another call added after the service read its rules
+// CheckExchangeMatch returns trustrule.ErrNotFound unless exactly one narrow
+// match row has the SPIFFE ID pattern x.SPIFFEID and the bundle of the rule
+// of the exchange, and that row is the row of x.Rule. The adapters call it in
+// the transaction of the exchange with the narrow rows that the match query
+// returns, so a rule that another call added after the service read its rules
 // still refuses the exchange. It returns nil for an exchange with no SPIFFE
 // ID.
-func CheckExchangeMatch(rows []Row, x *trustrule.Exchange) error {
+func CheckExchangeMatch(rule Row, matches []MatchRow, x *trustrule.Exchange) error {
 	if x.SPIFFEID == "" {
 		return nil
 	}
 
-	bundle := ""
-
-	for i := range rows {
-		if rows[i].ID == string(x.Rule) {
-			bundle = rows[i].BundleID
-		}
-	}
-
-	if bundle == "" {
-		return fmt.Errorf("%w: the rule of the exchange has no trust bundle", trustrule.ErrNotFound)
+	// Defense in depth: RecordExchange reads this row by its ID and checks it
+	// with CheckExchangeRule; this check stays so that a new caller of the
+	// recheck cannot pass another row.
+	if rule.ID != string(x.Rule) || rule.BundleID == "" || rule.SpiffeIDPattern != x.SPIFFEID {
+		return fmt.Errorf("%w: the rule of the exchange does not name the SPIFFE ID of the exchange",
+			trustrule.ErrNotFound)
 	}
 
 	matched := make([]string, 0, 1)
 
-	for i := range rows {
-		if rows[i].BundleID == bundle && rows[i].SpiffeIDPattern == x.SPIFFEID {
-			matched = append(matched, rows[i].ID)
+	for i := range matches {
+		// Defense in depth: the query compares the same columns with `=`; this
+		// compare stays so that a wrong query, an index or a driver cannot make
+		// the store accept a row that does not name the SPIFFE ID of the
+		// exchange.
+		if matches[i].BundleID == rule.BundleID && matches[i].SpiffeIDPattern == x.SPIFFEID {
+			matched = append(matched, matches[i].ID)
 		}
 	}
 
 	if len(matched) != 1 || matched[0] != string(x.Rule) {
-		return fmt.Errorf("%w: %d rules name the SPIFFE ID of the exchange, want only its rule",
+		return fmt.Errorf("%w: at least %d rules name the SPIFFE ID of the exchange, want only its rule",
 			trustrule.ErrNotFound, len(matched))
 	}
 
