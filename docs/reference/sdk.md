@@ -5,7 +5,7 @@
 cancels the context. `Close` then closes the built-in store that `WithSQLite`
 or `WithPostgreSQL` opened.
 
-This program starts a server on `127.0.0.1:18080` with one store option. Make a
+This program starts a server on `127.0.0.1:18080` with one store and its settings. Make a
 token with `openssl rand -hex 32` and set it in `EXAMPLE_TOKEN`. Run the
 program with one argument, a directory that exists:
 `EXAMPLE_TOKEN=<token> go run . /var/lib/example`. Stop it with Ctrl-C. A
@@ -59,6 +59,7 @@ func run(ctx context.Context, dir string) error {
 
 	server, err := dustpan.NewServer(
 		dustpan.WithBuiltinStore(store),
+		dustpan.WithSettings(store.SettingStore(), store.SettingDeclarations(), nil),
 		dustpan.WithInstallation("eu-west"),
 		dustpan.WithBlobStore(blobs),
 		dustpan.WithAuthenticator(authn),

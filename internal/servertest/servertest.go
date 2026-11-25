@@ -552,7 +552,11 @@ func serverOptions(
 
 	if stores.builtin != nil {
 		// The built-in store gives every port, as the binary does.
-		return append(opts, dustpan.WithBuiltinStore(stores.builtin))
+		return append(
+			opts,
+			dustpan.WithBuiltinStore(stores.builtin),
+			dustpan.WithSettings(stores.builtin.SettingStore(), stores.builtin.SettingDeclarations(), nil),
+		)
 	}
 
 	return append(opts, explicitStoreOptions(stores.adapter, logger)...)

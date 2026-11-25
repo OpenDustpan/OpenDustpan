@@ -115,6 +115,13 @@ var ErrMissingOption = errors.New("missing required option")
 // ErrInvalidOption reports an option with a value that the server refuses.
 var ErrInvalidOption = errors.New("invalid option")
 
+// errBuiltinStoreWithoutSettings is returned when a built-in store has no
+// WithSettings. It wraps ErrMissingOption and names the fix.
+var errBuiltinStoreWithoutSettings = fmt.Errorf(
+	"%w: WithSettings. Open the store with OpenStore, pass it with WithBuiltinStore, and give WithSettings",
+	ErrMissingOption,
+)
+
 // MinSoftDeleteRetention is the shortest soft-delete retention that
 // WithSoftDeleteRetention accepts (ADR 47, decision 2). There is no maximum.
 const MinSoftDeleteRetention = time.Hour
@@ -845,6 +852,14 @@ func NewServer(opts ...Option) (*Server, error) {
 	}
 
 	closeStore := cfg.builtinStore.closeFunc()
+
+	if cfg.builtinStore.source != builtinStoreNone && cfg.settingsConfig.store == nil {
+		if closeStore == nil {
+			return nil, errBuiltinStoreWithoutSettings
+		}
+
+		return nil, errors.Join(errBuiltinStoreWithoutSettings, closeStore())
+	}
 
 	srv, err := buildServer(cfg)
 	if err != nil {

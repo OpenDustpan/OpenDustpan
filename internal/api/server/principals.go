@@ -34,6 +34,7 @@ import (
 	"strconv"
 	"time"
 
+	denials "opendustpan.org/opendustpan/internal/api/refusal"
 	"opendustpan.org/opendustpan/internal/errcode"
 	"opendustpan.org/opendustpan/pkg/access"
 	"opendustpan.org/opendustpan/pkg/audit"
@@ -439,6 +440,7 @@ func (h *Handler) servePrincipalRead(op principalOp) RouteHandler {
 
 		res, err := h.runPrincipalOp(w, r, op, &call{p: p, obj: identity.Object{}, e: none})
 		if err != nil {
+			h.appendInstallationReachRefusal(r, p, err)
 			h.writeError(r.Context(), w, err)
 
 			return
@@ -453,7 +455,8 @@ func (h *Handler) servePrincipalRead(op principalOp) RouteHandler {
 // change writes one failure entry here, best effort, with the missing
 // actions of a reach refusal. A refusal that leaves too few working
 // break-glass accounts writes one denied entry in its own write before the
-// answer, and no failure entry.
+// answer, and no failure entry. So does a refusal of a principal of a
+// namespace that the installation grants do not reach.
 func (h *Handler) servePrincipalChange(action identity.Action, op principalOp) RouteHandler {
 	return func(w http.ResponseWriter, r *http.Request, p identity.Principal, _ identity.Object) {
 		res, err := h.runPrincipalOp(w, r, op, &call{p: p, obj: identity.Object{}, e: callerEntry(r, p, action)})
@@ -466,6 +469,12 @@ func (h *Handler) servePrincipalChange(action identity.Action, op principalOp) R
 
 		if errors.Is(err, principal.ErrNoWorkingBreakGlass) {
 			h.appendBreakGlassRefusal(r, p, action, res.object)
+			h.writeError(r.Context(), w, err)
+
+			return
+		}
+
+		if h.appendInstallationReachRefusal(r, p, err) {
 			h.writeError(r.Context(), w, err)
 
 			return
@@ -948,32 +957,66 @@ func (h *Handler) disablePrincipal(
 	return h.switchPrincipal(r, svc, e, caller, svc.DisablePrincipal)
 }
 
+// reachReasonSetting is the audit reason of an installation reach refusal
+// when the setting is false. A failed read has the reason of a failed
+// decision.
+const reachReasonSetting = "setting " + access.SettingInstallationGrantsReachNamespaces + " is false"
+
+// installationReachError is the error of refuseInstallationReach. It
+// unwraps to the denial, which answers 403, and carries the audit reason of
+// the one denied entry that the route writes.
+type installationReachError struct {
+	denied identity.DeniedError
+	reason string
+}
+
+func (e *installationReachError) Error() string { return e.denied.Error() }
+
+func (e *installationReachError) Unwrap() error { return &e.denied }
+
 // refuseInstallationReach refuses a principal of a namespace when a grant on
 // the installation does not reach namespaces. It returns nil for a principal
-// of the installation or when the setting holds. A failed read denies.
+// of the installation or when the setting holds. A failed read denies, and
+// so does a handler with no access service (fail closed).
 func (h *Handler) refuseInstallationReach(ctx context.Context, action identity.Action, p principal.Principal) error {
 	if p.Namespace == "" {
 		return nil
 	}
 
-	reaches := true
+	reason := denials.ReasonFailed
 
 	if h.access != nil {
-		r, err := h.access.Authorizer().GrantsReachNamespaces(ctx)
-		if err != nil || !r {
-			reaches = false
+		reaches, err := h.access.Authorizer().GrantsReachNamespaces(ctx)
+		if err == nil && reaches {
+			return nil
+		}
+
+		if err == nil {
+			reason = reachReasonSetting
 		}
 	}
 
-	if reaches {
-		return nil
+	return &installationReachError{
+		denied: identity.DeniedError{Subject: "", Action: action, Object: identity.NamespaceObject(p.Namespace)},
+		reason: reason,
+	}
+}
+
+// appendInstallationReachRefusal writes the one denied entry of an
+// installation reach refusal on the principal of the path, best effort, and
+// returns true. It writes nothing and returns false for any other error.
+func (h *Handler) appendInstallationReachRefusal(r *http.Request, p identity.Principal, err error) bool {
+	refusal, ok := errors.AsType[*installationReachError](err)
+	if !ok || h.principals == nil {
+		return false
 	}
 
-	return fmt.Errorf("%w", &identity.DeniedError{
-		Subject: "",
-		Action:  action,
-		Object:  identity.NamespaceObject(p.Namespace),
-	})
+	h.appendServerChangeReason(r, p, serverChange{
+		at: h.principals.Now(), action: refusal.denied.Action,
+		object: principal.Ref(r.PathValue("id")), outcome: audit.OutcomeDenied,
+	}, refusal.reason)
+
+	return true
 }
 
 // listGroupsOfPrincipal serves GET /api/server/principals/{id}/groups: one

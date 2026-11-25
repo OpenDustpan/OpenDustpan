@@ -324,6 +324,8 @@ func newAccessFixtureAll(t *testing.T, parts accessFixtureParts) accessFixture {
 		t.Fatalf("principal service: %v", err)
 	}
 
+	principals = principals.WithInstallationReach(authz)
+
 	tokens, err := accesstoken.NewService(accesstoken.Config{
 		Makers:     grants,
 		TempAdmins: nil,

@@ -126,18 +126,13 @@ func listPrincipalRows(
 	return q.ListPrincipals(
 		ctx,
 		db.ListPrincipalsParams{
-			After:     pq.After,
-			Low:       pq.Low,
-			High:      pq.High,
-			Kind:      string(kind),
-			Namespace: ns.String(),
-			InstallationOnly: func() int64 {
-				if pq.InstallationOnly {
-					return 1
-				}
-				return 0
-			}(),
-			RowLimit: int64(pq.Limit),
+			After:            pq.After,
+			Low:              pq.Low,
+			High:             pq.High,
+			Kind:             string(kind),
+			Namespace:        ns.String(),
+			InstallationOnly: installationOnlyFlag(pq),
+			RowLimit:         int64(pq.Limit),
 		},
 	)
 }
@@ -145,14 +140,19 @@ func listPrincipalRows(
 func countPrincipalRows(
 	ctx context.Context, q *db.Queries, pq principal.Query, kind principal.Kind, ns namespace.Name,
 ) (int64, error) {
-	io := int64(0)
-	if pq.InstallationOnly {
-		io = 1
-	}
 	return q.CountPrincipals(ctx, db.CountPrincipalsParams{
 		Low: pq.Low, High: pq.High, Kind: string(kind), Namespace: ns.String(),
-		InstallationOnly: io,
+		InstallationOnly: installationOnlyFlag(pq),
 	})
+}
+
+// installationOnlyFlag is the SQL form of Query.InstallationOnly.
+func installationOnlyFlag(pq principal.Query) int64 {
+	if pq.InstallationOnly {
+		return 1
+	}
+
+	return 0
 }
 
 func principalFromList(r db.ListPrincipalsRow) principal.Principal {

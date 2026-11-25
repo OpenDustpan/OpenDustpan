@@ -1,12 +1,69 @@
 package dustpan
 
 import (
+	"errors"
 	"path/filepath"
+	"strings"
 	"testing"
 
 	"opendustpan.org/opendustpan/internal/cli"
 	"opendustpan.org/opendustpan/internal/store/sqlite"
 )
+
+// TestNewServerRefusesBuiltinStoreWithoutSettings proves that NewServer refuses
+// a built-in store when the caller gave no WithSettings. The error names the
+// fix: OpenStore, WithBuiltinStore and WithSettings.
+func TestNewServerRefusesBuiltinStoreWithoutSettings(t *testing.T) {
+	t.Parallel()
+
+	store, openErr := OpenStore(t.Context(), "sqlite:"+filepath.Join(t.TempDir(), "dustpan.db"))
+	if openErr != nil {
+		t.Fatalf("open store: %v", openErr)
+	}
+
+	t.Cleanup(func() {
+		if closeErr := store.Close(); closeErr != nil {
+			t.Errorf("close store: %v", closeErr)
+		}
+	})
+
+	cases := []struct {
+		name   string
+		option Option
+	}{
+		{name: "WithBuiltinStore", option: WithBuiltinStore(store)},
+		{name: "WithSQLite", option: WithSQLite(filepath.Join(t.TempDir(), "dustpan.db"))},
+	}
+
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			t.Parallel()
+
+			srv, err := NewServer(tc.option)
+			if err == nil {
+				t.Fatalf("NewServer(%s) = %v, nil error, want an error", tc.name, srv)
+			}
+
+			checkBuiltinStoreRefusal(t, err)
+		})
+	}
+}
+
+// checkBuiltinStoreRefusal checks that err wraps ErrMissingOption and names
+// each part of the fix.
+func checkBuiltinStoreRefusal(t *testing.T, err error) {
+	t.Helper()
+
+	if !errors.Is(err, ErrMissingOption) {
+		t.Fatalf("NewServer error = %v, want ErrMissingOption", err)
+	}
+
+	for _, want := range []string{"OpenStore", "WithBuiltinStore", "WithSettings"} {
+		if !strings.Contains(err.Error(), want) {
+			t.Fatalf("NewServer error = %v, want it to name %s", err, want)
+		}
+	}
+}
 
 // TestInstallationReachWiring proves the wiring of the installation reach
 // setting: a server built without a settings service refuses to build an

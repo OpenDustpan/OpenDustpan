@@ -35,6 +35,7 @@ import (
 	"opendustpan.org/opendustpan/pkg/job"
 	"opendustpan.org/opendustpan/pkg/namespace"
 	"opendustpan.org/opendustpan/pkg/secret"
+	"opendustpan.org/opendustpan/pkg/setting"
 	"opendustpan.org/opendustpan/pkg/stack"
 	"opendustpan.org/opendustpan/pkg/workspace"
 )
@@ -282,6 +283,7 @@ type ports struct {
 	durable     dustpan.DurableStore
 	allowlists  ipallow.Store
 	kinds       installation.KindStore
+	settings    setting.Store
 }
 
 // portsOfSQLite answers the ports of one SQLite handle.
@@ -301,6 +303,7 @@ func portsOfSQLite(store *sqlite.Store) ports {
 		durable:     store.DurableOperations(),
 		allowlists:  store,
 		kinds:       store,
+		settings:    store.SettingStore(),
 	}
 }
 
@@ -321,6 +324,7 @@ func portsOfPostgres(store *postgres.Store) ports {
 		durable:     store.DurableOperations(),
 		allowlists:  store,
 		kinds:       store,
+		settings:    store.SettingStore(),
 	}
 }
 
@@ -932,6 +936,7 @@ func newInstanceServer(
 		dustpan.WithBlobStore(served.blobs),
 		dustpan.WithInventoryReader(served.ports.units),
 		dustpan.WithAuthenticator(authn),
+		dustpan.WithSettings(served.ports.settings, nil, nil),
 		dustpan.WithDurableStore(served.ports.durable),
 		dustpan.WithJobStore(served.ports.jobs),
 		dustpan.WithRunners(served.ports.runners),

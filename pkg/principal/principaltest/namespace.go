@@ -37,6 +37,7 @@ func RunNamespace(t *testing.T, newStore NamespaceFactory) {
 		{name: "the writes of the installation do not act on it", test: testInstallationWritesRefuse},
 		{name: "update and delete act in its own namespace only", test: testNamespacePrincipalUpdateDelete},
 		{name: "a principal of a namespace cannot join a group", test: testNamespacePrincipalNoGroup},
+		{name: "an installation only query leaves out the principals of a namespace", test: testInstallationOnlyQuery},
 	}
 
 	for _, tc := range cases {
@@ -94,6 +95,41 @@ func mustCreateNamespacePrincipal(t *testing.T, s NamespaceStore, p principal.Pr
 
 	if err := s.CreateNamespacePrincipal(t.Context(), p, fenceOf(p.Namespace), nsEntry(p.Namespace)); err != nil {
 		t.Fatalf("create principal %q in %q: %v", p.Subject, p.Namespace, err)
+	}
+}
+
+// testInstallationOnlyQuery checks that Query.InstallationOnly keeps the
+// principals of a namespace out of the rows and out of the total.
+func testInstallationOnlyQuery(t *testing.T, s NamespaceStore) {
+	t.Helper()
+
+	mustCreateNamespacePrincipal(t, s, nsPrincipal("prn-1", "ci-deploy", "acme"))
+	mustCreatePrincipal(t, s, newPrincipal("prn-2", "alice", principal.KindPerson))
+
+	cases := []struct {
+		name      string
+		only      bool
+		wantTotal int64
+		want      []string
+	}{
+		{name: "installation only", only: true, wantTotal: 1, want: []string{"alice"}},
+		{name: "every principal", only: false, wantTotal: 2, want: []string{"alice", "ci-deploy"}},
+	}
+
+	for _, tc := range cases {
+		q := all()
+		q.InstallationOnly = tc.only
+
+		rows, total, err := s.ListPrincipals(t.Context(), q, "")
+		if err != nil {
+			t.Fatalf("%s: list: %v", tc.name, err)
+		}
+
+		if total != tc.wantTotal {
+			t.Fatalf("%s: total = %d, want %d", tc.name, total, tc.wantTotal)
+		}
+
+		equalStrings(t, tc.name, subjects(rows), tc.want)
 	}
 }
 
