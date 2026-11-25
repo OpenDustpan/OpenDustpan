@@ -74,7 +74,11 @@ func partOf(kind job.OutputKind, hash string) job.PlanPart {
 func twoApprovals() job.Gate {
 	return job.Gate{
 		Type: job.GateApproval, Name: "", Approvals: 2, Groups: nil, GroupIDs: nil, AllowSelf: false, Timeout: 0,
-		BindPlan: true,
+		BindPlan:   true,
+		Users:      nil,
+		UserIDs:    nil,
+		UnitOwners: false,
+		Scope:      gate.Scope{},
 	}
 }
 

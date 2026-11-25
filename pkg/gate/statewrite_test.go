@@ -518,9 +518,20 @@ func (e swEnv) putRule(t *testing.T) {
 	t.Helper()
 
 	rule := gate.ApprovalRule{
-		Scope: gate.NamespaceScope("acme"), ID: "two-eyes", Version: 0,
-		Approvers: gate.Approvers{Groups: []string{"sre"}, GroupIDs: nil, Users: nil, UnitOwners: false}, Count: 2,
-		AuthorMayApprove: false, FreshAuth: gate.NoFreshAuth(), Timeout: 0,
+		Scope:   gate.NamespaceScope("acme"),
+		ID:      "two-eyes",
+		Version: 0,
+		Approvers: gate.Approvers{
+			Groups:     []string{"sre"},
+			GroupIDs:   nil,
+			Users:      nil,
+			UnitOwners: false,
+			UserIDs:    nil,
+		},
+		Count:            2,
+		AuthorMayApprove: false,
+		FreshAuth:        gate.NoFreshAuth(),
+		Timeout:          0,
 	}
 
 	if _, err := e.store.ApprovalRules().Put(t.Context(), rule, 0, e.fence, swEntry()); err != nil {

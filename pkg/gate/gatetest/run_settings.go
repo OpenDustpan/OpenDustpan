@@ -46,6 +46,7 @@ func approvalDefault(scope gate.Scope, count int) gate.ApprovalDefault {
 			GroupIDs:   nil,
 			Users:      nil,
 			UnitOwners: false,
+			UserIDs:    nil,
 		},
 		Unless: "",
 		Reads:  nil,
@@ -81,7 +82,13 @@ func caseDefaultFieldsValid(t *testing.T, e *env) {
 		{"window below 60", func(d *gate.ApprovalDefault) { d.FreshAuth = gate.FreshAuth{Set: true, Seconds: 59} }},
 		{"window above 900", func(d *gate.ApprovalDefault) { d.FreshAuth = gate.FreshAuth{Set: true, Seconds: 901} }},
 		{"empty approver name", func(d *gate.ApprovalDefault) {
-			d.Approvers = gate.Approvers{Groups: nil, GroupIDs: nil, Users: []string{""}, UnitOwners: false}
+			d.Approvers = gate.Approvers{
+				Groups:     nil,
+				GroupIDs:   nil,
+				Users:      []string{""},
+				UnitOwners: false,
+				UserIDs:    nil,
+			}
 		}},
 	}
 

@@ -117,8 +117,19 @@ func def(scope gate.Scope, count int, groups ...string) gate.ApprovalDefault {
 	}
 
 	return gate.ApprovalDefault{
-		Scope: scope, Version: 1, Count: count, FreshAuth: gate.NoFreshAuth(),
-		Approvers: gate.Approvers{Groups: groups, GroupIDs: ids, Users: nil, UnitOwners: false}, Unless: "", Reads: nil,
+		Scope:     scope,
+		Version:   1,
+		Count:     count,
+		FreshAuth: gate.NoFreshAuth(),
+		Approvers: gate.Approvers{
+			Groups:     groups,
+			GroupIDs:   ids,
+			Users:      nil,
+			UnitOwners: false,
+			UserIDs:    nil,
+		},
+		Unless: "",
+		Reads:  nil,
 	}
 }
 
@@ -505,9 +516,10 @@ func gateSummary(t *testing.T, gates []job.Gate) []string {
 
 	out := make([]string, 0, len(gates))
 
-	for _, g := range gates {
+	for i := range gates {
+		g := &gates[i]
 		if g.Type != job.GateApproval || !g.BindPlan {
-			t.Errorf("gate %q = %+v, want an approval gate that binds the plan", g.Name, g)
+			t.Errorf("gate %q = %+v, want an approval gate that binds the plan", g.Name, *g)
 		}
 
 		out = append(out, fmt.Sprintf("%s=%d", g.Name, g.Approvals))

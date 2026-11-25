@@ -1,5 +1,5 @@
 ---
-version: 9
+version: 12
 ---
 
 Issue: #4064
@@ -35,10 +35,11 @@ Evidence for the claims above:
 
 ## What Changes
 
-- Require a TOTP, recovery code or passkey second factor for local and LDAP password sign-in when require MFA is on.
+- Require a TOTP, recovery code or passkey second factor for local and LDAP password sign-in when built-in MFA is on and the rule of ADR 285 decisions 20 and 21 says so: the person has a factor, require MFA is on, or an SSO provider exists next to the password sign-in.
 - Add one route for the second factor of a pending sign-in, `POST /api/dustpan/v1/sign-in/second-factor`, with a method field.
 - Add the SQLite and PostgreSQL adapters of `mfa.PendingStore`, `mfa.RecoveryCodeStore` and `stepup.TOTPStore`, with their conformance suites.
 - Add one port method that accepts a TOTP time step for a sign-in and touches no step-up counter.
+- Store the MFA policy as three installation settings: `mfa.enabled`, `mfa.requireForAll` and `mfa.enrollmentGraceDays`.
 - Keep SSO sign-in with no added built-in second factor.
 - Require a fresh MFA step for access token creation and secret reveal inside one window.
 
@@ -51,6 +52,7 @@ Out of scope:
 - Collections and placement
 - Fresh-window range and no-factor refusal wording, owned by fresh-authentication-window-0-turns
 - TOTP enrollment, recovery code issue and the other factor routes, owned by app-level-second-factor-totp, which depends on this change for the stores
+- The enroll-only session of a person with no factor after `mfa.enrollmentGraceDays` (ADR 285 decision 21), owned by app-level-second-factor-totp
 
 Depends on:
 
@@ -86,9 +88,28 @@ Each quote is copied from the file in `docs/adr/`. Code adds the owner tags, the
 - Changed by: ADR 55 extends decision 3; ADR 56 extends decision 6; ADR 57 extends; ADR 212 extends decision 8; ADR 285 changes decisions 1 and 2; ADR 301 changes decision 2. Chain to the end: ADR 55, ADR 56, ADR 57, ADR 212, ADR 285, ADR 301, ADR 70, ADR 297, ADR 320, ADR 321, ADR 69, ADR 71, ADR 222, ADR 227, ADR 245, ADR 232, ADR 235, ADR 365, ADR 312, ADR 333, ADR 142, ADR 210, ADR 216, ADR 306, ADR 332, ADR 354, ADR 369, ADR 286, ADR 335, ADR 351, ADR 339, ADR 295, ADR 288, ADR 149, ADR 247, ADR 273, ADR 370.
 - Current rule: this ADR, with ADR 55, 56, 57, 212, 285, 301.
 - Quote: "Built-in MFA. An install that signs people in with no SSO identity provider (local users, LDAP) can use built-in MFA."
-- Quote: "With an SSO identity provider, MFA is the job of that provider. OpenDustpan adds no MFA step of its own on top (ADR 6)."
+- Quote: "With an SSO identity provider, MFA is the job of that provider. OpenDustpan adds no MFA step of its own on top (ADR 6)." ADR 285 amends decisions 1 and 2: a local password account next to an SSO provider needs a second factor, and decision 2 now covers the persons who sign in through the SSO provider only.
 - Quote: "What MFA covers. Console sign-in, the creation of access tokens, and the reveal of a secret value (ADR 41)."
 - Effect: Built-in MFA applies to local and LDAP sign-in; SSO gets no added step.
+- Conflict: none.
+
+**ADR 285: Local users sign in with a password and with a passkey** (owner-tagged: decisions 1 and 21; the ADR is decided by the project owner).
+
+- Decisions that apply: 1, 20, 21.
+- Changed by: ADR 297 changes decisions 5, 17, 19, 20 and 21; ADR 301 extends decision 1; ADR 312 changes decision 29; ADR 320 extends decision 21; ADR 333 changes decision 16 and extends decisions 20 and 23; ADR 372 changes decision 17. Amends ADR 46 decisions 1 and 2.
+- Quote (decision 1): "While an SSO provider exists and the setting is on, each local password user needs a second factor, with the grace of `mfa.enrollmentGraceDays`, whatever the value of `mfa.requireForAll` (decision 21)."
+- Quote (decision 20): "When built-in MFA is on (ADR 46), a password sign-in makes a pending sign-in, not a session (RFC 21 P7)."
+- Quote (decision 21): "The installation setting `mfa.requireForAll` makes each password sign-in ask for a second factor."
+- Quote (decision 21): "A password alone is never a fresh authentication when `mfa.requireForAll` is on, while an SSO provider exists, or when the person has a factor."
+- Effect: with built-in MFA on, a password sign-in of a person with a factor makes a pending sign-in whatever `mfa.requireForAll` says. Next to an SSO provider with the password sign-in on, the second factor is asked whatever `mfa.requireForAll` says. The change stores `mfa.requireForAll` and `mfa.enrollmentGraceDays` as settings and builds no rule that needs both `mfa.enabled` and `mfa.requireForAll`.
+- Conflict: none.
+
+**ADR 297: Console sessions are sealed cookies, not stored sessions**.
+
+- Decisions that apply: the change of ADR 285 decisions 20 and 21.
+- Changed by: ADR 301 extends decision 1; ADR 333 extends decision 4.
+- Quote: "Changes ADR 285 decisions 5, 17, 19, 20 and 21: "end every session" becomes a bump of the session generation. A good second factor issues cookies, not a stored session. An enroll-only session is a claim of the cookies."
+- Effect: a good second factor issues cookies through `CompletePending`, and the second-factor time of task 3.9 is kept in the sealed cookies.
 - Conflict: none.
 
 **ADR 56: MFA freshness for token creation and secret reveal** (not owner-tagged).

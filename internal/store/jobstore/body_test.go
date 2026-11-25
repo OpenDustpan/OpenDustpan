@@ -9,6 +9,7 @@ import (
 	"time"
 
 	"opendustpan.org/opendustpan/internal/store/jobstore"
+	"opendustpan.org/opendustpan/pkg/gate"
 	"opendustpan.org/opendustpan/pkg/identity"
 	"opendustpan.org/opendustpan/pkg/job"
 	"opendustpan.org/opendustpan/pkg/namespace"
@@ -77,12 +78,16 @@ func fullJob(t *testing.T) job.Job {
 			Gates: []job.Gate{
 				{
 					Type: job.GateConfirmation, Name: "",
-					Approvals: 2,
-					Groups:    []string{"ops"},
-					GroupIDs:  nil,
-					AllowSelf: true,
-					Timeout:   time.Hour,
-					BindPlan:  true,
+					Approvals:  2,
+					Groups:     []string{"ops"},
+					GroupIDs:   nil,
+					AllowSelf:  true,
+					Timeout:    time.Hour,
+					BindPlan:   true,
+					Users:      nil,
+					UserIDs:    nil,
+					UnitOwners: false,
+					Scope:      gate.Scope{},
 				},
 			},
 			Approvals: []job.Approval{
