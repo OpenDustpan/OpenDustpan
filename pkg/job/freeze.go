@@ -13,7 +13,9 @@ import (
 // ErrFreezeActive reports a create of a change freeze on a namespace that
 // already has an active freeze. The first freeze stays unchanged. The
 // store checks it in the transaction of the create.
-var ErrFreezeActive = errors.New("a change freeze of the namespace is already active")
+var ErrFreezeActive = errors.New(
+	"a change freeze of the namespace is already active; list the freezes with GET /api/dustpan/v1/namespaces/{namespace}/freezes",
+)
 
 // ErrNoActiveFreeze reports an end of a freeze on a namespace with no active
 // freeze.

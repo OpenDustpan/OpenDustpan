@@ -223,10 +223,12 @@ func (h *Handler) listFreezes(w http.ResponseWriter, r *http.Request, p identity
 
 	page, err := parseFreezePageQuery(r, t.ns.Name)
 	if err != nil {
-		if errors.Is(err, errPageToken) {
-			h.recordFreezeListRefusal(ctx, r, p, t.ns.Name, reasonPageToken)
+		reason := reasonPageToken
+		if !errors.Is(err, errPageToken) {
+			reason = "the query of the freeze list is not valid"
 		}
 
+		h.recordFreezeListRefusal(ctx, r, p, t.ns.Name, reason)
 		h.writeError(ctx, w, err)
 
 		return

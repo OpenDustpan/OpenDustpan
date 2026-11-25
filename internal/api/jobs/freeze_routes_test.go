@@ -510,7 +510,7 @@ func TestFreezeRoutes(t *testing.T) {
 		{
 			name: "second create is refused", holds: []string{read, manage}, open: true,
 			method: http.MethodPost, url: freezesURL, body: `{"reason":"second"}`, key: false,
-			wantStatus: http.StatusConflict, wantCode: "job.frozen", wantText: "",
+			wantStatus: http.StatusConflict, wantCode: "job.frozen", wantText: "list the freezes",
 		},
 		{
 			name: "end with none active is refused", holds: []string{read, manage}, open: false,
@@ -666,6 +666,8 @@ func TestFreezeListPaging(t *testing.T) {
 	}
 
 	checkErrorBody(t, rec.Body.String(), "request.invalid-query", "")
+
+	checkPageTokenDenial(t, f)
 }
 
 // freezeTokenForTest is the wire shape of the page token of the freeze list.
