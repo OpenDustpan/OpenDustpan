@@ -20,7 +20,7 @@ Evidence for the claims above:
 
 ## What Changes
 
-- Change the port `mfa.PendingStore.CompletePending` to take one `mfa.Completion` value in place of the session, its digest and the audit entry (task 1.1), so that it meets the argument limit of 5. `mfa.NewCompletion` rejects a zero session ID, a zero digest and an entry with no action.
+- Change the port `mfa.PendingStore.CompletePending` to take one `mfa.Completion` value in place of the session, its digest and the audit entry (task 1.1), so that it meets the argument limit of 5. the NEW constructor `mfa.NewCompletion` rejects a zero session ID, a zero digest and an entry with no action.
 - Add the SQLite and PostgreSQL adapters of `mfa.PendingStore`, `mfa.RecoveryCodeStore` and `stepup.TOTPStore`, with their conformance suites first.
 - Add one port method `AcceptSignInStep` that accepts a TOTP time step for a sign-in and touches no step-up counter.
 - Add the four tables `mfa_pending_sign_ins`, `mfa_recovery_codes`, `mfa_totp_factors` and `mfa_totp_attempts`, with their queries.
