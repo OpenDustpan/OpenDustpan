@@ -1,3 +1,9 @@
+---
+version: 2
+---
+
+Issue: #4155
+
 Roadmap: `docs/roadmap.md:779` (Every step is audited).
 
 ## Why
@@ -22,7 +28,7 @@ Errors the person may hit, and the one command that helps:
 Evidence for the claims above:
 
 - The audit log port exists on main. Proof: `pkg/audit/audit.go`.
-- The entries route and the check route exist. Proof: `internal/api/audit/routes.go:49` and `:52`.
+- The entries route and the check route exist. Proof: `internal/api/audit/routes.go:49` (entries) and `:51` (check).
 - The three error codes exist. Proof: `internal/errcode/catalog_audit.go:8` (`audit.entry-not-found`), `:11` (`audit.entry-read-unavailable`) and `:17` (`audit.reason-invalid`). The earlier draft of this change called `audit.reason-invalid` NEW. It is not.
 - The entry has a `Reason` field and a check for it. Proof: `pkg/audit/audit.go:153` (`MaxReasonLen` is 500), `:182` (`ErrInvalidReason`) and `:195` (`ValidateReason`).
 - The agent block exists on main with six of its seven fields. Proof: `pkg/audit/audit.go:256` (`NewOrigin`). The field `delegationID` of ADR 380 depends on a delegation record that main does not have (`rg -n 'delegationID' -g '*.go' .` finds no production use).
@@ -47,7 +53,7 @@ Depends on:
 
 - `person-delegates-dusty` (the delegation ID and `Resolve`).
 - `audit-entry-has-no-agent` (still an active change; it makes the agent block).
-- A change that makes a tool call carry a delegation and a reason (RFC 121 slices 3 and 6). No such change is in `openspec/changes/` on 20 November 2026. It is a dependency to be written.
+- The Dusty run job: a change that makes a tool call carry a delegation and a reason (RFC 121 slices 3 and 6). No such change is in `openspec/changes/` on 25 November 2026, so it has no name for `depends_on` yet. It is a dependency to be written. Tasks 0.2, 2.1 and 4.1 wait for it.
 - `audit-agent-block` is archived and landed. It is no longer a dependency.
 
 ## Usability
@@ -66,6 +72,7 @@ Each fact names its file, line and function on main. The change specifies only t
 - User-agent truncation for audit entries is tested on main. (`pkg/audit/user_agent_test.go:14 (TestTruncateUserAgentKeepsRunes)`)
 - The audit kind `audit-read` is defined on main. (`pkg/audit/audit.go:69 (audit-read)`)
 - The error code `audit.entry-not-found` is defined on main. (`internal/errcode/catalog_audit.go:8 (audit.entry-not-found)`)
+- The chain hash covers `DelegationID` and `Reason` on main. (`pkg/audit/audit.go:640 (hashWithChanges)`; tests `pkg/audit/agent_block_test.go:52 (TestComputeHashAgentBlock)` and `:139 (TestComputeHashDiffersForEachAgentField)`)
 - `NewOrigin` refuses a block that has only `delegationID` set, unless `breakGlass` is set. (`pkg/audit/audit.go:256 (NewOrigin)`) See open question 2.
 
 ## ADR check

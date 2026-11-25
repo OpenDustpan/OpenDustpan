@@ -46,6 +46,9 @@ var (
 	ErrInvalidReport = errors.New("invalid sweep report")
 	// ErrInvalidTarget reports a sweep target that fails validation.
 	ErrInvalidTarget = errors.New("invalid sweep target")
+	// ErrInvalidScan reports a sweep, or an advance of one, that fails
+	// validation: a namespace name, a kind, a starter, a sweep ID or an event.
+	ErrInvalidScan = errors.New("invalid sweep")
 	// ErrInvalidRule reports an ignore rule that fails validation.
 	ErrInvalidRule = errors.New("invalid ignore rule")
 	// ErrInvalidReason reports an ignore reason that is empty, too long or
