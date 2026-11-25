@@ -20,6 +20,7 @@ Evidence for the claims above:
 
 ## What Changes
 
+- Change the port `mfa.PendingStore.CompletePending` to take one `mfa.Completion` value in place of the session, its digest and the audit entry (task 1.1), so that it meets the argument limit of 5. `mfa.NewCompletion` rejects a zero session ID, a zero digest and an entry with no action.
 - Add the SQLite and PostgreSQL adapters of `mfa.PendingStore`, `mfa.RecoveryCodeStore` and `stepup.TOTPStore`, with their conformance suites first.
 - Add one port method `AcceptSignInStep` that accepts a TOTP time step for a sign-in and touches no step-up counter.
 - Add the four tables `mfa_pending_sign_ins`, `mfa_recovery_codes`, `mfa_totp_factors` and `mfa_totp_attempts`, with their queries.
@@ -46,7 +47,7 @@ This change adds no route, no command and no setting, so the path of the person 
 
 Each fact names its file, line and function on main. The change specifies only the difference.
 
-- Main has the pending sign-in in the file (read only) `pkg/mfa/mfa.go`: `mfa.Pending`, `mfa.PendingStore` with `CreatePending`, `FailPending` and `CompletePending`, and `mfa.RecoveryCodeStore`. This change adds no second pending type, and it reuses the single-use rule of the TOTP code through one new method.
+- Main has the pending sign-in in the file (read only) `pkg/mfa/mfa.go`: `mfa.Pending`, `mfa.PendingStore` with `CreatePending`, `FailPending` and `CompletePending`, and `mfa.RecoveryCodeStore`. `CompletePending` has six parameters (`pkg/mfa/mfa.go:315`), one more than the argument limit of the linter (5), and no Go file on main calls it. This change adds no second pending type, and it reuses the single-use rule of the TOTP code through one new method.
 - Main has no adapter of these ports or of `stepup.TOTPStore` in `internal/store`, and `mfatest.Run` skips each case (`pkg/mfa/mfatest/suite.go:110`)
 - Main counts a TOTP failure on the step-up counter before the time step check: `BeginTOTPAttempt` comes before `AcceptStep` (`internal/stepup/stepup.go:705`)
 - Main has the single-use rule of a TOTP code: the store accepts a time step one time, with `stepup.ErrUsed`, `TOTP.LastStep` and `AcceptStep` (`internal/stepup/stepup.go:728`)
