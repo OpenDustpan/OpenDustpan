@@ -1,5 +1,5 @@
 ---
-version: 4
+version: 5
 ---
 
 Issue: #3289.
@@ -28,6 +28,7 @@ Evidence for the claims above:
 - The setting `access.installationGrantsReachNamespaces` (ADR 216 decision 7): default `true`, database layer, live, lockable in the static layer. It is a new entry of `SettingDeclarations` in `pkg/access/settings.go`. It uses the settings routes `GET /api/dustpan/v1/settings` and `PATCH /api/dustpan/v1/settings`, which main has. This change adds no route.
 - With `false`, the authorizer, the reach, the lists of objects and the access review give a grant on `@server` only the actions of the operator scope.
 - A failed read of the setting denies the decision.
+- With `false`, the principal routes (`server:manage-principals`, `server:read-principals`) refuse a principal of a namespace and list only principals of the installation, in the handler and in the service of `pkg/principal` (design decision 9). The token managers of a principal of a namespace do not include `@server` (decision 10). The production wiring always passes the settings port (decision 11).
 - The probe tests run with the value `false` that `housekeeping-principals-install` (task 1.6) and `housekeeping-principals-sweeps` (task 1.3) leave out. This change adds its own access probe as a NEW test in `pkg/access/reach_namespaces_setting_test.go`. The probe for the namespace purposes is a task of `housekeeping-principals-sweeps`. This change writes into no test file of the housekeeping changes.
 
 Out of scope:
@@ -57,6 +58,9 @@ Each fact names its file, line and function on main. The change specifies only t
 
 - The authorizer adds the installation object for a namespace object and reads no setting. (`pkg/access/authorizer.go:967 (func chainObjects)`)
 - The reach and the access review use the same function. (`pkg/access/reach.go:969 (func Reach.chain)`, `pkg/access/review_service.go:586 (func Service.reviewScope)`)
+- The principal routes authorize on `@server`, and the principal service checks no namespace. (`internal/api/server/principals.go:581 (func Handler.principalRoutes)`, `pkg/principal/service.go:200 (func Service.ListPrincipals)`)
+- The export scope of a service principal always has `@server` in its containers, also for a principal of a namespace. (`pkg/access/review_service.go:735 (func Service.principalReviewScope)`)
+- A nil settings service leaves the settings port of the authorizer nil. (`pkg/dustpan/dustpan.go:3486 (func newAccessService)`)
 - The only setting of the package is `accessReview.collectionUnitCap`, declared in `SettingDeclarations`. (`pkg/access/settings.go:47 (func SettingDeclarations)`)
 
 ## ADR check
