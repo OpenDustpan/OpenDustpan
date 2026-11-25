@@ -9,18 +9,16 @@ package server
 //   - server:manage-principals adds an account with its first passkey and
 //     rotates the passkey of an account.
 //
-// The list route reads the working count of the store at the request time:
-// an account that expires by time leaves the count without a write. The add
-// and the rotate write their audit entries in the store transaction; the
-// passkey service adds the entry of its own change. The store holds one
+// The list route reads the working count of the store at the request time.
+// The add and the rotate write their audit entries in the store transaction;
+// the passkey service adds the entry of its own change. The store holds one
 // transaction for a rotation, so no commit ends the old passkey before the
 // new one is stored.
 //
 // A break-glass account without a passkey is not a working path. The add
-// stores the account first and then its passkey: a failure of the passkey
-// write leaves an account with no credential, and the list route reports it,
-// so an administrator can delete it and add another. The count never treats
-// it as working.
+// makes one AddBreakGlassPerson call that stores the account and its first
+// passkey in one transaction, so a failed add stores nothing. The count
+// includes only an account with a passkey and a grant.
 
 import (
 	"context"

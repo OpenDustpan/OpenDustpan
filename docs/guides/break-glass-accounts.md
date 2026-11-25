@@ -65,9 +65,8 @@ grant in two requests. Each needs a recent sign-in.
    administration grant signs in, but it cannot change anything. The working
    count includes only an account with a grant.
 
-If the add route fails after it writes the account, the account has no
-passkey and the count does not include it. List the accounts, delete the
-account with `DELETE /api/server/principals/{id}`, and add it again. If the
+The add route writes the account and its passkey in one transaction. If the
+add fails, the server stores nothing: make the request again. If the
 grant request fails, retry it: the account has a passkey but no grant, and the
 count does not include it.
 
