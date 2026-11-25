@@ -76,6 +76,28 @@ Evidence for the claims above:
 - The build tag `journalrecording` goes away. Every build answers the
   negotiated journal version of ADR 43 decision 2.1, with a supported
   version of 2, and wires the journal writer with the replay verifier.
+- The start stores the CLI version in the update row (NEW column
+  `cli_version` in the one baseline of each dialect), and the build at
+  complete gives it to the replayer, so the manifest of a built checkpoint
+  names the CLI that ran the update. Main passes "" at
+  `pkg/dustpan/dustpan.go:2074`. The files that change are
+  `pkg/stack/update.go`, `pkg/stack/updates.go`,
+  `pkg/stack/journal_build.go`, `internal/pulumijournal/replay.go`,
+  `internal/api/pulumi/journal.go`, `internal/api/pulumi/updates.go`,
+  `internal/store/sqlite/migrations/0168_baseline.sql`,
+  `internal/store/postgres/migrations/0168_baseline.sql`, the two adapters
+  `internal/store/sqlite/updates.go` and `internal/store/postgres/updates.go`,
+  `internal/store/sqlite/queries.sql`, `internal/store/postgres/queries.sql`,
+  `internal/store/sqlite/internal/db/queries.sql.go`,
+  `internal/store/postgres/internal/db/queries.sql.go`, the two
+  backup column lists (`internal/store/sqlite/backup_columns.go` and
+  `internal/store/postgres/backup.go`) and `pkg/store/storetest/updates.go`.
+- The e2e steps assert the state save that a CLI really uses: a verified CLI
+  saves through `journalentries`, so `checkCheckpointSaved`,
+  `checkDeltaCheckpoints` and the masked delta check change for CLIs in the
+  range (`e2e/e2e_test.go`, `e2e/crash_test.go`, `e2e/e2e_masked_test.go`),
+  and the contract files `e2e/contract/pulumi-3.250.0.json` and
+  `e2e/contract/pulumi-3.262.0.json` get the journal route.
 - `--disable-pulumi-journaling` keeps its default `false` and its effect:
   `true` answers 0 to each new start (decision 1.2).
 - A preview or a dry run answers `journalVersion` 0 whatever the CLI offers
