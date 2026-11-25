@@ -24,5 +24,5 @@
 ## 4. Definition of done
 
 - [ ] 4.1 Add the e2e step in NEW e2e/130_138_runner_protocol_claims_docs_test.go: a real runner joins, polls, renews and heartbeats until the work ends. Check: the step passes against the e2e test server with the runner token (the runner key) on `POST /runner/v1/poll`, `POST /runner/v1/heartbeat` and `POST /runner/v1/claims/{operation}/renew`.
-- [x] 4.2 Agent pre-run (human run-through in person-steps (130-138-runner-protocol-claims 4.2)): Run the usability check of the runner operator path. Check: the operator runs the poll loop from the docs page alone. Record the transcript in the pull request body.
+- [ ] 4.2 Agent pre-run (human run-through in person-steps (130-138-runner-protocol-claims 4.2)): Run the usability check of the runner operator path. Check: the operator runs the poll loop from the docs page alone. Record the transcript in the pull request body.
 - [ ] 4.3 Run full checks. Check: `make check` reports zero findings. Confirmed by: CI (the agent runs the fast checks only).
