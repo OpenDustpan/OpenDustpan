@@ -787,7 +787,9 @@ func (w *reachWalker) namespacePrincipals(ctx context.Context, ns namespace.Name
 
 	for {
 		rows, _, err := w.cfg.Principals.ListNamespacePrincipals(
-			ctx, ns, principal.Query{After: after, Low: "", High: "", Limit: principal.MaxLimit},
+			ctx,
+			ns,
+			principal.Query{After: after, Low: "", High: "", Limit: principal.MaxLimit, InstallationOnly: false},
 		)
 		if err != nil {
 			return nil, fmt.Errorf("list principals of namespace %q: %w", ns.String(), err)

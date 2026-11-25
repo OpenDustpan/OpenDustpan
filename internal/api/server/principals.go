@@ -584,21 +584,21 @@ func (h *Handler) principalRoutes() []Route {
 
 	return []Route{
 		authorizedRoute(http.MethodPost, principalsPath, manage, resolveServer,
-			h.servePrincipalChange(identity.ActionServerManagePrincipals, createPrincipal)),
+			h.servePrincipalChange(identity.ActionServerManagePrincipals, h.createPrincipal)),
 		authorizedRoute(http.MethodGet, principalsPath, read, resolveServer,
-			h.servePrincipalRead(listPrincipals)),
+			h.servePrincipalRead(h.listPrincipals)),
 		authorizedRoute(http.MethodGet, principalPath, read, resolveServer,
-			h.servePrincipalRead(getPrincipal)),
+			h.servePrincipalRead(h.getPrincipal)),
 		authorizedRoute(http.MethodPatch, principalPath, manage, resolveServer,
-			h.servePrincipalChange(identity.ActionServerManagePrincipals, changePrincipal)),
+			h.servePrincipalChange(identity.ActionServerManagePrincipals, h.changePrincipal)),
 		authorizedRoute(http.MethodDelete, principalPath, manage, resolveServer,
-			h.servePrincipalChange(identity.ActionServerManagePrincipals, deletePrincipal)),
+			h.servePrincipalChange(identity.ActionServerManagePrincipals, h.deletePrincipal)),
 		authorizedRoute(http.MethodGet, principalPath+"/groups", read, resolveServer,
 			h.servePrincipalRead(h.listGroupsOfPrincipal)),
 		authorizedRoute(http.MethodPost, principalPath+"/enable", manage, resolveServer,
-			h.servePrincipalChange(identity.ActionServerManagePrincipals, enablePrincipal)),
+			h.servePrincipalChange(identity.ActionServerManagePrincipals, h.enablePrincipal)),
 		authorizedRoute(http.MethodPost, principalPath+"/disable", manage, resolveServer,
-			h.servePrincipalChange(identity.ActionServerManagePrincipals, disablePrincipal)),
+			h.servePrincipalChange(identity.ActionServerManagePrincipals, h.disablePrincipal)),
 	}
 }
 
@@ -741,7 +741,7 @@ func pageRequest(r *http.Request) (principal.PageRequest, error) {
 // createPrincipal serves POST /api/server/principals: it answers 201 with
 // the new principal. A taken subject answers 409. A bad or reserved subject,
 // a kind that this route does not make or a bad body answers 400.
-func createPrincipal(
+func (h *Handler) createPrincipal(
 	w http.ResponseWriter, r *http.Request, svc *principal.Service, e audit.Entry, _ identity.Principal,
 ) (principalResult, error) {
 	var req createPrincipalRequest
@@ -790,7 +790,7 @@ func createPrincipal(
 // listPrincipals serves GET /api/server/principals: one page, ordered by
 // subject. The query parameter kind keeps the principals of one kind. An
 // unknown kind answers 400.
-func listPrincipals(
+func (h *Handler) listPrincipals(
 	_ http.ResponseWriter, r *http.Request, svc *principal.Service, _ audit.Entry, _ identity.Principal,
 ) (principalResult, error) {
 	req, err := pageRequest(r)
@@ -815,11 +815,15 @@ func listPrincipals(
 
 // getPrincipal serves GET /api/server/principals/{id}. An unknown ID
 // answers 404.
-func getPrincipal(
+func (h *Handler) getPrincipal(
 	_ http.ResponseWriter, r *http.Request, svc *principal.Service, _ audit.Entry, _ identity.Principal,
 ) (principalResult, error) {
 	p, err := svc.GetPrincipal(r.Context(), r.PathValue("id"))
 	if err != nil {
+		return failed(""), err
+	}
+
+	if err := h.refuseInstallationReach(r.Context(), identity.ActionServerReadPrincipals, p); err != nil {
 		return failed(""), err
 	}
 
@@ -829,7 +833,7 @@ func getPrincipal(
 // changePrincipal serves PATCH /api/server/principals/{id}: it changes the
 // display name and answers 200 with the stored principal. A body that sets
 // no field answers 400.
-func changePrincipal(
+func (h *Handler) changePrincipal(
 	w http.ResponseWriter, r *http.Request, svc *principal.Service, e audit.Entry, _ identity.Principal,
 ) (principalResult, error) {
 	object := principal.Ref(r.PathValue("id"))
@@ -845,6 +849,16 @@ func changePrincipal(
 		return failed(object), hidden
 	}
 
+	target, err := svc.GetPrincipal(r.Context(), r.PathValue("id"))
+	if err != nil {
+		return failed(object), err
+	}
+
+	err = h.refuseInstallationReach(r.Context(), identity.ActionServerManagePrincipals, target)
+	if err != nil {
+		return failed(object), err
+	}
+
 	p, err := svc.UpdatePrincipal(r.Context(), e, r.PathValue("id"), principal.Change{DisplayName: req.DisplayName})
 	if err != nil {
 		return failed(object), err
@@ -856,12 +870,23 @@ func changePrincipal(
 // deletePrincipal serves DELETE /api/server/principals/{id}: it ends the
 // principal and its memberships, and answers 204. The rows stay for the
 // access-review history. The last enabled break-glass account answers 409.
-func deletePrincipal(
+func (h *Handler) deletePrincipal(
 	_ http.ResponseWriter, r *http.Request, svc *principal.Service, e audit.Entry, caller identity.Principal,
 ) (principalResult, error) {
 	object := principal.Ref(r.PathValue("id"))
 
-	if err := svc.DeletePrincipal(r.Context(), e, caller, r.PathValue("id")); err != nil {
+	target, err := svc.GetPrincipal(r.Context(), r.PathValue("id"))
+	if err != nil {
+		return failed(object), err
+	}
+
+	err = h.refuseInstallationReach(r.Context(), identity.ActionServerManagePrincipals, target)
+	if err != nil {
+		return failed(object), err
+	}
+
+	err = svc.DeletePrincipal(r.Context(), e, caller, r.PathValue("id"))
+	if err != nil {
 		return failed(object), err
 	}
 
@@ -873,13 +898,34 @@ func deletePrincipal(
 // with the principal. The enable restores the use of the grants of the
 // principal, so the caller must hold every action that they give. A
 // principal that is not disabled answers 409.
-func enablePrincipal(
+func (h *Handler) enablePrincipal(
 	_ http.ResponseWriter, r *http.Request, svc *principal.Service, e audit.Entry, caller identity.Principal,
+) (principalResult, error) {
+	return h.switchPrincipal(r, svc, e, caller, svc.EnablePrincipal)
+}
+
+// switchPrincipal reads the principal, refuses it when the installation
+// grants do not reach its namespace, runs the switch and answers 200 with the
+// stored principal.
+func (h *Handler) switchPrincipal(
+	r *http.Request, svc *principal.Service, e audit.Entry, caller identity.Principal,
+	run func(context.Context, audit.Entry, identity.Principal, string) error,
 ) (principalResult, error) {
 	id := r.PathValue("id")
 	object := principal.Ref(id)
 
-	if err := svc.EnablePrincipal(r.Context(), e, caller, id); err != nil {
+	target, err := svc.GetPrincipal(r.Context(), id)
+	if err != nil {
+		return failed(object), err
+	}
+
+	err = h.refuseInstallationReach(r.Context(), identity.ActionServerManagePrincipals, target)
+	if err != nil {
+		return failed(object), err
+	}
+
+	err = run(r.Context(), e, caller, id)
+	if err != nil {
 		return failed(object), err
 	}
 
@@ -896,22 +942,38 @@ func enablePrincipal(
 // narrows access, so it works in maintenance mode. The caller must hold every
 // action that the grants of the principal give. A principal that is disabled
 // answers 409, and so does the last enabled break-glass account.
-func disablePrincipal(
+func (h *Handler) disablePrincipal(
 	_ http.ResponseWriter, r *http.Request, svc *principal.Service, e audit.Entry, caller identity.Principal,
 ) (principalResult, error) {
-	id := r.PathValue("id")
-	object := principal.Ref(id)
+	return h.switchPrincipal(r, svc, e, caller, svc.DisablePrincipal)
+}
 
-	if err := svc.DisablePrincipal(r.Context(), e, caller, id); err != nil {
-		return failed(object), err
+// refuseInstallationReach refuses a principal of a namespace when a grant on
+// the installation does not reach namespaces. It returns nil for a principal
+// of the installation or when the setting holds. A failed read denies.
+func (h *Handler) refuseInstallationReach(ctx context.Context, action identity.Action, p principal.Principal) error {
+	if p.Namespace == "" {
+		return nil
 	}
 
-	p, err := svc.GetPrincipal(r.Context(), id)
-	if err != nil {
-		return failed(object), err
+	reaches := true
+
+	if h.access != nil {
+		r, err := h.access.Authorizer().GrantsReachNamespaces(ctx)
+		if err != nil || !r {
+			reaches = false
+		}
 	}
 
-	return ok(http.StatusOK, principalOf(p), object), nil
+	if reaches {
+		return nil
+	}
+
+	return fmt.Errorf("%w", &identity.DeniedError{
+		Subject: "",
+		Action:  action,
+		Object:  identity.NamespaceObject(p.Namespace),
+	})
 }
 
 // listGroupsOfPrincipal serves GET /api/server/principals/{id}/groups: one
@@ -919,6 +981,16 @@ func disablePrincipal(
 func (h *Handler) listGroupsOfPrincipal(
 	_ http.ResponseWriter, r *http.Request, svc *principal.Service, _ audit.Entry, _ identity.Principal,
 ) (principalResult, error) {
+	target, err := svc.GetPrincipal(r.Context(), r.PathValue("id"))
+	if err != nil {
+		return failed(""), err
+	}
+
+	err = h.refuseInstallationReach(r.Context(), identity.ActionServerReadPrincipals, target)
+	if err != nil {
+		return failed(""), err
+	}
+
 	req, err := pageRequest(r)
 	if err != nil {
 		return failed(""), err

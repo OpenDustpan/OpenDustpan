@@ -3300,6 +3300,12 @@ func newPrincipalService(cfg *settings, grants *access.Service) (*principal.Serv
 		return nil, fmt.Errorf("principal service: %w", err)
 	}
 
+	if grants != nil {
+		svc = svc.WithInstallationReach(grants.Authorizer())
+	} else if installationReach, ok := cfg.authorizer.(principal.InstallationReach); ok {
+		svc = svc.WithInstallationReach(installationReach)
+	}
+
 	return svc, nil
 }
 
@@ -3515,11 +3521,12 @@ func newAccessService(cfg *settings) (*access.Service, error) {
 		BootstrapAdmins: adminSubjectsOf(cfg.authenticator), Settings: nil, LimitGroups: limits,
 	}
 
-	// The service is set only when it is not nil, so that a nil service does not
-	// become a non-nil port.
-	if settingSvc := newSettingService(cfg, cfg.namespaceStore); settingSvc != nil {
-		svcCfg.Settings = settingSvc
+	settingSvc := newSettingService(cfg, cfg.namespaceStore)
+	if settingSvc == nil {
+		return nil, fmt.Errorf("access service: %w: settings", access.ErrMissingDependency)
 	}
+
+	svcCfg.Settings = settingSvc
 
 	svc, err := access.NewService(svcCfg)
 	if err != nil {

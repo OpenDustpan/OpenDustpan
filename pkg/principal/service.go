@@ -82,14 +82,15 @@ type TempAdmins interface {
 // own clock, the scope, the kind change, the outcome success and the record,
 // and the store appends the entry in the transaction of the change.
 type Service struct {
-	store      Store
-	guard      Guard
-	groupReach GroupReach
-	namespaces Namespaces
-	tempAdmins TempAdmins
-	tokens     Tokens
-	now        func() time.Time
-	newID      func(prefix string) string
+	store             Store
+	guard             Guard
+	groupReach        GroupReach
+	namespaces        Namespaces
+	tempAdmins        TempAdmins
+	tokens            Tokens
+	installationReach InstallationReach
+	now               func() time.Time
+	newID             func(prefix string) string
 }
 
 // NewService returns a Service. Store and Guard are required.
@@ -113,15 +114,26 @@ func NewService(cfg Config) (*Service, error) {
 	}
 
 	return &Service{
-		store:      cfg.Store,
-		guard:      cfg.Guard,
-		groupReach: cfg.GroupReach,
-		namespaces: cfg.Namespaces,
-		tempAdmins: cfg.TempAdmins,
-		tokens:     cfg.Tokens,
-		now:        now,
-		newID:      newID,
+		store:             cfg.Store,
+		guard:             cfg.Guard,
+		groupReach:        cfg.GroupReach,
+		namespaces:        cfg.Namespaces,
+		tempAdmins:        cfg.TempAdmins,
+		tokens:            cfg.Tokens,
+		installationReach: nil,
+		now:               now,
+		newID:             newID,
 	}, nil
+}
+
+// WithInstallationReach returns a copy of s that reads the installation reach
+// setting through reach. A nil reach reads the default, true. The copy shares
+// every other dependency with s.
+func (s *Service) WithInstallationReach(reach InstallationReach) *Service {
+	out := *s
+	out.installationReach = reach
+
+	return &out
 }
 
 // Now returns the time of the Service clock, in UTC to the millisecond:
@@ -212,6 +224,11 @@ func (s *Service) ListPrincipals(ctx context.Context, req PageRequest, kind Kind
 		return Page[Principal]{}, err
 	}
 
+	reaches, reachErr := s.grantsReachNamespaces(ctx)
+	if reachErr != nil || !reaches {
+		q.InstallationOnly = true
+	}
+
 	rows, total, err := s.store.ListPrincipals(ctx, q, kind)
 	if err != nil {
 		return Page[Principal]{}, fmt.Errorf("list principals: %w", err)
@@ -227,35 +244,22 @@ type Change struct {
 }
 
 // UpdatePrincipal applies c to the principal with the ID id, with the entry
-// e, and returns the stored principal.
+// e, and returns the stored principal. A principal of a namespace is refused
+// when a grant on the installation does not reach namespaces.
 func (s *Service) UpdatePrincipal(ctx context.Context, e audit.Entry, id string, c Change) (Principal, error) {
 	p, err := s.store.GetPrincipal(ctx, id)
 	if err != nil {
 		return Principal{}, fmt.Errorf("update principal %q: %w", id, err)
 	}
 
-	if err := refuseNamespaceServiceSubject(p.Subject); err != nil {
-		return Principal{}, fmt.Errorf("update principal %q: %w", id, err)
-	}
-
-	if c.DisplayName != nil {
-		p.DisplayName = *c.DisplayName
-		if p.DisplayName == "" {
-			p.DisplayName = p.Subject
+	if p.Namespace != "" {
+		reaches, reachErr := s.grantsReachNamespaces(ctx)
+		if reachErr != nil || !reaches {
+			return Principal{}, fmt.Errorf("update principal %q: %w", id, identity.ErrDenied)
 		}
 	}
 
-	p.UpdatedAt = s.Now()
-
-	if err := p.Validate(); err != nil {
-		return Principal{}, err
-	}
-
-	if err := s.storeUpdate(ctx, e, p); err != nil {
-		return Principal{}, fmt.Errorf("update principal %q: %w", id, err)
-	}
-
-	return p, nil
+	return s.applyStoredPrincipalChange(ctx, e, id, c)
 }
 
 // DeletePrincipal ends the principal with the ID id and its memberships,
@@ -265,13 +269,9 @@ func (s *Service) UpdatePrincipal(ctx context.Context, e audit.Entry, id string,
 // break-glass account. The delete of a principal of a namespace goes to the
 // audit log of the namespace, with its fence.
 func (s *Service) DeletePrincipal(ctx context.Context, e audit.Entry, caller identity.Principal, id string) error {
-	if err := s.checkPrincipal(ctx, caller, id); err != nil {
-		return fmt.Errorf("delete principal %q: %w", id, err)
-	}
-
-	p, err := s.store.GetPrincipal(ctx, id)
+	p, err := s.loadGuardedPrincipal(ctx, caller, id, "delete principal")
 	if err != nil {
-		return fmt.Errorf("delete principal %q: %w", id, err)
+		return err
 	}
 
 	if err = refuseNamespaceServiceSubject(p.Subject); err != nil {
@@ -297,8 +297,8 @@ func (s *Service) DeletePrincipal(ctx context.Context, e audit.Entry, caller ide
 func (s *Service) EnablePrincipal(
 	ctx context.Context, e audit.Entry, caller identity.Principal, id string,
 ) error {
-	if err := s.checkPrincipal(ctx, caller, id); err != nil {
-		return fmt.Errorf("enable principal %q: %w", id, err)
+	if _, err := s.loadGuardedPrincipal(ctx, caller, id, "enable principal"); err != nil {
+		return err
 	}
 
 	if err := s.refuseServiceRecord(ctx, id); err != nil {
@@ -325,8 +325,8 @@ func (s *Service) EnablePrincipal(
 func (s *Service) DisablePrincipal(
 	ctx context.Context, e audit.Entry, caller identity.Principal, id string,
 ) error {
-	if err := s.checkPrincipal(ctx, caller, id); err != nil {
-		return fmt.Errorf("disable principal %q: %w", id, err)
+	if _, err := s.loadGuardedPrincipal(ctx, caller, id, "disable principal"); err != nil {
+		return err
 	}
 
 	if err := s.refuseServiceRecord(ctx, id); err != nil {
@@ -973,4 +973,108 @@ func actsAsChange(groupID string) MemberAudit {
 
 		return []audit.Change{{Key: "actsAs", Old: nil, New: strings.Join(ids, "\n"), Layer: "", TakesEffect: ""}}, nil
 	}
+}
+
+// grantsReachNamespaces returns whether a grant on the installation reaches
+// the actions inside a namespace. A nil port reads the default, true. A
+// failed read returns the error.
+func (s *Service) grantsReachNamespaces(ctx context.Context) (bool, error) {
+	if s.installationReach == nil {
+		return true, nil
+	}
+
+	return s.installationReach.GrantsReachNamespaces(ctx)
+}
+
+// applyStoredPrincipalChange applies c to the principal with the ID id, with
+// the entry e, and returns the stored principal, without the reach check. The
+// callers that are authorized on the namespace use it.
+func (s *Service) applyStoredPrincipalChange(
+	ctx context.Context, e audit.Entry, id string, c Change,
+) (Principal, error) {
+	p, err := s.store.GetPrincipal(ctx, id)
+	if err != nil {
+		return Principal{}, fmt.Errorf("update principal %q: %w", id, err)
+	}
+
+	if err := refuseNamespaceServiceSubject(p.Subject); err != nil {
+		return Principal{}, fmt.Errorf("update principal %q: %w", id, err)
+	}
+
+	if c.DisplayName != nil {
+		p.DisplayName = *c.DisplayName
+		if p.DisplayName == "" {
+			p.DisplayName = p.Subject
+		}
+	}
+
+	p.UpdatedAt = s.Now()
+
+	if err := p.Validate(); err != nil {
+		return Principal{}, err
+	}
+
+	if err := s.storeUpdate(ctx, e, p); err != nil {
+		return Principal{}, fmt.Errorf("update principal %q: %w", id, err)
+	}
+
+	return p, nil
+}
+
+// removeStoredPrincipal ends the principal with the ID id and its memberships,
+// with the entry e, without the reach check. The callers that are authorized
+// on the namespace use it.
+func (s *Service) removeStoredPrincipal(
+	ctx context.Context, e audit.Entry, caller identity.Principal, id string,
+) error {
+	if err := s.checkPrincipal(ctx, caller, id); err != nil {
+		return fmt.Errorf("delete principal %q: %w", id, err)
+	}
+
+	p, err := s.store.GetPrincipal(ctx, id)
+	if err != nil {
+		return fmt.Errorf("delete principal %q: %w", id, err)
+	}
+
+	if err = refuseNamespaceServiceSubject(p.Subject); err != nil {
+		return fmt.Errorf("delete principal %q: %w", id, err)
+	}
+
+	if p.Namespace == "" {
+		err = s.store.DeletePrincipal(ctx, id, change(e, s.Now(), Ref(id)))
+	} else {
+		err = s.endNamespacePrincipal(ctx, e, p)
+	}
+
+	if err != nil {
+		return fmt.Errorf("delete principal %q: %w", id, err)
+	}
+
+	return nil
+}
+
+// loadGuardedPrincipal checks the guard of caller for id, reads the principal
+// and refuses a principal of a namespace when a grant on the installation does
+// not reach namespaces. op names the operation for the error, for example
+// "delete principal".
+func (s *Service) loadGuardedPrincipal(
+	ctx context.Context, caller identity.Principal, id, op string,
+) (Principal, error) {
+	if err := s.checkPrincipal(ctx, caller, id); err != nil {
+		return Principal{}, fmt.Errorf("%s %q: %w", op, id, err)
+	}
+
+	p, err := s.store.GetPrincipal(ctx, id)
+	if err != nil {
+		return Principal{}, fmt.Errorf("%s %q: %w", op, id, err)
+	}
+
+	if p.Namespace != "" {
+		reaches, reachErr := s.grantsReachNamespaces(ctx)
+		if reachErr != nil || !reaches {
+			return Principal{}, fmt.Errorf("%s %q: %w", op, id, identity.ErrDenied)
+		}
+	}
+
+	return p, nil
 }

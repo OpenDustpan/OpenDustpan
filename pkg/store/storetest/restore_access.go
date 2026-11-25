@@ -1247,7 +1247,7 @@ func checkKeptLiveOnlyPrincipal(t *testing.T, ports keepAccessPorts) {
 		t.Fatalf("get kept live-only session: %v", err)
 	}
 
-	query := principal.Query{After: "", Low: "", High: "", Limit: principal.MaxLimit + 1}
+	query := principal.Query{After: "", Low: "", High: "", Limit: principal.MaxLimit + 1, InstallationOnly: false}
 
 	members, _, err := ports.principals.ListMembers(ctx, "grp-ops", query)
 	if err != nil {

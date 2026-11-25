@@ -43,10 +43,11 @@ type Page[T any] struct {
 // the prefix. Every bound is valid UTF-8. A list also answers its total: the
 // count of the records between Low and High, with no regard to After.
 type Query struct {
-	After string
-	Low   string
-	High  string
-	Limit int
+	After            string
+	Low              string
+	High             string
+	Limit            int
+	InstallationOnly bool
 }
 
 // query validates req and returns the Query for a store. It asks for one
@@ -74,7 +75,9 @@ func (req PageRequest) query(key func(string) string) (Query, int, error) {
 
 	low := key(req.Prefix)
 
-	return Query{After: after, Low: low, High: prefixEnd(low), Limit: limit + 1}, limit, nil
+	return Query{
+		After: after, Low: low, High: prefixEnd(low), Limit: limit + 1, InstallationOnly: false,
+	}, limit, nil
 }
 
 // pageOf trims rows to limit and sets the cursor of the next page from the

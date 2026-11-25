@@ -158,6 +158,7 @@ func newJobTokenStateGateServer(
 		dustpan.WithJobStore(jobStore),
 		dustpan.WithJobTokenStore(tokenStore),
 		dustpan.WithClock(func() time.Time { return now }),
+		dustpan.WithSettings(st.SettingStore(), access.SettingDeclarations(), nil),
 	)
 	if err != nil {
 		t.Fatalf("new server: %v", err)

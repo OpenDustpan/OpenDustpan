@@ -25,6 +25,7 @@ import (
 
 	"opendustpan.org/opendustpan/internal/baseurl"
 	"opendustpan.org/opendustpan/internal/store/sqlite"
+	"opendustpan.org/opendustpan/pkg/access"
 	"opendustpan.org/opendustpan/pkg/blob/fs"
 	"opendustpan.org/opendustpan/pkg/dustpan"
 	"opendustpan.org/opendustpan/pkg/identity"
@@ -139,6 +140,7 @@ func newServerWithOptions(t *testing.T, addr string, opts ...dustpan.Option) *du
 		dustpan.WithInventoryReader(st),
 		dustpan.WithAuthenticator(authn),
 		dustpan.WithListenAddr(addr),
+		dustpan.WithSettings(st.SettingStore(), access.SettingDeclarations(), nil),
 	}
 
 	srv, err := dustpan.NewServer(append(base, opts...)...)

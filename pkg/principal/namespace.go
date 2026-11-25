@@ -113,7 +113,7 @@ func (s *Service) UpdateNamespacePrincipal(
 		return Principal{}, err
 	}
 
-	return s.UpdatePrincipal(ctx, e, id, c)
+	return s.applyStoredPrincipalChange(ctx, e, id, c)
 }
 
 // DeleteNamespacePrincipal ends the principal with the ID id of the
@@ -126,7 +126,7 @@ func (s *Service) DeleteNamespacePrincipal(
 		return err
 	}
 
-	return s.DeletePrincipal(ctx, e, caller, id)
+	return s.removeStoredPrincipal(ctx, e, caller, id)
 }
 
 // storeUpdate writes the update of p with the entry e: through the writes

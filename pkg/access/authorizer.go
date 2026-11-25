@@ -114,6 +114,13 @@ func (a *Authorizer) WithSettingsPort(settings Settings) *Authorizer {
 	return &out
 }
 
+// GrantsReachNamespaces returns the effective value of
+// SettingInstallationGrantsReachNamespaces. A nil settings port reads the
+// default, true. A failed read returns the error.
+func (a *Authorizer) GrantsReachNamespaces(ctx context.Context) (bool, error) {
+	return InstallationGrantsReachNamespaces(ctx, a.settings)
+}
+
 // OperatorScope reports whether action has operator scope: each action of the operator family, and the administration
 // actions that act
 // on the installation as a whole. A grant on the installation gives an action
@@ -489,7 +496,9 @@ func (a *Authorizer) addNamespacePrincipals(ctx context.Context, ns namespace.Na
 
 	for {
 		rows, _, err := a.principals.ListNamespacePrincipals(
-			ctx, ns, principal.Query{After: after, Low: "", High: "", Limit: principal.MaxLimit},
+			ctx,
+			ns,
+			principal.Query{After: after, Low: "", High: "", Limit: principal.MaxLimit, InstallationOnly: false},
 		)
 		if err != nil {
 			return out, fmt.Errorf("list principals of namespace %q: %w", ns.String(), err)

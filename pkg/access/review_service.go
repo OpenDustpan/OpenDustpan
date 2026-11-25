@@ -732,8 +732,6 @@ func (s *Service) principalReviewScope(ctx context.Context, obj identity.Object)
 		return scope, err
 	}
 
-	scope.Containers = []string{identity.ServerObject().String()}
-
 	if p.Namespace != "" {
 		scope.TokenNamespace = identity.NamespaceObject(p.Namespace).String()
 
@@ -743,6 +741,17 @@ func (s *Service) principalReviewScope(ctx context.Context, obj identity.Object)
 		}
 
 		scope.TokenNamespaceRoles = tokenRoles
+	}
+
+	reaches, reachErr := s.authz.GrantsReachNamespaces(ctx)
+	if reachErr != nil {
+		reaches = false
+	}
+
+	if p.Namespace == "" || reaches {
+		scope.Containers = []string{identity.ServerObject().String()}
+	} else {
+		scope.Containers = nil
 	}
 
 	return scope, nil

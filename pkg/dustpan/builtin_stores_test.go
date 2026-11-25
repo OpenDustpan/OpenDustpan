@@ -12,6 +12,7 @@ import (
 	"opendustpan.org/opendustpan/internal/fakecred"
 	"opendustpan.org/opendustpan/internal/localusersvc"
 	"opendustpan.org/opendustpan/internal/store/sqlite"
+	"opendustpan.org/opendustpan/pkg/access"
 	"opendustpan.org/opendustpan/pkg/blob/fs"
 	"opendustpan.org/opendustpan/pkg/collection"
 	"opendustpan.org/opendustpan/pkg/dustpan"
@@ -112,7 +113,8 @@ func TestOpenStoreWithBuiltinStore(t *testing.T) {
 		}
 	})
 
-	opts := append(builtinServerOptions(t), dustpan.WithBuiltinStore(store))
+	opts := append(builtinServerOptions(t), dustpan.WithBuiltinStore(store),
+		dustpan.WithSettings(store.SettingStore(), access.SettingDeclarations(), nil))
 
 	srv, err := dustpan.NewServer(opts...)
 	if err != nil {
@@ -638,7 +640,8 @@ func TestServerCloseLeavesTheCallerStoreOpen(t *testing.T) {
 	}
 
 	opts := builtinServerOptions(t)
-	opts = append(opts, dustpan.WithBuiltinStore(st))
+	opts = append(opts, dustpan.WithBuiltinStore(st),
+		dustpan.WithSettings(st.SettingStore(), access.SettingDeclarations(), nil))
 
 	srv, err := dustpan.NewServer(opts...)
 	if err != nil {
@@ -723,7 +726,8 @@ func newAdoptingServer(t *testing.T, st *dustpan.BuiltinStore, extra ...dustpan.
 	t.Helper()
 
 	opts := builtinServerOptions(t)
-	opts = append(opts, dustpan.WithBuiltinStore(st))
+	opts = append(opts, dustpan.WithBuiltinStore(st),
+		dustpan.WithSettings(st.SettingStore(), access.SettingDeclarations(), nil))
 	opts = append(opts, extra...)
 
 	srv, err := dustpan.NewServer(opts...)

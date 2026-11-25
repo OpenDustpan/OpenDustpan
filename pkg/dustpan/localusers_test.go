@@ -10,7 +10,10 @@ import (
 
 	"opendustpan.org/opendustpan/internal/authgate"
 	"opendustpan.org/opendustpan/internal/localusersvc"
+	"opendustpan.org/opendustpan/internal/store/sqlite"
+	"opendustpan.org/opendustpan/pkg/access"
 	"opendustpan.org/opendustpan/pkg/dustpan"
+	"opendustpan.org/opendustpan/pkg/localuser"
 )
 
 // localPublicURL is the public URL of the server of the local user tests. A
@@ -32,7 +35,8 @@ func newLocalServer(t *testing.T) localServer {
 	t.Helper()
 
 	st, blobs, authn := requireServerPorts(t)
-	opts := append(fullServerOptions(t, st, blobs, authn), dustpan.WithPublicURL(localPublicURL))
+	opts := append(fullServerOptions(t, st, blobs, authn),
+		localUserSettings(st), dustpan.WithPublicURL(localPublicURL))
 
 	srv, err := dustpan.NewServer(opts...)
 	if err != nil {
@@ -40,6 +44,16 @@ func newLocalServer(t *testing.T) localServer {
 	}
 
 	return localServer{handler: startedHandler(t, srv)}
+}
+
+// localUserSettings declares the settings of the access service and of the
+// local users over the setting store of st. It comes after the options of
+// fullServerOptions, so it replaces their settings option: the local user
+// service reads its password settings from the settings service.
+func localUserSettings(st *sqlite.Store) dustpan.Option {
+	declarations := append(access.SettingDeclarations(), localuser.SettingDeclarations()...)
+
+	return dustpan.WithSettings(st.SettingStore(), declarations, nil)
 }
 
 // localCaller is the credential of one request: the administrator token, a
@@ -435,7 +449,7 @@ func TestLocalUsersPolicyShowsTheMissingPublicURL(t *testing.T) {
 
 	st, blobs, authn := requireServerPorts(t)
 
-	srv, err := dustpan.NewServer(fullServerOptions(t, st, blobs, authn)...)
+	srv, err := dustpan.NewServer(append(fullServerOptions(t, st, blobs, authn), localUserSettings(st))...)
 	if err != nil {
 		t.Fatalf("NewServer: %v", err)
 	}

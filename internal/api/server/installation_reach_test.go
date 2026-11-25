@@ -15,6 +15,7 @@ import (
 	"opendustpan.org/opendustpan/pkg/access"
 	"opendustpan.org/opendustpan/pkg/audit"
 	"opendustpan.org/opendustpan/pkg/identity"
+	"opendustpan.org/opendustpan/pkg/namespace"
 	"opendustpan.org/opendustpan/pkg/setting"
 	"opendustpan.org/opendustpan/pkg/store/storetest"
 )
@@ -24,15 +25,21 @@ var errReachSettingRead = errors.New("reach setting read failed")
 
 // reachSettingFixed is a settings port that answers the reach setting with
 // the value that the test sets. A test that sets fail answers a failed read,
-// so a wrong key fails closed.
+// so a wrong key fails closed. A test that sets unavailable answers a
+// store-unavailable error.
 type reachSettingFixed struct {
-	value string
-	fail  bool
+	value       string
+	fail        bool
+	unavailable bool
 }
 
 func (r reachSettingFixed) Effective(_ context.Context, _ setting.Scope, key string) (setting.Item, error) {
 	if key != access.SettingInstallationGrantsReachNamespaces {
 		return setting.Item{}, fmt.Errorf("%w: setting %s", errReachSettingRead, key)
+	}
+
+	if r.unavailable {
+		return setting.Item{}, namespace.ErrUnavailable
 	}
 
 	if r.fail {
@@ -112,7 +119,7 @@ func TestInstallationReach(t *testing.T) {
 			f := newAccessFixturePorts(t, accessPorts{
 				collections:   nil,
 				settings:      nil,
-				authzSettings: reachSettingFixed{value: tc.value, fail: false},
+				authzSettings: reachSettingFixed{value: tc.value, fail: false, unavailable: false},
 			})
 			f.seed(t, "nia", access.RoleAuditor, identity.ServerObject())
 			grantSecond(t, f, "nia", access.RoleInstallationOperator, identity.ServerObject())
@@ -139,18 +146,52 @@ func TestInstallationReach(t *testing.T) {
 func TestInstallationReachFailedReadWritesOneAuditEntry(t *testing.T) {
 	t.Parallel()
 
-	f := newAccessFixturePorts(t, accessPorts{
-		collections:   nil,
-		settings:      nil,
-		authzSettings: reachSettingFixed{value: "true", fail: true},
-	})
-	f.seed(t, "nia", access.RoleAuditor, identity.ServerObject())
-
-	status, body := callAs(t, f, "nia",
-		apiCall{http.MethodGet, "/api/server/namespaces/acme/access-review", "", 0})
-	if status == http.StatusOK {
-		t.Fatalf("namespace access review = %d %s, want a refusal", status, body)
+	tests := []struct {
+		name   string
+		reader reachSettingFixed
+		want   int
+	}{
+		{
+			name:   "a failed read",
+			reader: reachSettingFixed{value: "true", fail: true, unavailable: false},
+			want:   http.StatusInternalServerError,
+		},
+		{
+			name:   "a store-unavailable read",
+			reader: reachSettingFixed{value: "true", fail: false, unavailable: true},
+			want:   http.StatusServiceUnavailable,
+		},
 	}
+
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			t.Parallel()
+
+			f := newAccessFixturePorts(t, accessPorts{
+				collections:   nil,
+				settings:      nil,
+				authzSettings: tc.reader,
+			})
+			f.seed(t, "nia", access.RoleAuditor, identity.ServerObject())
+
+			status, body := callAs(t, f, "nia",
+				apiCall{http.MethodGet, "/api/server/namespaces/acme/access-review", "", 0})
+			if status != tc.want {
+				t.Fatalf("namespace access review = %d %s, want %d", status, body, tc.want)
+			}
+
+			if count := countFailedDenials(t, f); count != 1 {
+				t.Fatalf("denied entries of nia with reason %q = %d, want 1",
+					refusalapi.ReasonFailed, count)
+			}
+		})
+	}
+}
+
+// countFailedDenials counts the denied entries of nia in acme with the reason
+// of a failed decision.
+func countFailedDenials(t *testing.T, f accessFixture) int {
+	t.Helper()
 
 	listing, err := f.store.List(t.Context(), "acme", audit.Page{Size: audit.DefaultPageSize, Before: 0})
 	if err != nil {
@@ -167,10 +208,7 @@ func TestInstallationReachFailedReadWritesOneAuditEntry(t *testing.T) {
 		}
 	}
 
-	if count != 1 {
-		t.Fatalf("denied entries of nia with reason %q = %d, want 1 (entries %+v)",
-			refusalapi.ReasonFailed, count, listing.Entries)
-	}
+	return count
 }
 
 // checkDeniedNamespaceAction checks the refusal of the namespace route and

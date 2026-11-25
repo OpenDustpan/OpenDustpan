@@ -11,6 +11,7 @@ import (
 	"time"
 
 	"opendustpan.org/opendustpan/internal/store/sqlite"
+	"opendustpan.org/opendustpan/pkg/access"
 	"opendustpan.org/opendustpan/pkg/audit"
 	"opendustpan.org/opendustpan/pkg/blob/fs"
 	"opendustpan.org/opendustpan/pkg/dustpan"
@@ -496,6 +497,7 @@ func runChainServer(
 		dustpan.WithAuthenticator(authn),
 		dustpan.WithListener(ln),
 		dustpan.WithAuditChain(setting),
+		dustpan.WithSettings(st.SettingStore(), access.SettingDeclarations(), nil),
 	}, signInOptions(t, st)...), extra...)...)
 	if err != nil {
 		t.Fatalf("new server: %v", err)

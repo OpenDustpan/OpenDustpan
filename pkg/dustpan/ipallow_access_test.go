@@ -192,6 +192,7 @@ func newIPAllowlistAccessServer(t *testing.T) *dustpan.Server {
 		dustpan.WithBlobStore(blobs),
 		dustpan.WithInventoryReader(st),
 		dustpan.WithAuthenticator(authn),
+		dustpan.WithSettings(st.SettingStore(), access.SettingDeclarations(), nil),
 		dustpan.WithIPAllowlists(true),
 		dustpan.WithIPAllowlistStore(st),
 		dustpan.WithClock(func() time.Time { return time.Unix(0, 0).UTC() }),

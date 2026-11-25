@@ -11,6 +11,7 @@ import (
 	"time"
 
 	"opendustpan.org/opendustpan/internal/store/sqlite"
+	"opendustpan.org/opendustpan/pkg/access"
 	"opendustpan.org/opendustpan/pkg/audit"
 	"opendustpan.org/opendustpan/pkg/blob/fs"
 	"opendustpan.org/opendustpan/pkg/dustpan"
@@ -220,6 +221,7 @@ func auditSinkServerOptions(t *testing.T, st *sqlite.Store) []dustpan.Option {
 		dustpan.WithInventoryReader(st),
 		dustpan.WithAuthenticator(authn),
 		dustpan.WithListener(openTestListener(t)),
+		dustpan.WithSettings(st.SettingStore(), access.SettingDeclarations(), nil),
 	}
 }
 

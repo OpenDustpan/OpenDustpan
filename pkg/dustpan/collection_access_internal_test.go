@@ -35,6 +35,11 @@ func TestGrantOnCollectionReachesItsUnits(t *testing.T) {
 
 	cfg := defaultSettings()
 	cfg.namespaceStore = st
+	cfg.settingsConfig = settingsConfig{
+		store:        st.SettingStore(),
+		declarations: access.SettingDeclarations(),
+		static:       nil,
+	}
 	cfg.now = func() time.Time { return at }
 
 	collections, err := collection.NewService(collection.Config{Store: st, Namespaces: st, Now: nil})
