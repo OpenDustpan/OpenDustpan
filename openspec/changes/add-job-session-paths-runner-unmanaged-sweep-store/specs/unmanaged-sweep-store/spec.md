@@ -114,11 +114,11 @@ If an action names a status that differs from the stored status of the finding, 
 
 ### Requirement: Target delete
 
-If a target has a sweep not in a final status, then the server SHALL refuse the delete of the target.
+If a target has a sweep not in a final status, then the server SHALL cancel that sweep and delete the target in one transaction.
 
 #### Scenario: Open sweep
 - **WHEN** a caller deletes a target with a running sweep
-- **THEN** the store refuses the delete and keeps the target
+- **THEN** the store cancels the sweep, deletes the target and writes the audit entry in the same transaction
 
 #### Scenario: Duplicate name
 - **WHEN** a caller creates a second target with the same name in a namespace
