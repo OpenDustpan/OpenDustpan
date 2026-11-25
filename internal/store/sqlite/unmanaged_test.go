@@ -400,11 +400,12 @@ func TestUnmanagedDeletePoolOfATarget(t *testing.T) {
 }
 
 // TestUnmanagedSQLTextStaysData sends SQL text as a namespace name, a target
-// name and a pool name to the sweep store, and checks that the store binds
-// each one as data. The rows with SQL text in their names are planted with
-// placeholders, as a restore of another version could bring them in, so the
-// test reaches the queries even when the name checks of the port would refuse
-// the text first.
+// name and a pool name to the sweep store. The writes of the port refuse each
+// name with ErrInvalidTarget before SQL. The reads that bind the text find no
+// row of another name. The rows with SQL text in their names are planted with
+// placeholders, as a restore of another version could bring them in, and stay
+// one row each. TestSweepPoolIDKeepsSQLTextAsData reaches the pool query with
+// the text, because no path of the port sends a pool name to SQL unchecked.
 func TestUnmanagedSQLTextStaysData(t *testing.T) {
 	t.Parallel()
 
@@ -465,8 +466,8 @@ func (c sqlTextCase) count(t *testing.T, what, query string, args ...any) int {
 	return n
 }
 
-// namespaceName sends the text as a namespace name: the read finds no
-// namespace, and the fence refuses the write.
+// namespaceName sends the text as a namespace name: the read binds it and
+// finds no namespace, and the delete refuses the name before SQL.
 func (c sqlTextCase) namespaceName(t *testing.T) {
 	t.Helper()
 
@@ -479,13 +480,14 @@ func (c sqlTextCase) namespaceName(t *testing.T) {
 
 	err = c.s.UnmanagedScans().DeleteTarget(t.Context(), ns, "aws", namespace.Fence{Namespace: ns, FailoverVersion: 1},
 		sweepEntry(ns, "namespace:manage-sweeps", unmanagedAt()))
-	if !errors.Is(err, namespace.ErrFenced) {
-		t.Errorf("%q: delete in the namespace = %v, want ErrFenced", c.text, err)
+	if !errors.Is(err, unmanaged.ErrInvalidTarget) {
+		t.Errorf("%q: delete in the namespace = %v, want ErrInvalidTarget", c.text, err)
 	}
 }
 
-// targetName plants a target with the text as its name. The delete of that
-// name deletes that one row and keeps the target aws.
+// targetName plants a target with the text as its name. The delete refuses
+// the name before SQL, the planted row stays, the target aws stays, and the
+// read of the sweeps of that target name binds it and finds none.
 func (c sqlTextCase) targetName(t *testing.T) {
 	t.Helper()
 
@@ -500,12 +502,17 @@ FROM unmanaged_targets WHERE name = 'aws' AND namespace_id = ` + sqlTextAcmeID
 	}
 
 	err = c.s.UnmanagedScans().DeleteTarget(t.Context(), "acme", c.text, c.fence, c.e)
-	if err != nil {
-		t.Errorf("%q: delete the planted target: %v", c.text, err)
+	if !errors.Is(err, unmanaged.ErrInvalidTarget) {
+		t.Errorf("%q: delete of the planted target = %v, want ErrInvalidTarget", c.text, err)
 	}
 
-	if n := c.count(t, "planted target", `SELECT COUNT(*) FROM unmanaged_targets WHERE name = ?`, c.text); n != 0 {
-		t.Errorf("%q: %d planted targets after the delete, want 0", c.text, n)
+	if n := c.count(t, "planted target", `SELECT COUNT(*) FROM unmanaged_targets WHERE name = ?`, c.text); n != 1 {
+		t.Errorf("%q: %d planted targets after the refused delete, want 1", c.text, n)
+	}
+
+	sweeps, err := c.s.UnmanagedScans().Scans(t.Context(), "acme", c.text, "", unmanaged.MaxPage)
+	if err != nil || len(sweeps) != 0 {
+		t.Errorf("%q: sweeps of the target = %+v, %v; want none", c.text, sweeps, err)
 	}
 
 	if n := c.count(t, "target aws", `SELECT COUNT(*) FROM unmanaged_targets WHERE name = 'aws'`); n != 1 {
@@ -514,7 +521,8 @@ FROM unmanaged_targets WHERE name = 'aws' AND namespace_id = ` + sqlTextAcmeID
 }
 
 // poolName plants a pool with the text as its name. The port refuses a
-// target on that pool, and the pool stays one row.
+// target on that pool in Target.Validate, before SQL, and the pool stays one
+// row. TestSweepPoolIDKeepsSQLTextAsData sends the text to the pool query.
 func (c sqlTextCase) poolName(t *testing.T, id string) {
 	t.Helper()
 

@@ -40,7 +40,9 @@ For your adapter, call the entry point from a test of your package, and give `go
 
 ## What the cases check
 
-- Fence: a write with a stale fence, or in a namespace that has no row, fails with `namespace.ErrFenced` and changes nothing.
+- Fence: a write with a stale fence, or in a namespace that has no row, fails with `namespace.ErrFenced` and changes nothing. A write in one namespace keeps the targets and the open sweep of another namespace. This is also true when the two namespaces have a target of the same name.
+- Malformed input: before SQL, `DeleteTarget` refuses a malformed namespace or target name with `unmanaged.ErrInvalidTarget`. `StartScan` refuses an unknown kind, a state check with a target, a malformed starter or namespace name with `unmanaged.ErrInvalidScan`, and a malformed target name with `unmanaged.ErrInvalidTarget`. `AdvanceScan` refuses a malformed sweep ID, an unknown event or a malformed namespace name with `unmanaged.ErrInvalidScan`. A refused call leaves no sweep and does not change a status.
+- Read of another namespace: the read of a sweep by its ID under the name of another namespace fails with `unmanaged.ErrNotFound`.
 - Pool purpose: a target refuses four kinds of pool. These are a pool of the purpose `jobs`, a pool of another namespace, a pool that does not exist, and a malformed name. These cases fail with `unmanaged.ErrInvalidTarget`.
 - Pool at start: when you set `SetPool`, a start fails with `unmanaged.ErrInvalidTarget` and leaves no sweep when the pool changed purpose after the save. A start also fails and leaves no sweep when someone deleted the pool after the save. The error is `unmanaged.ErrInvalidTarget` or `unmanaged.ErrNotFound`.
 - One open sweep: a target has at most one open sweep. A second start fails with `unmanaged.ErrScanBusy`. Of 8 concurrent starts, exactly one succeeds. A target accepts a new start after its sweep ended with the status `succeeded`, `failed`, `canceled` or `expired`. A dispatched sweep that gets the `expire` event has the status `expired`.
@@ -51,7 +53,7 @@ For your adapter, call the entry point from a test of your package, and give `go
 - Rollback: a write that the store refuses leaves no row and no sweep. When you set `FailAudit`, a delete and a create fail after they changed rows, and the target and its open sweep stay as before.
 - Rename: when you set `RenameNamespace`, the case renames a namespace. Its targets and sweeps stay readable under the new name, because the rows keep the namespace ID.
 
-The SQLite and PostgreSQL packages also have the test `TestUnmanagedSQLTextStaysData`. It sends SQL text as a namespace name, a target name and a pool name to the adapter. It checks that the adapter keeps each name as data: a delete deletes only the row with that exact name, and no table changes. Write the same test for a new SQL adapter. Use the names of `unmanagedtest.HostileSQLText`.
+The SQLite and PostgreSQL packages also have the test `TestUnmanagedSQLTextStaysData`. It sends SQL text as a namespace name, a target name and a pool name to the adapter. The writes refuse each name with `unmanaged.ErrInvalidTarget` before SQL. The reads that bind the text find no row of another name. A row that has the text as its name, and that the test writes with a placeholder, stays one row, and no table changes. The port has no path that sends a pool name to SQL without a check. So the test `TestSweepPoolIDKeepsSQLTextAsData` calls the pool lookup of the adapter directly with the text. Only the pool that has that exact name matches. Write the same tests for a new SQL adapter. Use the names of `unmanagedtest.HostileSQLText`.
 
 ## What the SQL adapters do not cover
 

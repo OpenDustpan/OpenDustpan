@@ -142,6 +142,14 @@ func (u *UnmanagedScans) UpdateTarget(
 func (u *UnmanagedScans) DeleteTarget(
 	ctx context.Context, ns namespace.Name, name string, fence namespace.Fence, e audit.Entry,
 ) error {
+	// Defense in depth: the service checks the names of a request too, and the
+	// queries below bind them as placeholders. This check stays so that a new
+	// caller cannot send a malformed name to SQL. It does not rely on the
+	// service or on the placeholders.
+	if err := unmanaged.CheckTargetName(ns, name); err != nil {
+		return err
+	}
+
 	// Defense in depth: the fence check below compares the namespace of the
 	// fence with the namespace row. This check stays so that a delete in one
 	// namespace cannot run under the fence of another namespace. It does not
@@ -216,6 +224,16 @@ func (u *UnmanagedScans) Targets(ctx context.Context, ns namespace.Name) ([]unma
 func (u *UnmanagedScans) StartScan(
 	ctx context.Context, s unmanaged.Scan, fence namespace.Fence, e audit.Entry,
 ) (unmanaged.Scan, error) {
+	// Defense in depth: the service builds the sweep from checked input, the
+	// queries bind each value as a placeholder, and the schema allows two
+	// kinds only. This check stays so that a new caller cannot store an
+	// unknown kind or a malformed name, and so that sweepPoolOf never reads
+	// an unknown kind as a state check. It does not rely on the service, the
+	// placeholders or the schema.
+	if err := s.CheckStart(); err != nil {
+		return unmanaged.Scan{}, err
+	}
+
 	// Defense in depth: the fence check below compares the namespace of the
 	// fence with the namespace row. This check stays so that a sweep of one
 	// namespace cannot start under the fence of another namespace. It does not
@@ -388,6 +406,15 @@ func startSweepOperation(ctx context.Context, q *db.Queries, s unmanaged.Scan, p
 func (u *UnmanagedScans) AdvanceScan(
 	ctx context.Context, a unmanaged.ScanAdvance, fence namespace.Fence, e audit.Entry,
 ) (unmanaged.Scan, error) {
+	// Defense in depth: the service and the runner protocol check the sweep ID
+	// and the event too, the queries bind them as placeholders, and NextScan
+	// refuses an unknown event later. This check stays so that a new caller
+	// cannot send a malformed ID or event to SQL. It does not rely on the
+	// service, the placeholders or NextScan.
+	if err := unmanaged.CheckAdvance(a); err != nil {
+		return unmanaged.Scan{}, err
+	}
+
 	// Defense in depth: the fence check below compares the namespace of the
 	// fence with the namespace row. This check stays so that a sweep of one
 	// namespace cannot advance under the fence of another namespace. It does

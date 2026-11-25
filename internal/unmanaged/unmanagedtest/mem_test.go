@@ -642,6 +642,13 @@ func (m *mem) DeleteTarget(
 	fence namespace.Fence,
 	e audit.Entry,
 ) error {
+	// Defense in depth: the service checks the names of a request too. This
+	// check stays so that the reference adapter refuses what the SQL adapters
+	// refuse. It does not rely on the service.
+	if err := unmanaged.CheckTargetName(ns, name); err != nil {
+		return err
+	}
+
 	if ns != fence.Namespace {
 		return fmt.Errorf("%w: target names %q, fence names %q", namespace.ErrFenced, ns, fence.Namespace)
 	}
@@ -694,6 +701,13 @@ func (m *mem) StartScan(
 	fence namespace.Fence,
 	e audit.Entry,
 ) (unmanaged.Scan, error) {
+	// Defense in depth: the service builds the sweep from checked input. This
+	// check stays so that the reference adapter refuses what the SQL adapters
+	// refuse. It does not rely on the service.
+	if err := s.CheckStart(); err != nil {
+		return unmanaged.Scan{}, err
+	}
+
 	if s.Namespace != fence.Namespace {
 		return unmanaged.Scan{}, fmt.Errorf("%w: sweep names %q, fence names %q",
 			namespace.ErrFenced, s.Namespace, fence.Namespace)
@@ -741,6 +755,13 @@ func (m *mem) StartScan(
 func (m *mem) AdvanceScan(
 	_ context.Context, a unmanaged.ScanAdvance, fence namespace.Fence, e audit.Entry,
 ) (unmanaged.Scan, error) {
+	// Defense in depth: the service and the runner protocol check the sweep ID
+	// and the event too. This check stays so that the reference adapter
+	// refuses what the SQL adapters refuse. It does not rely on them.
+	if err := unmanaged.CheckAdvance(a); err != nil {
+		return unmanaged.Scan{}, err
+	}
+
 	if a.Namespace != fence.Namespace {
 		return unmanaged.Scan{}, fmt.Errorf("%w: sweep names %q, fence names %q",
 			namespace.ErrFenced, a.Namespace, fence.Namespace)

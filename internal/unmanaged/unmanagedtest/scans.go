@@ -25,6 +25,10 @@ func sweepStoreCases() []suiteCase {
 		{"sweep store: concurrent fence", testSweepStoreConcurrentFence},
 		{"sweep store: rollback", testSweepStoreRollback},
 		{"sweep store: rename", testSweepStoreRename},
+		{"sweep store: delete refuses a malformed name", testSweepStoreDeleteNames},
+		{"sweep store: start refuses a malformed sweep", testSweepStoreStartNames},
+		{"sweep store: advance refuses a malformed advance", testSweepStoreAdvanceNames},
+		{"sweep store: a sweep of one namespace is not read from another", testSweepStoreCrossRead},
 	}
 }
 
@@ -911,6 +915,12 @@ func testSweepStoreFence(t *testing.T, h Harness) {
 		t.Fatalf("targets of other before the writes to acme: %+v, want 2", before)
 	}
 
+	// The sweep of other/aws is open while acme deletes its own target aws:
+	// the cancel of the delete must stay in acme.
+	open, err := h.Scans.StartScan(t.Context(), scanOf("other", unmanaged.ScanCloud, "aws"), of,
+		auditOf("other", "namespace:start-sweep"))
+	must(t, "start in other", err)
+
 	changed := targetOf("acme", "aws")
 	changed.Enabled = false
 	must(t, "update in acme", h.Scans.UpdateTarget(t.Context(), changed, f, e))
@@ -920,6 +930,12 @@ func testSweepStoreFence(t *testing.T, h Harness) {
 	must(t, "targets of other after", err)
 	if !reflect.DeepEqual(after, before) {
 		t.Errorf("targets of other after writes to acme: %+v, want %+v", after, before)
+	}
+
+	kept, err := h.Scans.Scan(t.Context(), "other", open.ID)
+	must(t, "sweep of other after the delete in acme", err)
+	if kept.Status != unmanaged.ScanQueued {
+		t.Errorf("sweep of other/aws after the delete of acme/aws = %q, want %q", kept.Status, unmanaged.ScanQueued)
 	}
 }
 
@@ -1342,4 +1358,147 @@ func testSweepStoreRename(t *testing.T, h Harness) {
 	ne := auditOf("acme-renamed", "namespace:start-sweep")
 	_, err = h.Scans.StartScan(t.Context(), scanOf(nf.Namespace, unmanaged.ScanCloud, "aws"), nf, ne)
 	wantErr(t, "start after the rename", err, unmanaged.ErrScanBusy)
+}
+
+// malformedNames returns names that fail the name checks of a target: a
+// name with a space, a path, an empty name, a name above the length bound
+// and the SQL text of HostileSQLText.
+func malformedNames() []string {
+	return append([]string{"Bad Name!", "../aws", "", strings.Repeat("t", 300)}, HostileSQLText()...)
+}
+
+// testSweepStoreDeleteNames sends a malformed namespace name and malformed
+// target names to DeleteTarget. Each one fails with ErrInvalidTarget before
+// the store reads a row, and the target aws stays.
+func testSweepStoreDeleteNames(t *testing.T, h Harness) {
+	t.Helper()
+	if h.Scans == nil {
+		t.Skip("sweep store not wired")
+	}
+	f := h.Namespace(t, "acme")
+	e := auditOf("acme", "namespace:manage-sweeps")
+	must(t, "create", h.Scans.CreateTarget(t.Context(), targetOf("acme", "aws"), f, e))
+
+	for _, name := range malformedNames() {
+		wantErr(t, fmt.Sprintf("delete %.20q", name),
+			h.Scans.DeleteTarget(t.Context(), "acme", name, f, e), unmanaged.ErrInvalidTarget)
+	}
+
+	for _, ns := range []namespace.Name{"Bad Namespace!", "acme'; --"} {
+		bad := namespace.Fence{Namespace: ns, FailoverVersion: 1}
+		wantErr(t, fmt.Sprintf("delete in %q", ns),
+			h.Scans.DeleteTarget(t.Context(), ns, "aws", bad, auditOf(ns.String(), "namespace:manage-sweeps")),
+			unmanaged.ErrInvalidTarget)
+	}
+
+	got, err := h.Scans.Targets(t.Context(), "acme")
+	must(t, "targets", err)
+	if len(got) != 1 || got[0].Name != "aws" {
+		t.Errorf("targets after the refused deletes: %+v, want aws", got)
+	}
+}
+
+// testSweepStoreStartNames sends malformed sweeps to StartScan: an unknown
+// kind, a malformed target name, a state check with a target, a malformed
+// starter and a malformed namespace name. Each one fails before the store
+// reads a row and leaves no sweep.
+func testSweepStoreStartNames(t *testing.T, h Harness) {
+	t.Helper()
+	if h.Scans == nil {
+		t.Skip("sweep store not wired")
+	}
+	f := h.Namespace(t, "acme")
+	e := auditOf("acme", "namespace:start-sweep")
+	must(t, "create", h.Scans.CreateTarget(t.Context(), targetOf("acme", "aws"), f, e))
+
+	for _, kind := range []unmanaged.ScanKind{"", "bogus", "Cloud", "state'; --"} {
+		_, err := h.Scans.StartScan(t.Context(), scanOf(f.Namespace, kind, "aws"), f, e)
+		wantErr(t, fmt.Sprintf("start of kind %q", kind), err, unmanaged.ErrInvalidScan)
+	}
+
+	for _, name := range malformedNames() {
+		_, err := h.Scans.StartScan(t.Context(), scanOf(f.Namespace, unmanaged.ScanCloud, name), f, e)
+		wantErr(t, fmt.Sprintf("start on target %.20q", name), err, unmanaged.ErrInvalidTarget)
+	}
+
+	_, err := h.Scans.StartScan(t.Context(), scanOf(f.Namespace, unmanaged.ScanState, "aws"), f, e)
+	wantErr(t, "state check with a target", err, unmanaged.ErrInvalidScan)
+
+	// A zero-width space, a byte that is not UTF-8, and a subject above the
+	// length bound.
+	hidden := "user:" + string(rune(0x200b)) + "ada"
+	for _, by := range []string{hidden, "user:\xff", strings.Repeat("u", 300)} {
+		s := scanOf(f.Namespace, unmanaged.ScanCloud, "aws")
+		s.StartedBy = by
+		_, err = h.Scans.StartScan(t.Context(), s, f, e)
+		wantErr(t, fmt.Sprintf("start by %.20q", by), err, unmanaged.ErrInvalidScan)
+	}
+
+	bad := namespace.Fence{Namespace: "Bad Namespace!", FailoverVersion: 1}
+	_, err = h.Scans.StartScan(t.Context(), scanOf(bad.Namespace, unmanaged.ScanState, ""), bad,
+		auditOf(bad.Namespace.String(), "namespace:start-sweep"))
+	wantErr(t, "start in a malformed namespace", err, unmanaged.ErrInvalidScan)
+
+	got, err := h.Scans.Scans(t.Context(), "acme", "", "", unmanaged.MaxPage)
+	must(t, "sweeps", err)
+	if len(got) != 0 {
+		t.Errorf("%d sweeps after the refused starts, want 0", len(got))
+	}
+}
+
+// testSweepStoreAdvanceNames sends malformed advances to AdvanceScan: a
+// malformed sweep ID, an unknown event and a malformed namespace name. Each
+// one fails with ErrInvalidScan before the store reads a row, and the sweep
+// keeps its status.
+func testSweepStoreAdvanceNames(t *testing.T, h Harness) {
+	t.Helper()
+	if h.Scans == nil {
+		t.Skip("sweep store not wired")
+	}
+	f := h.Namespace(t, "acme")
+	e := auditOf("acme", "namespace:start-sweep")
+	s, err := h.Scans.StartScan(t.Context(), scanOf(f.Namespace, unmanaged.ScanState, ""), f, e)
+	must(t, "start", err)
+
+	advance := func(ns namespace.Name, id string, ev unmanaged.ScanEvent) unmanaged.ScanAdvance {
+		return unmanaged.ScanAdvance{
+			Namespace: ns, ID: id, Event: ev, Update: unmanaged.ScanUpdate{Scopes: nil, Counts: nil, Reason: ""},
+		}
+	}
+
+	for _, id := range append([]string{"", "scn x", strings.Repeat("s", 300)}, HostileSQLText()...) {
+		_, err = h.Scans.AdvanceScan(t.Context(), advance("acme", id, unmanaged.ScanEventCancel), f, e)
+		wantErr(t, fmt.Sprintf("advance of sweep %.20q", id), err, unmanaged.ErrInvalidScan)
+	}
+
+	for _, ev := range []unmanaged.ScanEvent{"", "bogus", "Cancel"} {
+		_, err = h.Scans.AdvanceScan(t.Context(), advance("acme", s.ID, ev), f, e)
+		wantErr(t, fmt.Sprintf("advance with event %q", ev), err, unmanaged.ErrInvalidScan)
+	}
+
+	bad := namespace.Fence{Namespace: "Bad Namespace!", FailoverVersion: 1}
+	_, err = h.Scans.AdvanceScan(t.Context(), advance(bad.Namespace, s.ID, unmanaged.ScanEventCancel), bad,
+		auditOf(bad.Namespace.String(), "namespace:start-sweep"))
+	wantErr(t, "advance in a malformed namespace", err, unmanaged.ErrInvalidScan)
+
+	wantScanStatus(t, h, "refused advances", s.ID, unmanaged.ScanQueued)
+}
+
+// testSweepStoreCrossRead reads a sweep of acme by its ID under the name of
+// another namespace. The read returns ErrNotFound.
+func testSweepStoreCrossRead(t *testing.T, h Harness) {
+	t.Helper()
+	if h.Scans == nil {
+		t.Skip("sweep store not wired")
+	}
+	f := h.Namespace(t, "acme")
+	h.Namespace(t, "other")
+	s, err := h.Scans.StartScan(t.Context(), scanOf(f.Namespace, unmanaged.ScanState, ""), f,
+		auditOf("acme", "namespace:start-sweep"))
+	must(t, "start", err)
+
+	_, err = h.Scans.Scan(t.Context(), "other", s.ID)
+	wantErr(t, "read of the sweep of acme in other", err, unmanaged.ErrNotFound)
+
+	wantScanStatus(t, h, "read of the sweep in acme", s.ID, unmanaged.ScanQueued)
 }
