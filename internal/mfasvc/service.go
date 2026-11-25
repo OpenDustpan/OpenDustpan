@@ -175,6 +175,14 @@ func (s *Service) BeginRegistration(ctx context.Context, a Actor, p mfa.Person) 
 	return options, nil
 }
 
+// registerOfCaller reports whether the challenge c is a register ceremony of
+// the caller a, for the person p and the session of the caller. A caller with
+// no person or no session never matches.
+func registerOfCaller(c mfa.Challenge, a Actor, p mfa.Person) bool {
+	return c.Kind == mfa.CeremonyRegister && a.PrincipalID != "" && a.SessionID != "" &&
+		c.PersonID == a.PrincipalID && c.SessionID == a.SessionID && p.ID == a.PrincipalID
+}
+
 // FinishRegistration ends the register ceremony of the response, checks
 // it, and stores the passkey for the caller under the given name. p is the
 // person of the caller.
@@ -209,8 +217,7 @@ func (s *Service) FinishRegistration(
 	// data. This check stays so that a challenge of another kind, or a caller
 	// with no person or no session, never reaches the check of a
 	// registration.
-	if c.Kind != mfa.CeremonyRegister || a.PrincipalID == "" || a.SessionID == "" ||
-		c.PersonID != a.PrincipalID || c.SessionID != a.SessionID || p.ID != a.PrincipalID {
+	if !registerOfCaller(c, a, p) {
 		return none, s.refuse(ctx, a.Entry, on(ActionAddRefused, object), "ceremony of another person or session",
 			mfa.ErrWrongPerson)
 	}

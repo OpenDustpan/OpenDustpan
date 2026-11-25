@@ -18,101 +18,111 @@ import (
 func TestFactorChangeNeedsFreshActor(t *testing.T) {
 	t.Parallel()
 
-	t.Run("register", func(t *testing.T) {
-		t.Parallel()
+	t.Run("register", testBeginNeedsFreshActor)
+	t.Run("finish", testFinishNeedsFreshActor)
+	t.Run("remove", testRemoveNeedsFreshActor)
+}
 
-		f := newFixture(t)
-		f.register(t, alice, "laptop")
+// testBeginNeedsFreshActor checks that BeginRegistration refuses a caller with
+// no fresh step and changes nothing.
+func testBeginNeedsFreshActor(t *testing.T) {
+	t.Parallel()
 
-		// The caller has a session and no fresh step: the Actor has no fact
-		// that a fresh step happened.
-		a := actor(alice, "ses-alice")
-		a.Fresh = false
+	f := newFixture(t)
+	f.register(t, alice, "laptop")
 
-		before, err := f.svc.Passkeys(t.Context(), a)
-		if err != nil {
-			t.Fatalf("passkeys before: %v", err)
-		}
+	// The caller has a session and no fresh step: the Actor has no fact
+	// that a fresh step happened.
+	a := actor(alice, "ses-alice")
+	a.Fresh = false
 
-		_, err = f.svc.BeginRegistration(t.Context(), a, personOf(alice))
-		if err == nil {
-			t.Fatal("BeginRegistration with no fresh step: err = nil, want a refusal")
-		}
+	before, err := f.svc.Passkeys(t.Context(), a)
+	if err != nil {
+		t.Fatalf("passkeys before: %v", err)
+	}
 
-		f.wantRefusal(t, "BeginRegistration with no fresh step", err, mfa.ErrFreshStep, mfasvc.ActionAddRefused)
+	_, err = f.svc.BeginRegistration(t.Context(), a, personOf(alice))
+	if err == nil {
+		t.Fatal("BeginRegistration with no fresh step: err = nil, want a refusal")
+	}
 
-		after, err := f.svc.Passkeys(t.Context(), a)
-		if err != nil || len(after) != len(before) {
-			t.Fatalf("passkeys after = %d, %v; want %d unchanged", len(after), err, len(before))
-		}
-	})
+	f.wantRefusal(t, "BeginRegistration with no fresh step", err, mfa.ErrFreshStep, mfasvc.ActionAddRefused)
 
-	t.Run("finish", func(t *testing.T) {
-		t.Parallel()
+	after, err := f.svc.Passkeys(t.Context(), a)
+	if err != nil || len(after) != len(before) {
+		t.Fatalf("passkeys after = %d, %v; want %d unchanged", len(after), err, len(before))
+	}
+}
 
-		f := newFixture(t)
+// testFinishNeedsFreshActor checks that FinishRegistration refuses a caller
+// with no fresh step, also when the begin call ran with one.
+func testFinishNeedsFreshActor(t *testing.T) {
+	t.Parallel()
 
-		// The begin call runs with a fresh step, so the challenge exists. The
-		// finish call comes from a caller with no fresh step, which skips the
-		// begin call's check.
-		options, err := f.svc.BeginRegistration(t.Context(), actor(alice, "ses-alice"), personOf(alice))
-		if err != nil {
-			t.Fatalf("begin registration: %v", err)
-		}
+	f := newFixture(t)
 
-		c, err := webauthntest.ChallengeOf(options)
-		if err != nil {
-			t.Fatalf("challenge: %v", err)
-		}
+	// The begin call runs with a fresh step, so the challenge exists. The
+	// finish call comes from a caller with no fresh step, which skips the
+	// begin call's check.
+	options, err := f.svc.BeginRegistration(t.Context(), actor(alice, "ses-alice"), personOf(alice))
+	if err != nil {
+		t.Fatalf("begin registration: %v", err)
+	}
 
-		cred, err := webauthntest.NewCredential([]byte(alice), true)
-		if err != nil {
-			t.Fatalf("credential: %v", err)
-		}
+	c, err := webauthntest.ChallengeOf(options)
+	if err != nil {
+		t.Fatalf("challenge: %v", err)
+	}
 
-		response, err := f.auth.Register(cred, webauthntest.For(c))
-		if err != nil {
-			t.Fatalf("register: %v", err)
-		}
+	cred, err := webauthntest.NewCredential([]byte(alice), true)
+	if err != nil {
+		t.Fatalf("credential: %v", err)
+	}
 
-		a := actor(alice, "ses-alice")
-		a.Fresh = false
+	response, err := f.auth.Register(cred, webauthntest.For(c))
+	if err != nil {
+		t.Fatalf("register: %v", err)
+	}
 
-		_, err = f.svc.FinishRegistration(t.Context(), a, personOf(alice), "laptop", response)
-		if err == nil {
-			t.Fatal("FinishRegistration with no fresh step: err = nil, want a refusal")
-		}
+	a := actor(alice, "ses-alice")
+	a.Fresh = false
 
-		f.wantRefusal(t, "FinishRegistration with no fresh step", err, mfa.ErrFreshStep, mfasvc.ActionAddRefused)
+	_, err = f.svc.FinishRegistration(t.Context(), a, personOf(alice), "laptop", response)
+	if err == nil {
+		t.Fatal("FinishRegistration with no fresh step: err = nil, want a refusal")
+	}
 
-		if added := f.entries(t, mfasvc.ActionPasskeyAdded); len(added) != 0 {
-			t.Fatalf("added entries = %d, want 0", len(added))
-		}
-	})
+	f.wantRefusal(t, "FinishRegistration with no fresh step", err, mfa.ErrFreshStep, mfasvc.ActionAddRefused)
 
-	t.Run("remove", func(t *testing.T) {
-		t.Parallel()
+	if added := f.entries(t, mfasvc.ActionPasskeyAdded); len(added) != 0 {
+		t.Fatalf("added entries = %d, want 0", len(added))
+	}
+}
 
-		f := newFixture(t)
-		_, key := f.register(t, alice, "laptop")
+// testRemoveNeedsFreshActor checks that RemovePasskey refuses a caller with no
+// fresh step and keeps the passkey.
+func testRemoveNeedsFreshActor(t *testing.T) {
+	t.Parallel()
 
-		a := actor(alice, "ses-alice")
-		a.Fresh = false
+	f := newFixture(t)
+	_, key := f.register(t, alice, "laptop")
 
-		err := f.svc.RemovePasskey(t.Context(), a, key.ID)
-		if err == nil {
-			t.Fatal("RemovePasskey with no fresh step: err = nil, want a refusal")
-		}
+	a := actor(alice, "ses-alice")
+	a.Fresh = false
 
-		f.wantRefusal(t, "RemovePasskey with no fresh step", err, mfa.ErrFreshStep, mfasvc.ActionRemoveRefused)
+	err := f.svc.RemovePasskey(t.Context(), a, key.ID)
+	if err == nil {
+		t.Fatal("RemovePasskey with no fresh step: err = nil, want a refusal")
+	}
 
-		if removed := f.entries(t, mfasvc.ActionPasskeyRemoved); len(removed) != 0 {
-			t.Fatalf("removed entries = %d, want 0", len(removed))
-		}
+	f.wantRefusal(t, "RemovePasskey with no fresh step", err, mfa.ErrFreshStep, mfasvc.ActionRemoveRefused)
 
-		keys, err := f.svc.Passkeys(t.Context(), a)
-		if err != nil || len(keys) != 1 {
-			t.Fatalf("passkeys after = %d, %v; want the passkey kept", len(keys), err)
-		}
-	})
+	if removed := f.entries(t, mfasvc.ActionPasskeyRemoved); len(removed) != 0 {
+		t.Fatalf("removed entries = %d, want 0", len(removed))
+	}
+
+	keys, err := f.svc.Passkeys(t.Context(), a)
+	if err != nil || len(keys) != 1 {
+		t.Fatalf("passkeys after = %d, %v; want the passkey kept", len(keys), err)
+	}
 }
