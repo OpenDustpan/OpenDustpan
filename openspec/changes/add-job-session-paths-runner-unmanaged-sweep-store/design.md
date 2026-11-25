@@ -9,7 +9,7 @@ This part adds persistence only: ports, an in-memory adapter, a conformance suit
 3. **Pool check by stable ID.** A target stores the pool ID. CreateTarget, UpdateTarget and StartScan read the pool in the same transaction. Only a pool with the sweep purpose in the namespace of the target passes (Owner decision, 23 Nov 2026 (ADR 396, replaces the 13 Nov 2026 answer P14)). The store has no installation pool.
 4. **Busy check.** StartScan refuses with ErrScanBusy while the target has a sweep in a non-final status. A unique index on the open sweep makes concurrent starts safe in SQL. The memory adapter holds a lock.
 5. **Transitions.** AdvanceScan uses NextScan. A pair that the table does not hold returns ErrTransition. Act uses Next, ErrStatusChanged and writes its audit entry in the same transaction.
-6. **Delete of a target.** DeleteTarget refuses while the target has a sweep not in a final status. A duplicate name in a namespace returns the exists error.
+6. **Delete of a target.** DeleteTarget cancels a sweep of the target that is not in a final status, and deletes the target, in one transaction. A duplicate name in a namespace returns the exists error.
 7. **Bounds.** The store refuses a command or scope list above the ADR 164 limits.
 
 ## Structure
