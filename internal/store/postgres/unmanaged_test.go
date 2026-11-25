@@ -38,6 +38,25 @@ func (d unmanagedDomain) Namespace(t *testing.T, name string) namespace.Fence {
 	return fence
 }
 
+// Pool implements unmanagedtest.Harness.Pool.
+func (d unmanagedDomain) Pool(t *testing.T, ns, name, purpose string) {
+	t.Helper()
+
+	ensurePool(t, d.s, ensureNamespace(t, d.s, namespace.Name(ns)), name, runner.Purpose(purpose))
+}
+
+// Failover implements unmanagedtest.Harness.Failover: it raises the failover
+// version of each namespace and returns the new fence of the namespace name.
+func (d unmanagedDomain) Failover(t *testing.T, name string) namespace.Fence {
+	t.Helper()
+
+	if _, err := d.s.BumpFailoverVersions(t.Context()); err != nil {
+		t.Fatalf("bump failover versions: %v", err)
+	}
+
+	return ensureNamespace(t, d.s, namespace.Name(name))
+}
+
 // ensurePool makes the runner pool name in the namespace of fence when it is
 // not there.
 func ensurePool(t *testing.T, s *postgres.Store, fence namespace.Fence, name string, purpose runner.Purpose) {
@@ -117,6 +136,9 @@ func unmanagedBackend(base string) unmanagedtest.Factory {
 			Scans:          s.UnmanagedScans(),
 			Namespace:      unmanagedDomain{s: s}.Namespace,
 			PurgeNamespace: nil,
+			Pool:           unmanagedDomain{s: s}.Pool,
+			Failover:       unmanagedDomain{s: s}.Failover,
+			SetPool:        nil,
 		}
 	}
 }

@@ -233,6 +233,11 @@ func (m *mem) Record(
 ) (unmanaged.ScanCounts, error) {
 	var counts unmanaged.ScanCounts
 
+	if len(obs) > unmanaged.MaxObservations {
+		return counts, fmt.Errorf("%w: %d observations, at most %d",
+			unmanaged.ErrLimit, len(obs), unmanaged.MaxObservations)
+	}
+
 	m.mu.Lock()
 	defer m.mu.Unlock()
 
@@ -707,8 +712,15 @@ func (m *mem) StartScan(
 	}
 
 	if s.Kind == unmanaged.ScanCloud {
-		if _, ok := m.targets[s.Namespace][s.Target]; !ok {
+		t, ok := m.targets[s.Namespace][s.Target]
+		if !ok {
 			return unmanaged.Scan{}, unmanaged.ErrNotFound
+		}
+
+		// The pool may be gone or changed since the target was saved.
+		if m.pools[s.Namespace][t.Pool] != unmanagedtest.PurposeSweeps {
+			return unmanaged.Scan{}, fmt.Errorf("%w: the pool is not a sweep pool of the namespace",
+				unmanaged.ErrInvalidTarget)
 		}
 	}
 
@@ -1158,6 +1170,33 @@ func TestMem(t *testing.T) {
 				delete(m.ids, ns)
 				delete(m.fences, ns)
 				delete(m.pools, ns)
+			},
+			Pool: func(_ *testing.T, ns, name, purpose string) {
+				m.mu.Lock()
+				defer m.mu.Unlock()
+
+				m.pools[namespace.Name(ns)][name] = purpose
+			},
+			Failover: func(_ *testing.T, name string) namespace.Fence {
+				m.mu.Lock()
+				defer m.mu.Unlock()
+
+				ns := namespace.Name(name)
+				m.fences[ns]++
+
+				return namespace.Fence{Namespace: ns, FailoverVersion: m.fences[ns]}
+			},
+			SetPool: func(_ *testing.T, ns, name, purpose string) {
+				m.mu.Lock()
+				defer m.mu.Unlock()
+
+				if purpose == "" {
+					delete(m.pools[namespace.Name(ns)], name)
+
+					return
+				}
+
+				m.pools[namespace.Name(ns)][name] = purpose
 			},
 		}
 	})

@@ -32,7 +32,15 @@ const (
 // runner pool Pool and a runner pool JobPool in it, and returns the current
 // fence of the namespace. PurgeNamespace deletes the namespace name, as the
 // purge of a namespace does after it calls Links.DropNamespace: a later
-// Namespace of the same name makes a new namespace with a new ID.
+// Namespace of the same name makes a new namespace with a new ID. A nil
+// PurgeNamespace means that the adapter has no purge.
+//
+// Pool makes a runner pool name in the namespace ns, which exists, with the
+// purpose PurposeSweeps or PurposeJobs. Failover raises the failover
+// version of the namespace name and returns its new fence. SetPool changes the
+// purpose of the pool name of ns, or deletes the pool when purpose is empty; it
+// is nil for an adapter that keeps pools under a foreign key, where no legal
+// path reaches that state.
 type Harness struct {
 	Index          unmanaged.Index
 	Links          unmanaged.Links
@@ -40,6 +48,9 @@ type Harness struct {
 	Scans          unmanaged.ScanStore
 	Namespace      func(t *testing.T, name string) namespace.Fence
 	PurgeNamespace func(t *testing.T, name string)
+	Pool           func(t *testing.T, ns, name, purpose string)
+	Failover       func(t *testing.T, name string) namespace.Fence
+	SetPool        func(t *testing.T, ns, name, purpose string)
 }
 
 // Factory returns a fresh harness for one subtest.

@@ -406,14 +406,14 @@ func (u *UnmanagedScans) AdvanceScan(
 
 	var out unmanaged.Scan
 
-	err := u.s.inFencedTx(ctx, fence, func(q *db.Queries) error {
+	err := fencedOnMissing(u.s.inFencedTx(ctx, fence, func(q *db.Queries) error {
 		next, err := advanceScan(ctx, q, fence, scanAdvance{
 			ns: a.Namespace, id: a.ID, ev: a.Event, upd: a.Update, e: e,
 		})
 		out = next
 
 		return err
-	})
+	}))
 	if err != nil {
 		return unmanaged.Scan{}, err
 	}
@@ -623,7 +623,7 @@ func (s *Store) inFencedEntryTx(
 		return fmt.Errorf("%w: entry names %q, fence names %q", audit.ErrInvalidEntry, e.Namespace, fence.Namespace)
 	}
 
-	return s.inFencedTx(ctx, fence, func(q *db.Queries) error {
+	return fencedOnMissing(s.inFencedTx(ctx, fence, func(q *db.Queries) error {
 		if err := fn(q); err != nil {
 			return err
 		}
@@ -633,7 +633,18 @@ func (s *Store) inFencedEntryTx(
 		}
 
 		return nil
-	})
+	}))
+}
+
+// fencedOnMissing turns the error of a namespace with no row, or a deleted
+// one, into namespace.ErrFenced: the port of the sweep store returns that
+// error for every fence that names no live namespace.
+func fencedOnMissing(err error) error {
+	if errors.Is(err, namespace.ErrNotFound) {
+		return fmt.Errorf("%w: %w", namespace.ErrFenced, err)
+	}
+
+	return err
 }
 
 // checkEntry returns audit.ErrInvalidEntry when e names another namespace than
