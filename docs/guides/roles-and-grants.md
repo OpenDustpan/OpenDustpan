@@ -189,13 +189,7 @@ The revoke of the last site administrator is refused with `409` and the code
 `access.last-site-administrator`. The refusal writes an audit entry with the
 outcome `failure` and the reason `access.last-site-administrator`.
 
-A grant of a housekeeping principal (`housekeeping:<purpose>`) can be revoked
-by a caller who holds `server:manage-access` on `@server`, for example a site
-administrator. The caller does not need to hold each action of the grant. The
-audit entry of the revoke has the reason
-`housekeeping grant revoked by a holder of server:manage-access on @server`.
-This applies to a revoke only: to give a housekeeping role, the caller must
-hold each of its actions. A revoked housekeeping grant stays revoked. The
+A revoked housekeeping grant (`housekeeping:<purpose>`) stays revoked. The
 server writes these grants only at the install and when it creates a
 namespace, and never writes them again. To find the grants, read the access
 review with the `subject` filter of the principal, then revoke each grant by

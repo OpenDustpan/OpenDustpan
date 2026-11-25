@@ -103,48 +103,18 @@ func TestCreateNamespaceHousekeepingGrantsOfBootstrapAdmin(t *testing.T) {
 	}
 }
 
-// revokers returns the callers that revoke a housekeeping grant in the
-// revoke tests: the bootstrap administrator, and a site administrator
-// through a stored grant.
-func revokers() []struct {
-	caller func(t *testing.T, f *fixture) identity.Principal
-	name   string
-} {
-	return []struct {
-		caller func(t *testing.T, f *fixture) identity.Principal
-		name   string
-	}{
-		{name: "bootstrap administrator", caller: func(*testing.T, *fixture) identity.Principal { return admin() }},
-		{name: "stored site administrator", caller: func(t *testing.T, f *fixture) identity.Principal {
-			t.Helper()
-
-			site := f.person(t, "site")
-			f.grant(t, access.Subject{Kind: access.SubjectPrincipal, ID: "prn-site"}, access.RoleSiteAdministrator,
-				identity.ServerObject())
-
-			return site
-		}},
-	}
-}
-
 func TestCreateNamespaceHousekeepingGrantStaysRevoked(t *testing.T) {
 	t.Parallel()
 
-	for _, tc := range revokers() {
-		t.Run(tc.name, func(t *testing.T) {
-			t.Parallel()
-
-			testHousekeepingGrantStaysRevoked(t, tc.caller)
-		})
-	}
+	testHousekeepingGrantStaysRevoked(t)
 }
 
-func testHousekeepingGrantStaysRevoked(t *testing.T, callerOf func(t *testing.T, f *fixture) identity.Principal) {
+func testHousekeepingGrantStaysRevoked(t *testing.T) {
 	t.Helper()
 
 	f := newFixture(t)
 	account := f.person(t, "account")
-	caller := callerOf(t, f)
+	caller := admin()
 
 	if _, err := f.svc.CreateNamespace(t.Context(), testEntry(), account, housekeepingNamespace("gamma")); err != nil {
 		t.Fatalf("create namespace: %v", err)
@@ -183,23 +153,15 @@ func testHousekeepingGrantStaysRevoked(t *testing.T, callerOf func(t *testing.T,
 func TestRevokedNamespaceGrantDeniesManageAgentRuns(t *testing.T) {
 	t.Parallel()
 
-	for _, tc := range revokers() {
-		t.Run(tc.name, func(t *testing.T) {
-			t.Parallel()
-
-			checkRevokeDeniesManageAgentRuns(t, tc.caller)
-		})
-	}
+	checkRevokeDeniesManageAgentRuns(t)
 }
 
-func checkRevokeDeniesManageAgentRuns(
-	t *testing.T, callerOf func(t *testing.T, f *fixture) identity.Principal,
-) {
+func checkRevokeDeniesManageAgentRuns(t *testing.T) {
 	t.Helper()
 
 	f := newFixture(t)
 	account := f.person(t, "account")
-	revoker := callerOf(t, f)
+	revoker := admin()
 
 	if _, err := f.svc.CreateNamespace(t.Context(), testEntry(), account, housekeepingNamespace("gamma")); err != nil {
 		t.Fatalf("create namespace: %v", err)
