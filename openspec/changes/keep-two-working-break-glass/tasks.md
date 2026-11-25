@@ -20,11 +20,11 @@
 
 ## 3. Side effects (computed from main)
 
-- [ ] 3.1 Set the round-trip budgets of each request flow that the change adds or changes, in `internal/servertest/roundtrips_conflict_test.go`, `internal/servertest/roundtrips_model_test.go`, `internal/servertest/roundtrips_test.go`. Check: the named files change in the same pull request
+- [ ] 3.1 Set the round-trip budget of the NEW request flow "break-glass list" (the list route of task 2.3) in `internal/servertest/roundtrips_test.go`. Measured with PostgreSQL: 5 round trips. The change adds no other flow, so no other roundtrips file changes. Check: `internal/servertest/roundtrips_test.go` changes in the same pull request.
 - [ ] 3.2 Regenerate `internal/api/apidesc/openapi.json` (`go test ./pkg/dustpan -run TestAPIDescriptionGolden -update-api-description`) and then the clients (`make clients-generate`). Never edit a generated file by hand. Check: the named files change in the same pull request. Confirmed by: the driver's gates.
 
 ## 4. Definition of done
 
-- [ ] 4.1 Add an e2e step with the real CLI over TLS in the existing file e2e/break_glass_test.go (extend it). It calls the route POST /api/dustpan/v1/break-glass/accounts/{id}/rotate and the disable route with an access token of a site administrator. BLOCKED by passkey sign-in for local users, which is not on main. Check: The steps pass on sqlite and postgres: a refused disable, an atomic rotation and a refused restore.
-- [ ] 4.2 Ship the docs page and run its commands as written. Check: The docs test runs each command.
+Tasks 4.1 and 4.2 moved to `openspec/changes/person-steps`: they need passkey sign-in for local users, which is not on main.
+
 - [ ] 4.3 Check the wiring, the route actions, the audit entries and the usability walk-through. Check: `make check` passes with zero findings. Confirmed by: CI (the agent runs the fast checks only)
