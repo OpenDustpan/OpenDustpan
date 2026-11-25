@@ -7,7 +7,7 @@ This change moves and extends docs pages and adds an e2e step. It changes no ser
 ## Decisions
 
 1. **The page lives in the user guides.** `docs/install.md` moves to `docs/guides/install.md` with `git mv`. The README links the new path in the install section. The page gains a section "Pull by digest" with the form `ghcr.io/opendustpan/opendustpan@sha256:<digest>` and the two places of each release digest: the summary of the release workflow run and `docker buildx imagetools inspect <image>:<tag>`. The page does not name the release notes, which hold no digest.
-2. **The e2e step runs what it can without a registry.** The NEW step `TestInstallGuideCommands` in `e2e/install_guide_docs_test.go` reads the page, takes the `helm install` command, and runs `helm template` of `deploy/helm/opendustpan` with the same `--set` values. Commands that need a registry, a cluster, or repository settings (`docker pull`, `kubectl`, `helm install` against a cluster, `gh secret set`) stay as steps of the usability check. The existing step `TestInstallPageListsBothPullCommands` keeps checking the tag and digest pull commands plus the new digest section.
+2. **The e2e step runs what it can without a registry.** The step `TestInstallGuideCommands` in `e2e/install_guide_docs_test.go` reads the page, takes the `helm install` command, and runs `helm template` of `deploy/helm/opendustpan` with the same `--set` values. Commands that need a registry, a cluster, or repository settings (`docker pull`, `kubectl`, `helm install` against a cluster, `gh secret set`) stay as steps of the usability check. The existing step `TestInstallPageListsBothPullCommands` keeps checking the tag and digest pull commands plus the new digest section.
 
 ## Structure
 
