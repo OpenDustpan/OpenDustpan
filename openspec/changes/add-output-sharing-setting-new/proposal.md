@@ -6,46 +6,38 @@ Issue: #929.
 
 ## Why
 
-**Persona: namespace administrator.** A namespace administrator tries to decide which stacks and workspaces can read the outputs of a producer. Main stores the namespace setting for new units and serves it on `GET` and `PUT` of the output-sharing route. Main stores no sharing rule. The setting value `namespace` has no effect, and no route saves, lists or removes a rule. The administrator needs rules on a unit, a collection and a namespace, and a new unit that gets its first rule from the setting, so that no one edits each producer by hand.
+**Persona: namespace administrator.** A namespace administrator tries to decide which stacks and workspaces can read the outputs of a producer. Main stores the namespace setting for new units and serves it on `GET` and `PUT` of the output-sharing route. The setting value `namespace` has no effect on a new unit, and a purge of a unit or a collection leaves no record of the rules that name it. The administrator needs a new unit that gets its first rule from the setting, so that no one edits each producer by hand, and needs a purged object to take its rules with it.
 
-The user path this change must make work:
+The user path this change makes possible:
 
-1. **API.** Read the setting with `GET /api/dustpan/v1/namespaces/{namespace}/output-sharing` and set it to `nobody` or `namespace` with `PUT` (already on main). Make a unit and list its rules: with `namespace` it has one rule that names its namespace, with `nobody` it has none.
-2. **API.** Save, list and remove a rule on a unit, on a collection and on a namespace, by stable ID.
-3. **E2e.** Run the rule steps against the real server and the real CLIs. The steps that read outputs with a job token wait for the change `output-sharing` (see "Depends on").
-4. **Docs page.** Read the output sharing guide for the rule routes and the audit entry of each rule change.
+1. **Store.** Set the setting to `namespace` (on main), make a unit, and the unit has one rule that names its namespace. With `nobody` it has none.
+2. **Store.** Purge a unit or delete a collection, and each rule that names it goes in the same transaction, with the removed rules in the audit entry.
+
+The routes that save, list and remove a rule, the e2e steps and the docs page are in the change `add-output-sharing-rules-api`, which depends on this change. A person reaches the new-unit rule through the existing unit routes and the existing audit log, and reads the rule through the routes of that change.
 
 Errors the person may hit, and the one command that helps:
 
 | Error | What the answer says | The command that helps |
 | --- | --- | --- |
-| A rule names a principal, a whole other namespace, an unknown unit, an unknown collection, or a stable ID that belongs to another object. | 400 for an invalid rule and 404 for an unknown object. The answer names the target and stores no rule. | `GET /api/dustpan/v1/namespaces/{namespace}/collections` |
-| A rule with the same producer and the same consumer exists. | 409. The answer names the rule ID. | `GET /api/dustpan/v1/namespaces/{namespace}/units/{unit_id}/sharing-rules` (NEW route) |
-| The producer already has 100 rules. | 409 with the limit in the text. | `GET /api/dustpan/v1/namespaces/{namespace}/units/{unit_id}/sharing-rules` (NEW route) |
-| The caller lacks `unit:manage-sharing` on the object of the route. | 403 that names the action. | `GET /api/dustpan/v1/namespaces/{namespace}/output-sharing` |
-| The caller lacks `unit:read-access`, `collection:read-access` or `namespace:read-access` on the object of a list route. | 403 that names the action. | `GET /api/dustpan/v1/namespaces/{namespace}/output-sharing` |
+| A unit is made with a setting that fails validation. | The create fails and nothing is written. The answer names the namespace. | `GET /api/dustpan/v1/namespaces/{namespace}/output-sharing` |
 
 Evidence for the claims above:
 
-- Issue 929 asks for the namespace setting, rules at namespace and collection level, the read check across units and audit entries. Sharing between namespaces is not in its scope. Proof: #929 Scope: In: the namespace setting; sharing rules at namespace and collection level; the read check for outputs across units; audit entries. Out: sharing between namespaces.
+- Issue 929 asks for the namespace setting, rules at namespace and collection level, the read check across units and audit entries. Proof: #929 Scope: In: the namespace setting; sharing rules at namespace and collection level; the read check for outputs across units; audit entries.
 - The owner decided the nobody default and one-step rules. Proof: #929 Decided: 15.6 (owner, 2026-10-18): output sharing of a new unit is a namespace setting, default nobody. A namespace or collection rule shares outputs in one step.
-- The setting route exists and the output-sharing route holds the setting only. Proof: `internal/api/inventory/outputsharing.go:49` serves GET and PUT of the setting and no rule. `rg -n "sharing-rules" --glob '!*_test.go' --glob '!openspec/**' --glob '!docs/**' .` finds only `e2e/output_sharing_test.go` on main.
-- The audit said that the existing output-sharing route carries rule CRUD, and that the setting may move to the generic settings API. Both are wrong on main. The rule routes are separate paths (ADR 273 decision 10), and the setting is served on its own route with its own port (`pkg/outputshare/ports.go:106`).
+- The stores make a stack and a workspace and write no rule. Proof: `internal/store/sqlite/sqlite.go:638` and `internal/store/sqlite/workspaces.go:31` make the unit and call no rule write.
 
 ## What Changes
 
-- The rule store: one table in the baseline of each dialect, the SQL adapters of `outputshare.Store` (Put, Get, List, Delete, Find), and the removal of the rules of a purged unit.
-- The rule of a new unit: the stack and workspace stores write the first rule in the transaction that makes the unit, when the setting of the namespace is `namespace`.
-- The rule service and the NEW routes of the rules, under `/api/dustpan/v1/namespaces/{namespace}/units/{unit_id}/sharing-rules`, `/api/dustpan/v1/namespaces/{namespace}/collections/{collection}/sharing-rules` and `/api/dustpan/v1/namespaces/{namespace}/sharing-rules`: a list, a save and a removal for each of the three objects (the table, with the action and the object of each route, is in design.md). The list of a collection needs `collection:read-access` and the list of a namespace needs `namespace:read-access` (owner, 2026-11-20). The setting route is not moved or changed.
-- The audit entry of each rule write, in the transaction of the write.
-- The docs page update.
+- The stack and workspace stores of both dialects write the first rule in the transaction that makes the unit, when the setting of the namespace is `namespace`.
+- The purge of a unit and the delete of a collection remove each rule that names the object by stable ID, in the same transaction, and list the removed rules in the audit entry.
+- The conformance cases for both, with a body, and the hostile table of the store.
 
 Out of scope:
 
-- The read check of a job token against the stored rules, the check of the starter grants and of the last saver of a trigger, and the denial audit of a read by a job. The change `output-sharing` owns them, and it reads the rules that this change stores.
-- Sharing between namespaces as a new feature: the store keeps and matches a consumer of another namespace by its namespace and stable ID (ADR 391), and the routes accept it.
-- Console pages for sharing.
-- A move of the setting into the generic settings API (decision 2 of the design).
+- The rule service, the routes, the API description, the e2e steps and the docs page. The change `add-output-sharing-rules-api` owns them.
+- The read check of a job token against the stored rules. The change `output-sharing` owns it.
+- Sharing between namespaces as a new feature, console pages and a move of the setting into the generic settings API.
 
 Depends on:
 
@@ -57,24 +49,22 @@ Builds on (not a change):
 
 Is depended on by:
 
+- add-output-sharing-rules-api
 - output-sharing
 
 ## Usability
 
-Where the path still costs the person time or surprises them:
-
-- An administrator may expect a rule to follow a collection name. The docs say that a rule follows the stable ID of a collection, in its own namespace and in another one, and that a collection that someone deletes and makes again with the same name does not get the rule.
-- The setting changes only the units that the namespace makes later. The docs say so next to the setting.
+- The setting changes only the units that the namespace makes later. The docs page of `add-output-sharing-rules-api` says so next to the setting.
 
 ## What main already does
 
 Each fact names its file, line and function on main. The change specifies only the difference.
 
 - The setting has a port, `outputshare.Settings`, with `Setting` and `SetSetting` that append the audit entry in the transaction. (`pkg/outputshare/ports.go:106`)
-- `outputshare.Store` declares Put, Get, List, Delete and Find for the rules. No adapter implements them: the SQL adapters return `outputshare.Settings` only. (`pkg/outputshare/ports.go:41`, `internal/store/sqlite/outputshare.go:23`, `internal/store/postgres/outputshare.go:24`)
+- `outputshare.Store` declares Put, Get, List, Delete and Find for the rules. The SQL adapters implement them since part 1. (`pkg/outputshare/ports.go:41`, `internal/store/sqlite/outputsharerules.go:34`, `internal/store/postgres/outputsharerules.go`)
 - The types `Rule`, `Default`, `ID`, `Placement` and their validation exist. (`pkg/outputshare/outputshare.go:181`, `:208`, `:239`)
 - The setting column and its CHECK exist in both baselines, and the backup holds the column. (`internal/store/sqlite/migrations/0168_baseline.sql:23`, `internal/store/postgres/migrations/0168_baseline.sql:799`, `pkg/backup/portable_tables.go:92`)
-- No table keeps a sharing rule. `rg -n -i "sharing_rule|output_sharing_rule" pkg/store/*/migrations` finds nothing.
+- The table `output_sharing_rules` keeps the rules since part 1. (`internal/store/sqlite/internal/db/queries.sql.go:1631`)
 - The service `Setting` and `SetSetting` check `namespace:read` and `unit:manage-sharing` and write the audit entry of the change. (`internal/outputsharesvc/outputsharesvc.go:74`, `:96`)
 - The routes `GET` and `PUT` `/api/dustpan/v1/namespaces/{namespace}/output-sharing` exist, with the body `{"newUnitDefault":"nobody"}` or `"namespace"`. (`internal/api/inventory/outputsharing.go:49`, `internal/api/inventory/routes.go:143`)
 - The action `unit:manage-sharing` has the object kinds unit, collection and namespace, and the built-in `admin` role holds it. (`pkg/identity/identity.go:226`) The actions `unit:read-access`, `collection:read-access` and `namespace:read-access` have a unit, a collection and a namespace object, and the access-review routes use them in that order. (`pkg/identity/identity.go:356`, `:353`, `:350`, `internal/api/server/review.go:307`, `:308`, `:309`)
@@ -142,18 +132,11 @@ Each quote is copied from the file in `docs/adr/`. The owner tags, the "Changed 
 
 Open questions: none. The owner decided on 2026-11-20 (ADR 391): "Stable ID always. No entities should be keyed by name." The rule store keeps a consumer of another namespace as that namespace plus a unit or collection ID that the caller gives, checks the format only, and removes the rule when the purge or the delete of that unit or collection runs. ADR 273 decision 3 stays for the rest: the producer decides alone, and the save does not tell whether an object of another namespace exists.
 
-Questions answered by the owner:
-
-- Which action lists the rules of a collection and of a namespace? `collection:read-access` on the collection and `namespace:read-access` on the namespace (owner, 2026-11-20). It mirrors `unit:read-access` for a unit (ADR 273 decision 10, "the same shape"). The save and the removal use `unit:manage-sharing` on the object of the route.
-
 Questions considered and answered:
 
 - What is the default for a new unit? ADR 273 decision 4: nobody. Main stores and serves it already.
 - Does a default change rewrite existing units? No. ADR 273 decision 4 and the contract of `outputshare.Settings.SetSetting` (`pkg/outputshare/ports.go:106`).
-- Do the rules use the output-sharing route or a new path? ADR 273 decision 10: separate paths under `sharing-rules`. The output-sharing route keeps the setting.
-- Does the setting move to the settings API of #897? No. The ADR names the output-sharing route, main serves it with its own port and audit entry, and the generic API has no per-feature key until a feature adds it (`openspec/changes/add-one-generic-settings-api/proposal.md`, "Out of scope"). A move is a new decision and needs an RFC.
-- Which action covers the save and the removal? `unit:manage-sharing` on the object of the route (ADR 273 decision 10). The change adds no action.
 - Does a collection that is made again with the old name get an old rule? No, in any namespace: the rule names its stable ID (ADR 391).
-- How does the save learn the stable ID of a consumer in another namespace? The caller gives it, and the save checks the format only (ADR 391, "Not decided here"). The body of the route and the way a person finds the ID are decided in the API part of this change.
+- How does the save learn the stable ID of a consumer in another namespace? The caller gives it, and the save checks the format only (ADR 391, "Not decided here"). The body of the route and the way a person finds the ID are decided in the change `add-output-sharing-rules-api`.
 
 Drafted by the spec factory of the spec compiler from the roadmap, the issues and the ADRs, and rewritten against main in November 2026. Every quote, path and ADR citation was checked by code.

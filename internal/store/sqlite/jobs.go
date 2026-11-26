@@ -13,6 +13,7 @@ import (
 	"opendustpan.org/opendustpan/internal/store/sqlite/internal/db"
 	"opendustpan.org/opendustpan/pkg/audit"
 	"opendustpan.org/opendustpan/pkg/durable"
+	"opendustpan.org/opendustpan/pkg/idempotency"
 	"opendustpan.org/opendustpan/pkg/job"
 	"opendustpan.org/opendustpan/pkg/manuallock"
 	"opendustpan.org/opendustpan/pkg/namespace"
@@ -35,7 +36,7 @@ type JobStore interface {
 //
 //nolint:ireturn // Store-agnostic wiring takes the ports.
 func (s *Store) Jobs() JobStore {
-	return jobstore.New(jobRunner{s: s})
+	return jobstore.New(jobRunner{s: s}, idempotency.JobStartRetention())
 }
 
 // jobRunner opens the transactions of the job stores.

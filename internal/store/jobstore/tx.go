@@ -62,6 +62,10 @@ type Row struct {
 	// Operation is the durable operation of the current phase, or empty.
 	Operation string
 	Key       string
+	// clearKey is the explicit signal of an update that clears the stored
+	// key. An update without it never sets or changes the key. It is
+	// unexported so that a row literal outside this package cannot set it.
+	clearKey  bool
 	Version   int64
 	Body      string
 	CreatedMs int64
@@ -69,6 +73,12 @@ type Row struct {
 	// StateChangedMs is the time of the last change of State.
 	StateChangedMs int64
 }
+
+// ClearsKey reports whether an update with r clears the stored key.
+func (r *Row) ClearsKey() bool { return r.clearKey }
+
+// MarkClearKey sets the signal that an update with r clears the stored key.
+func (r *Row) MarkClearKey() { r.clearKey = true }
 
 // FreezeRow is one stored change freeze. A zero EndsMs means no end.
 type FreezeRow struct {
