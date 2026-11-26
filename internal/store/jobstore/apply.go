@@ -32,12 +32,11 @@ func (s *Store) Apply(ctx context.Context, c job.Change, fence namespace.Fence, 
 	err := s.run.Write(ctx, fence, func(tx Tx) error {
 		// The setting is read in the transaction of the write, so that the
 		// approval decides with the value that the write commits with.
-		fresh, err := freshRequired(ctx, s.fresh, tx)
-		if err != nil {
-			return err
+		readFresh := func(ctx context.Context, tx Tx) (bool, error) {
+			return freshRequired(ctx, s.fresh, tx)
 		}
 
-		next, err := applyIn(ctx, tx, &c, fence.Namespace, fresh)
+		next, err := applyIn(ctx, tx, &c, fence.Namespace, readFresh)
 		if err != nil {
 			return err
 		}
@@ -55,9 +54,10 @@ func (s *Store) Apply(ctx context.Context, c job.Change, fence namespace.Fence, 
 }
 
 // applyIn makes the change c in the transaction tx, and returns the job after
-// it. The job must belong to the namespace ns. fresh tells whether the
-// installation requires a fresh step.
-func applyIn(ctx context.Context, tx Tx, c *job.Change, ns namespace.Name, fresh bool) (job.Job, error) {
+// it. The job must belong to the namespace ns. readFresh tells whether the
+// installation requires a fresh step. applyIn calls it only for the approval
+// of a destroy, because no other change uses the answer.
+func applyIn(ctx context.Context, tx Tx, c *job.Change, ns namespace.Name, readFresh freshFunc) (job.Job, error) {
 	cur, err := loadJob(ctx, tx, c.Job, ns)
 	if err != nil {
 		return job.Job{}, err
@@ -72,7 +72,7 @@ func applyIn(ctx context.Context, tx Tx, c *job.Change, ns namespace.Name, fresh
 		return job.Job{}, err
 	}
 
-	now, err := tx.Now(ctx)
+	rules, err := rulesFor(ctx, tx, &cur, c.Approval, readFresh)
 	if err != nil {
 		return job.Job{}, err
 	}
@@ -81,11 +81,10 @@ func applyIn(ctx context.Context, tx Tx, c *job.Change, ns namespace.Name, fresh
 	// database did not move since the last write. The clock time stays the
 	// time of the phase records, of the state change and of the freeze
 	// check: a reader compares those with the clock.
-	updated := nextUpdateAt(now, cur.UpdatedAt)
+	updated := nextUpdateAt(rules.now, cur.UpdatedAt)
 
 	next := cloneJob(&cur)
 
-	rules := writeRules{now: now, freshRequired: fresh, approverFound: false, approverKind: ""}
 	if err := changeIn(ctx, tx, &next, c, rules); err != nil {
 		return job.Job{}, err
 	}
@@ -109,7 +108,7 @@ func applyIn(ctx context.Context, tx Tx, c *job.Change, ns namespace.Name, fresh
 	}
 
 	if next.State != cur.State {
-		next.StateChangedAt = now
+		next.StateChangedAt = rules.now
 	}
 
 	if err := update(ctx, tx, &next, cur.Version); err != nil {

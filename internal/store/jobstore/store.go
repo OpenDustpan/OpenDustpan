@@ -69,6 +69,45 @@ func (s *Store) SetFreshResolver(r FreshResolver) {
 	s.fresh = r
 }
 
+// freshFunc reports whether the approval of a destroy in the transaction tx
+// needs a fresh step.
+type freshFunc func(ctx context.Context, tx Tx) (bool, error)
+
+// alwaysFresh is a freshFunc for a write that reads no setting: the step is
+// always required (fail closed).
+func alwaysFresh(context.Context, Tx) (bool, error) {
+	return true, nil
+}
+
+// approvesDestroy reports whether the approval ap approves the destroy job j.
+// Only such an approval uses the answer of the setting (checkDestroyProof),
+// so only such a change reads it.
+func approvesDestroy(j *job.Job, ap *job.Approval) bool {
+	return ap != nil && ap.Verdict == job.VerdictApprove && j.Spec.Operation == job.OperationDestroy
+}
+
+// rulesFor reads the clock of tx and returns the rules of a write to the job
+// j. It calls readFresh only when the approval ap approves the destroy j. For
+// any other change, the rules require the fresh step without a read: no rule
+// uses the answer, and true fails closed.
+func rulesFor(ctx context.Context, tx Tx, j *job.Job, ap *job.Approval, readFresh freshFunc) (writeRules, error) {
+	now, err := tx.Now(ctx)
+	if err != nil {
+		return writeRules{}, err
+	}
+
+	fresh := true
+
+	if approvesDestroy(j, ap) {
+		fresh, err = readFresh(ctx, tx)
+		if err != nil {
+			return writeRules{}, err
+		}
+	}
+
+	return writeRules{now: now, freshRequired: fresh, approverFound: false, approverKind: ""}, nil
+}
+
 // freshRequired reports whether the approval of a destroy in the transaction
 // tx needs a fresh step. The stored value is read in tx, so the rule uses the
 // value that the write commits with. With no resolver, or when the resolver
