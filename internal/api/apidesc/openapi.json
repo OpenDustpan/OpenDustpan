@@ -199,6 +199,12 @@
           "document": {
             "description": "Any JSON value."
           },
+          "pending": {
+            "items": {
+              "$ref": "#/components/schemas/AgentPendingResponse"
+            },
+            "type": "array"
+          },
           "version": {
             "format": "int64",
             "type": "integer"
@@ -206,6 +212,7 @@
         },
         "required": [
           "document",
+          "pending",
           "version"
         ],
         "type": "object"
@@ -221,6 +228,26 @@
         },
         "required": [
           "formats"
+        ],
+        "type": "object"
+      },
+      "AgentPendingResponse": {
+        "properties": {
+          "document": {
+            "description": "Any JSON value."
+          },
+          "probe": {
+            "type": "string"
+          },
+          "version": {
+            "format": "int64",
+            "type": "integer"
+          }
+        },
+        "required": [
+          "document",
+          "probe",
+          "version"
         ],
         "type": "object"
       },

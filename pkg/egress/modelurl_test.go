@@ -256,6 +256,21 @@ func TestCheckModelAddrs_DeniedRanges(t *testing.T) {
 	})
 }
 
+// TestCheckModelAddrs_HostOutsideAllowlist sends a public address for a host
+// name that the allowlist does not name. The connect-time check refuses it, as
+// CheckModelURL does, so it does not rely on the URL check that runs before it.
+func TestCheckModelAddrs_HostOutsideAllowlist(t *testing.T) {
+	t.Parallel()
+
+	allow := egress.Allowlist{Hosts: []string{"api.example.com"}, CIDRs: nil}
+	public := netip.MustParseAddr("93.184.216.34")
+
+	err := egress.CheckModelAddrs("https://other.example.com/", []netip.Addr{public}, allow, false)
+	if !errors.Is(err, egress.ErrRefused) {
+		t.Fatalf("CheckModelAddrs for a host outside the allowlist = %v, want ErrRefused", err)
+	}
+}
+
 // runDeniedAddr checks the denied address bad alone, after public and before
 // public, with and without the flag --egress-public-only.
 func runDeniedAddr(t *testing.T, text string, bad, public netip.Addr) {

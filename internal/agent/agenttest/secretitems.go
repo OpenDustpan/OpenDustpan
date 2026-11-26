@@ -13,6 +13,11 @@ import (
 type SecretItemsHarness struct {
 	Items agent.SecretItems
 
+	// Store is the connection store of the same installation. The
+	// delete-in-use case puts a document that references an item, so it
+	// needs a way to create the reference. Both SQL adapters set it.
+	Store agent.ConnectionStore
+
 	// CiphertextAtRest reads the stored ciphertext of the item with the
 	// reference ref straight from its row. No method of the port answers a
 	// ciphertext, so the sealed-at-rest case reads the row through it. Both
@@ -130,6 +135,10 @@ func caseSecretItemsReplace(t *testing.T, h SecretItemsHarness) {
 		t.Fatalf("Create() = %v", err)
 	}
 
+	// CreatedAt and ChangedAt are Unix milliseconds: wait one millisecond,
+	// so that the two writes cannot land in the same one.
+	waitOneMillisecond(t)
+
 	replaced, err := h.Items.Replace(t.Context(), got.Ref, []byte("second"), entry)
 	if err != nil {
 		t.Fatalf("Replace() = %v", err)
@@ -169,9 +178,32 @@ func caseSecretItemsDeleteInUse(t *testing.T, h SecretItemsHarness) {
 		t.Fatalf("Create() = %v", err)
 	}
 
-	// The store holds no document yet, so the delete succeeds.
+	doc := mustParseConnectionSpec(t, `{
+  "version": 1,
+  "format": "chat-completions",
+  "baseURL": "https://example.local/v1",
+  "model": "example-model",
+  "auth": { "header": "Authorization", "prefix": "Bearer ", "secret": "`+string(got.Ref)+`" },
+  "outputTokens": { "field": "max_tokens", "max": 8192 },
+  "tools": { "choice": "auto", "parallel": "omit" }
+}`)
+
+	if err = h.Store.PutPending(t.Context(), agent.ProbeRef("probe-inuse"), doc, entry); err != nil {
+		t.Fatalf("PutPending() = %v", err)
+	}
+
+	// A document references the item, so the delete must refuse.
+	if err = h.Items.Delete(t.Context(), got.Ref, entry); !errors.Is(err, agent.ErrSecretInUse) {
+		t.Fatalf("Delete() of an item that a document uses = %v, want ErrSecretInUse", err)
+	}
+
+	if err = h.Store.Delete(t.Context(), entry); err != nil {
+		t.Fatalf("Delete() of the connection = %v", err)
+	}
+
+	// With the connection gone, the delete succeeds.
 	if err = h.Items.Delete(t.Context(), got.Ref, entry); err != nil {
-		t.Fatalf("Delete() = %v", err)
+		t.Fatalf("Delete() after the connection is gone = %v", err)
 	}
 
 	_, err = h.Items.Get(t.Context(), got.Ref)

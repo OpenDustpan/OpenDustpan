@@ -552,6 +552,13 @@ func CheckModelAddrs(rawURL string, addrs []netip.Addr, a Allowlist, publicOnly 
 		return err
 	}
 
+	// Defense in depth: CheckModelURL checks the host name too; this check
+	// stays so that the connect-time check alone refuses a host outside the
+	// allowlist, whatever address the host resolved to.
+	if err := checkResolvedHost(u, a); err != nil {
+		return err
+	}
+
 	if len(addrs) == 0 {
 		return fmt.Errorf("%w: the host has no address", ErrRefused)
 	}
@@ -567,6 +574,18 @@ func CheckModelAddrs(rawURL string, addrs []netip.Addr, a Allowlist, publicOnly 
 	}
 
 	return nil
+}
+
+// checkResolvedHost applies the host name checks of CheckModelURL to the host
+// of u. An IP literal has no host name, so it passes here: its address is
+// checked by the caller.
+func checkResolvedHost(u *url.URL, a Allowlist) error {
+	host := strings.TrimSuffix(strings.ToLower(u.Hostname()), ".")
+	if _, err := netip.ParseAddr(host); err == nil {
+		return nil
+	}
+
+	return hostURLAllowed(u, host, a)
 }
 
 // resolvedAddrAllowed checks one address of a host name.

@@ -128,21 +128,23 @@ func (h *Handler) createAgentSecret(w http.ResponseWriter, r *http.Request, p id
 
 	body, readErr := readBodyUpTo(w, r, maxAgentSecretBodyBytes, errAgentSecretCreateBody)
 	if readErr != nil {
-		h.writeError(ctx, w, readErr)
+		h.writeAgentRefusal(w, r, p, identity.ActionServerManageAgent, readErr)
 
 		return
 	}
 
 	var in createAgentSecretRequest
 	if err := decodeBody(body, &in, errAgentSecretCreateBody); err != nil {
-		h.writeError(ctx, w, err)
+		h.writeAgentRefusal(w, r, p, identity.ActionServerManageAgent, err)
 
 		return
 	}
 
 	value := []byte(in.Value)
+	// Defense in depth: the service and the store check the name and the
+	// value too; this check stays so that a new caller cannot skip it.
 	if err := agent.CheckSecretItem(in.Name, value); err != nil {
-		h.writeError(ctx, w, agentSecretInvalid(err))
+		h.writeAgentRefusal(w, r, p, identity.ActionServerManageAgent, agentSecretInvalid(err))
 
 		return
 	}
@@ -151,7 +153,7 @@ func (h *Handler) createAgentSecret(w http.ResponseWriter, r *http.Request, p id
 		ctx, p, callerEntry(r, p, identity.ActionServerManageAgent), in.Name, value,
 	)
 	if err != nil {
-		h.writeError(ctx, w, err)
+		h.writeAgentRefusal(w, r, p, identity.ActionServerManageAgent, err)
 
 		return
 	}
@@ -166,7 +168,7 @@ func (h *Handler) listAgentSecrets(w http.ResponseWriter, r *http.Request, p ide
 
 	items, err := h.agent.ListSecrets(ctx, p)
 	if err != nil {
-		h.writeError(ctx, w, err)
+		h.writeAgentRefusal(w, r, p, identity.ActionServerManageAgent, err)
 
 		return
 	}
@@ -186,28 +188,31 @@ func (h *Handler) replaceAgentSecret(w http.ResponseWriter, r *http.Request, p i
 
 	ref, refErr := agentSecretRef(r)
 	if refErr != nil {
-		h.writeError(ctx, w, refErr)
+		h.writeAgentRefusal(w, r, p, identity.ActionServerManageAgent, refErr)
 
 		return
 	}
 
 	body, readErr := readBodyUpTo(w, r, maxAgentSecretBodyBytes, errAgentSecretReplaceBody)
 	if readErr != nil {
-		h.writeError(ctx, w, readErr)
+		h.writeAgentRefusal(w, r, p, identity.ActionServerManageAgent, readErr)
 
 		return
 	}
 
 	var in replaceAgentSecretRequest
 	if err := decodeBody(body, &in, errAgentSecretReplaceBody); err != nil {
-		h.writeError(ctx, w, err)
+		h.writeAgentRefusal(w, r, p, identity.ActionServerManageAgent, err)
 
 		return
 	}
 
 	value := []byte(in.Value)
-	if err := agent.CheckSecretItem(string(ref), value); err != nil {
-		h.writeError(ctx, w, agentSecretInvalid(err))
+	// Defense in depth: the service and the store check the value too;
+	// this check stays so that a new caller cannot skip it. The item keeps
+	// its name, so only the value rules apply here.
+	if err := agent.CheckSecretValue(value); err != nil {
+		h.writeAgentRefusal(w, r, p, identity.ActionServerManageAgent, agentSecretInvalid(err))
 
 		return
 	}
@@ -216,7 +221,7 @@ func (h *Handler) replaceAgentSecret(w http.ResponseWriter, r *http.Request, p i
 		ctx, p, callerEntry(r, p, identity.ActionServerManageAgent), ref, value,
 	)
 	if err != nil {
-		h.writeError(ctx, w, err)
+		h.writeAgentRefusal(w, r, p, identity.ActionServerManageAgent, err)
 
 		return
 	}
@@ -231,13 +236,13 @@ func (h *Handler) deleteAgentSecret(w http.ResponseWriter, r *http.Request, p id
 
 	ref, refErr := agentSecretRef(r)
 	if refErr != nil {
-		h.writeError(ctx, w, refErr)
+		h.writeAgentRefusal(w, r, p, identity.ActionServerManageAgent, refErr)
 
 		return
 	}
 
 	if err := h.agent.DeleteSecret(ctx, p, callerEntry(r, p, identity.ActionServerManageAgent), ref); err != nil {
-		h.writeError(ctx, w, err)
+		h.writeAgentRefusal(w, r, p, identity.ActionServerManageAgent, err)
 
 		return
 	}
@@ -264,7 +269,8 @@ func classifyAgent(err error) (failure, bool) {
 			errcode.AgentConnectionSecretInUse), true
 	case errors.Is(err, agent.ErrDisabled):
 		return failCoded(http.StatusNotFound,
-			"No model is connected.", errcode.AgentConnectionNotConnected), true
+			"No model is connected: write a connection document first, as docs/guides/agent-connection.md shows.",
+			errcode.AgentConnectionNotConnected), true
 	}
 
 	return fail(0, ""), false

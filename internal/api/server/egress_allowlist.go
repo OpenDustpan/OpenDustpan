@@ -104,7 +104,16 @@ func readEgressAllowlistInput(in egressAllowlistRequest) (egress.Allowlist, erro
 			}
 		}
 
-		a.CIDRs = append(a.CIDRs, egress.CIDRRule{CIDR: prefix.Masked(), Port: rule.Port, HTTP: rule.HTTP})
+		// A prefix with host bits set names a different range than its
+		// text: refuse it, do not mask it to the range that it holds.
+		if prefix.Masked() != prefix {
+			return egress.Allowlist{Hosts: nil, CIDRs: nil}, &codedError{
+				status: http.StatusBadRequest, code: errcode.AgentConnectionAllowlistInvalid, args: nil,
+				message: "The egress allowlist rule has host bits set: use the network address, such as 10.20.0.0/16.",
+			}
+		}
+
+		a.CIDRs = append(a.CIDRs, egress.CIDRRule{CIDR: prefix, Port: rule.Port, HTTP: rule.HTTP})
 	}
 
 	return a, nil
@@ -141,7 +150,7 @@ func (h *Handler) readEgressAllowlist(
 
 	a, err := h.agent.Allowlist(ctx, p)
 	if err != nil {
-		h.writeError(ctx, w, err)
+		h.writeAgentRefusal(w, r, p, identity.ActionServerManageSettings, err)
 
 		return
 	}
@@ -159,54 +168,59 @@ func (h *Handler) writeEgressAllowlist(
 
 	body, readErr := readBodyUpTo(w, r, maxEgressAllowlistBodyBytes, errEgressAllowlistBody)
 	if readErr != nil {
-		h.writeError(ctx, w, readErr)
+		h.writeAgentRefusal(w, r, p, identity.ActionServerManageSettings, readErr)
 
 		return
 	}
 
 	var in egressAllowlistRequest
 	if err := decodeBody(body, &in, errEgressAllowlistBody); err != nil {
-		h.writeError(ctx, w, err)
+		h.writeAgentRefusal(w, r, p, identity.ActionServerManageSettings, err)
 
 		return
 	}
 
 	if in.Hosts == nil || in.CIDRs == nil {
-		h.writeError(ctx, w, errEgressAllowlistBody)
+		h.writeAgentRefusal(w, r, p, identity.ActionServerManageSettings, errEgressAllowlistBody)
 
 		return
 	}
 
 	a, inputErr := readEgressAllowlistInput(in)
 	if inputErr != nil {
-		h.writeError(ctx, w, inputErr)
+		h.writeAgentRefusal(w, r, p, identity.ActionServerManageSettings, inputErr)
 
 		return
 	}
 
+	// Defense in depth: the service and the store check the allowlist too;
+	// this check stays so that a new caller cannot skip it.
 	if err := agent.CheckAllowlist(a); err != nil {
-		h.writeError(ctx, w, egressAllowlistInvalid(err))
+		h.writeAgentRefusal(w, r, p, identity.ActionServerManageSettings, egressAllowlistInvalid(err))
 
 		return
 	}
 
 	for _, rule := range a.CIDRs {
+		// Defense in depth: the service and the store check the range of
+		// each rule too; this check stays so that a new caller cannot skip
+		// it.
 		if err := checkEgressAllowlistRange(rule); err != nil {
-			h.writeError(ctx, w, err)
+			h.writeAgentRefusal(w, r, p, identity.ActionServerManageSettings, err)
 
 			return
 		}
 	}
 
 	if err := h.setEgressAllowlist(ctx, r, p, a); err != nil {
-		h.writeError(ctx, w, err)
+		h.writeAgentRefusal(w, r, p, identity.ActionServerManageSettings, err)
 
 		return
 	}
 
 	stored, err := h.agent.Allowlist(ctx, p)
 	if err != nil {
-		h.writeError(ctx, w, err)
+		h.writeAgentRefusal(w, r, p, identity.ActionServerManageSettings, err)
 
 		return
 	}

@@ -82,6 +82,7 @@ func TestAgentSecretItemsConformance(t *testing.T) {
 
 		return agenttest.SecretItemsHarness{
 			Items:            s.AgentSecretItems(secrets),
+			Store:            s.AgentConnections(),
 			CiphertextAtRest: ciphertextAtRest(t, schemaURL),
 		}
 	})

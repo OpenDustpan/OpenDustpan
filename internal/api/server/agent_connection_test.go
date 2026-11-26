@@ -156,10 +156,20 @@ type agentItemListDoc struct {
 	Secrets []agentItemDoc `json:"secrets"`
 }
 
-// agentConnectionDoc is the current model connection document on the wire.
-type agentConnectionDoc struct {
+// agentPendingDoc is one pending document on the wire: the document that a
+// probe wrote, with the reference of the probe.
+type agentPendingDoc struct {
+	Probe    string          `json:"probe"`
 	Document json.RawMessage `json:"document"`
 	Version  int64           `json:"version"`
+}
+
+// agentConnectionDoc is the current model connection document on the wire,
+// with the pending documents and their probes.
+type agentConnectionDoc struct {
+	Document json.RawMessage   `json:"document"`
+	Version  int64             `json:"version"`
+	Pending  []agentPendingDoc `json:"pending"`
 }
 
 // decodeAgentItems reads a 200 list of secret items.
@@ -254,6 +264,22 @@ func seedAgentConnection(t *testing.T, st *sqlite.Store, raw string) {
 	}
 }
 
+// seedAgentPending stores a pending document without promoting it, as a
+// probe would: PUT /api/agent/connection is a later change.
+func seedAgentPending(t *testing.T, st *sqlite.Store, raw, probe string) {
+	t.Helper()
+
+	spec, err := agent.ParseConnectionSpec([]byte(raw))
+	if err != nil {
+		t.Fatalf("parse document: %v", err)
+	}
+
+	entry := agenttest.TestEntry(audit.ServerScope, "admin", "server:manage-agent")
+	if err := st.AgentConnections().PutPending(t.Context(), agent.ProbeRef(probe), spec, entry); err != nil {
+		t.Fatalf("put pending document: %v", err)
+	}
+}
+
 // agentDocWithoutItem is a valid document that refers to no secret item.
 const agentDocWithoutItem = `{
   "version": 1,
@@ -339,28 +365,7 @@ func TestConnectionRoutes_ReadDelete(t *testing.T) {
 
 	seedAgentConnection(t, f.store, agentDocWithoutItem)
 
-	rec := serveAgent(t, f.handler, http.MethodGet, "/api/agent/connection", "")
-	if rec.Code != http.StatusOK {
-		t.Fatalf("GET connection answers %d, want 200: %s", rec.Code, rec.Body.String())
-	}
-
-	var doc agentConnectionDoc
-	if err := json.Unmarshal(rec.Body.Bytes(), &doc); err != nil {
-		t.Fatalf("decode connection %q: %v", rec.Body.String(), err)
-	}
-
-	if doc.Version != 1 {
-		t.Fatalf("connection version = %d, want 1", doc.Version)
-	}
-
-	var raw map[string]any
-	if err := json.Unmarshal(doc.Document, &raw); err != nil {
-		t.Fatalf("decode document %q: %v", doc.Document, err)
-	}
-
-	if raw["model"] != "example-model" {
-		t.Fatalf("connection model = %v, want example-model", raw["model"])
-	}
+	wantSeededConnection(t, serveAgent(t, f.handler, http.MethodGet, "/api/agent/connection", ""))
 
 	remove := serveAgent(t, f.handler, http.MethodDelete, "/api/agent/connection", "")
 	if remove.Code != http.StatusNoContent {
@@ -379,6 +384,97 @@ func TestConnectionRoutes_ReadDelete(t *testing.T) {
 	again := serveAgent(t, f.handler, http.MethodDelete, "/api/agent/connection", "")
 	if again.Code != http.StatusNotFound {
 		t.Fatalf("DELETE after DELETE answers %d, want 404: %s", again.Code, again.Body.String())
+	}
+}
+
+// wantSeededConnection checks that rec answers 200 with the seeded
+// document, version 1 and no pending document.
+func wantSeededConnection(t *testing.T, rec *httptest.ResponseRecorder) {
+	t.Helper()
+
+	if rec.Code != http.StatusOK {
+		t.Fatalf("GET connection answers %d, want 200: %s", rec.Code, rec.Body.String())
+	}
+
+	var doc agentConnectionDoc
+	if err := json.Unmarshal(rec.Body.Bytes(), &doc); err != nil {
+		t.Fatalf("decode connection %q: %v", rec.Body.String(), err)
+	}
+
+	if doc.Version != 1 {
+		t.Fatalf("connection version = %d, want 1", doc.Version)
+	}
+
+	if len(doc.Pending) != 0 {
+		t.Fatalf("connection pending = %+v, want none", doc.Pending)
+	}
+
+	var raw map[string]any
+	if err := json.Unmarshal(doc.Document, &raw); err != nil {
+		t.Fatalf("decode document %q: %v", doc.Document, err)
+	}
+
+	if raw["model"] != "example-model" {
+		t.Fatalf("connection model = %v, want example-model", raw["model"])
+	}
+}
+
+// TestConnectionRoutes_AnswersPending proves GET answers the pending
+// documents with their probes, next to the current document, and an empty
+// list when none is pending.
+func TestConnectionRoutes_AnswersPending(t *testing.T) {
+	t.Parallel()
+
+	f := allowAgent(t)
+
+	seedAgentConnection(t, f.store, agentDocWithoutItem)
+	seedAgentPending(t, f.store, agentDocWithoutItem, "probe-pending-route")
+
+	rec := serveAgent(t, f.handler, http.MethodGet, "/api/agent/connection", "")
+	if rec.Code != http.StatusOK {
+		t.Fatalf("GET connection answers %d, want 200: %s", rec.Code, rec.Body.String())
+	}
+
+	var doc agentConnectionDoc
+	if err := json.Unmarshal(rec.Body.Bytes(), &doc); err != nil {
+		t.Fatalf("decode connection %q: %v", rec.Body.String(), err)
+	}
+
+	if len(doc.Pending) != 1 {
+		t.Fatalf("connection pending = %+v, want the one pending document", doc.Pending)
+	}
+
+	if doc.Pending[0].Probe != "probe-pending-route" || doc.Pending[0].Version != 1 {
+		t.Fatalf("pending document = %+v, want the probe and version 1", doc.Pending[0])
+	}
+
+	var raw map[string]any
+	if err := json.Unmarshal(doc.Pending[0].Document, &raw); err != nil {
+		t.Fatalf("decode pending document %q: %v", doc.Pending[0].Document, err)
+	}
+
+	if raw["model"] != "example-model" {
+		t.Fatalf("pending model = %v, want example-model", raw["model"])
+	}
+
+	// The promote of the probe removes its pending document.
+	entry := agenttest.TestEntry(audit.ServerScope, "admin", "server:manage-agent")
+	probe := agent.ProbeRef("probe-pending-route")
+	if err := f.store.AgentConnections().Promote(t.Context(), probe, entry); err != nil {
+		t.Fatalf("promote pending document: %v", err)
+	}
+
+	rec = serveAgent(t, f.handler, http.MethodGet, "/api/agent/connection", "")
+	if rec.Code != http.StatusOK {
+		t.Fatalf("GET connection after promote answers %d, want 200: %s", rec.Code, rec.Body.String())
+	}
+
+	if err := json.Unmarshal(rec.Body.Bytes(), &doc); err != nil {
+		t.Fatalf("decode connection %q: %v", rec.Body.String(), err)
+	}
+
+	if len(doc.Pending) != 0 {
+		t.Fatalf("connection pending after promote = %+v, want none", doc.Pending)
 	}
 }
 
@@ -483,6 +579,16 @@ func TestAgentRoutes_Forbidden(t *testing.T) {
 			if rec := serveAgent(t, f.handler, call.method, call.target, call.body); rec.Code != http.StatusForbidden {
 				t.Fatalf("%s %s answers %d, want 403: %s", call.method, call.target, rec.Code, rec.Body.String())
 			}
+
+			// The denied route writes its audit entry: the server audits
+			// each call that reaches it.
+			if n := len(f.audit.entries); n != 1 {
+				t.Fatalf("%s %s wrote %d audit entries, want the one denial", call.method, call.target, n)
+			}
+
+			if got := f.audit.entries[0]; got.Outcome != audit.OutcomeDenied {
+				t.Fatalf("%s %s entry outcome = %q, want denied", call.method, call.target, got.Outcome)
+			}
 		})
 	}
 }
@@ -505,6 +611,16 @@ func TestEgressAllowlistRoutes_Forbidden(t *testing.T) {
 
 			if rec := serveAgent(t, f.handler, call.method, call.target, call.body); rec.Code != http.StatusForbidden {
 				t.Fatalf("%s allowlist answers %d, want 403: %s", call.method, rec.Code, rec.Body.String())
+			}
+
+			// The denied route writes its audit entry: the server audits
+			// each call that reaches it.
+			if n := len(f.audit.entries); n != 1 {
+				t.Fatalf("%s allowlist wrote %d audit entries, want the one denial", call.method, n)
+			}
+
+			if got := f.audit.entries[0]; got.Outcome != audit.OutcomeDenied {
+				t.Fatalf("%s allowlist entry outcome = %q, want denied", call.method, got.Outcome)
 			}
 		})
 	}
@@ -599,76 +715,86 @@ func listServerEntries(t *testing.T, f agentFixture) []audit.Entry {
 
 // agentFailCase is one hostile input of the fail-closed table.
 type agentFailCase struct {
-	name      string
-	method    string
-	target    string
-	body      string
-	want      int
-	wantCode  string
-	wantEntry bool
-	seedUsed  bool
+	name     string
+	method   string
+	target   string
+	body     string
+	want     int
+	wantCode string
+	// denied marks the case whose refusal is the missing grant: the
+	// authorizer denies the action before the handler runs.
+	denied   bool
+	seedUsed bool
 }
 
-// agentFailTable lists the hostile inputs: each is denied with its status and
-// code, and a refusal writes an audit entry.
+// agentFailTable lists the hostile inputs: each is denied with its status
+// and code, and each refusal writes one denied audit entry.
 func agentFailTable() []agentFailCase {
 	return []agentFailCase{
 		{
 			name: "secret reference with no form", method: http.MethodPut,
 			target: "/api/agent/secrets/not-a-ref", body: `{"value":"x"}`,
-			want:      http.StatusBadRequest,
-			wantCode:  "agent-connection.secret-invalid",
-			wantEntry: false, seedUsed: false,
+			want:     http.StatusBadRequest,
+			wantCode: "agent-connection.secret-invalid",
+			denied:   false, seedUsed: false,
 		},
 		{
 			name: "unknown secret reference", method: http.MethodPut,
 			target: "/api/agent/secrets/itm-unknown000", body: `{"value":"x"}`,
-			want:      http.StatusNotFound,
-			wantCode:  "agent-connection.secret-not-found",
-			wantEntry: false, seedUsed: false,
+			want:     http.StatusNotFound,
+			wantCode: "agent-connection.secret-not-found",
+			denied:   false, seedUsed: false,
 		},
 		{
 			name: "secret item in use", method: http.MethodDelete,
 			target: "/api/agent/secrets/", body: "",
-			want:      http.StatusConflict,
-			wantCode:  "agent-connection.secret-in-use",
-			wantEntry: false, seedUsed: true,
+			want:     http.StatusConflict,
+			wantCode: "agent-connection.secret-in-use",
+			denied:   false, seedUsed: true,
 		},
 		{
 			name: "unknown field in secret body", method: http.MethodPost,
 			target: "/api/agent/secrets", body: `{"name":"api-key","value":"x","extra":1}`,
-			want:      http.StatusBadRequest,
-			wantCode:  "agent-connection.secret-invalid",
-			wantEntry: false, seedUsed: false,
+			want:     http.StatusBadRequest,
+			wantCode: "agent-connection.secret-invalid",
+			denied:   false, seedUsed: false,
 		},
 		{
 			name: "allowlist without cidrs", method: http.MethodPut,
 			target: "/api/server/egress-allowlist", body: `{"hosts":[]}`,
-			want:      http.StatusBadRequest,
-			wantCode:  "agent-connection.allowlist-invalid",
-			wantEntry: false, seedUsed: false,
+			want:     http.StatusBadRequest,
+			wantCode: "agent-connection.allowlist-invalid",
+			denied:   false, seedUsed: false,
 		},
 		{
 			name: "allowlist with a denied range", method: http.MethodPut,
-			target:    "/api/server/egress-allowlist",
-			body:      `{"hosts":[],"cidrs":[{"cidr":"127.0.0.0/8","port":443,"http":false}]}`,
-			want:      http.StatusBadRequest,
-			wantCode:  "agent-connection.allowlist-invalid",
-			wantEntry: false, seedUsed: false,
+			target:   "/api/server/egress-allowlist",
+			body:     `{"hosts":[],"cidrs":[{"cidr":"127.0.0.0/8","port":443,"http":false}]}`,
+			want:     http.StatusBadRequest,
+			wantCode: "agent-connection.allowlist-invalid",
+			denied:   false, seedUsed: false,
+		},
+		{
+			name: "allowlist rule with host bits", method: http.MethodPut,
+			target:   "/api/server/egress-allowlist",
+			body:     `{"hosts":[],"cidrs":[{"cidr":"10.20.5.0/16","port":443,"http":false}]}`,
+			want:     http.StatusBadRequest,
+			wantCode: "agent-connection.allowlist-invalid",
+			denied:   false, seedUsed: false,
 		},
 		{
 			name: "connection of a new installation", method: http.MethodGet,
 			target: "/api/agent/connection", body: "",
-			want:      http.StatusNotFound,
-			wantCode:  "agent-connection.not-connected",
-			wantEntry: false, seedUsed: false,
+			want:     http.StatusNotFound,
+			wantCode: "agent-connection.not-connected",
+			denied:   false, seedUsed: false,
 		},
 		{
 			name: "principal without the grant", method: http.MethodGet,
 			target: "/api/agent/secrets", body: "",
-			want:      http.StatusForbidden,
-			wantCode:  "access.denied",
-			wantEntry: true, seedUsed: false,
+			want:     http.StatusForbidden,
+			wantCode: "access.denied",
+			denied:   true, seedUsed: false,
 		},
 	}
 }
@@ -690,12 +816,13 @@ func seedUsedSecret(t *testing.T, f agentFixture, ref string) {
 	seedAgentConnection(t, f.store, raw)
 }
 
-// checkAgentFailCase serves one hostile input and checks its denial.
+// checkAgentFailCase serves one hostile input and checks its denial and its
+// audit entry.
 func checkAgentFailCase(t *testing.T, tc agentFailCase) {
 	t.Helper()
 
 	var f agentFixture
-	if tc.wantEntry {
+	if tc.denied {
 		f = newAgentFixture(t, selectiveAuthorizer{deny: map[identity.Action]bool{
 			identity.ActionServerManageAgent: true,
 		}})
@@ -723,14 +850,14 @@ func checkAgentFailCase(t *testing.T, tc agentFailCase) {
 		t.Fatalf("%s errorCode = %q, want %q: %s", tc.name, got, tc.wantCode, rec.Body.String())
 	}
 
-	if tc.wantEntry {
-		if len(f.audit.entries) != before+1 {
-			t.Fatalf("%s wrote %d entries, want one more", tc.name, len(f.audit.entries)-before)
-		}
+	// The server audits each call that reaches it: the refusal writes one
+	// denied entry, at the authorize step or in the handler.
+	if len(f.audit.entries) != before+1 {
+		t.Fatalf("%s wrote %d audit entries, want the one denial", tc.name, len(f.audit.entries)-before)
+	}
 
-		if got := f.audit.entries[len(f.audit.entries)-1]; got.Outcome != audit.OutcomeDenied {
-			t.Fatalf("%s entry outcome = %q, want denied", tc.name, got.Outcome)
-		}
+	if got := f.audit.entries[len(f.audit.entries)-1]; got.Outcome != audit.OutcomeDenied {
+		t.Fatalf("%s entry outcome = %q, want denied", tc.name, got.Outcome)
 	}
 }
 

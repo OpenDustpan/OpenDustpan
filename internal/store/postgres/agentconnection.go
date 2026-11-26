@@ -320,6 +320,27 @@ func (k AgentConnections) Pending(ctx context.Context, probe agent.ProbeRef) (ag
 	return spec, row.Version, err
 }
 
+// PendingAll implements agent.ConnectionStore.
+func (k AgentConnections) PendingAll(ctx context.Context) ([]agent.PendingDocument, error) {
+	rows, err := k.s.queries.ListAgentConnectionPending(ctx)
+	if err != nil {
+		return nil, fmt.Errorf("list pending connections: %w", err)
+	}
+
+	out := make([]agent.PendingDocument, 0, len(rows))
+
+	for _, row := range rows {
+		spec, err := parseStoredSpec(row.Document)
+		if err != nil {
+			return nil, err
+		}
+
+		out = append(out, agent.PendingDocument{Probe: agent.ProbeRef(row.ProbeID), Spec: spec, Version: row.Version})
+	}
+
+	return out, nil
+}
+
 // PutPending implements agent.ConnectionStore.
 func (k AgentConnections) PutPending(
 	ctx context.Context, probe agent.ProbeRef, c agent.ConnectionSpec, e audit.Entry,
@@ -425,16 +446,20 @@ func (k AgentConnections) Delete(ctx context.Context, e audit.Entry) error {
 			return fmt.Errorf("delete connection: %w", err)
 		}
 
-		if n == 0 {
-			return agent.ErrDisabled
-		}
-
-		if err = tx.q.DeleteAgentConnectionPendingAll(ctx); err != nil {
+		// The pending documents and the reference rows go even when no
+		// current document exists: the first connection is pending before
+		// it is promoted, and the disconnect removes it.
+		pending, err := tx.q.DeleteAgentConnectionPendingAll(ctx)
+		if err != nil {
 			return fmt.Errorf("delete pending connections: %w", err)
 		}
 
 		if err = tx.q.DeleteAgentSecretRefsAll(ctx); err != nil {
 			return fmt.Errorf("delete reference rows: %w", err)
+		}
+
+		if n == 0 && pending == 0 {
+			return agent.ErrDisabled
 		}
 
 		return appendScopedServerEntry(ctx, tx, &e)

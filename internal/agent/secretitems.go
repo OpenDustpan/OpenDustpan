@@ -41,14 +41,11 @@ func NewSecretRef() SecretRef {
 	return SecretRef("itm-" + strings.ToLower(rand.Text()))
 }
 
-// CheckSecretItem returns ErrInvalid unless name is 1 to 128 bytes of
-// printable UTF-8 and value is 1 byte to 16 KiB with no CR or LF.
-func CheckSecretItem(name string, value []byte) error {
+// CheckSecretValue returns ErrInvalid unless value is 1 byte to 16 KiB with
+// no CR or LF. It holds the value rules of CheckSecretItem without the name
+// rules, for a write that sets only the value of an existing item.
+func CheckSecretValue(value []byte) error {
 	switch {
-	case name == "", len(name) > maxSecretNameBytes:
-		return fmt.Errorf("%w: the name of a secret item has 1 to %d bytes", ErrInvalid, maxSecretNameBytes)
-	case !utf8.ValidString(name), strings.ContainsFunc(name, isControlRune):
-		return fmt.Errorf("%w: the name of a secret item holds a control character", ErrInvalid)
 	case len(value) == 0:
 		return fmt.Errorf("%w: the value of a secret item is empty", ErrInvalid)
 	case len(value) > maxSecretValueBytes:
@@ -58,6 +55,19 @@ func CheckSecretItem(name string, value []byte) error {
 	}
 
 	return nil
+}
+
+// CheckSecretItem returns ErrInvalid unless name is 1 to 128 bytes of
+// printable UTF-8 and value is 1 byte to 16 KiB with no CR or LF.
+func CheckSecretItem(name string, value []byte) error {
+	switch {
+	case name == "", len(name) > maxSecretNameBytes:
+		return fmt.Errorf("%w: the name of a secret item has 1 to %d bytes", ErrInvalid, maxSecretNameBytes)
+	case !utf8.ValidString(name), strings.ContainsFunc(name, isControlRune):
+		return fmt.Errorf("%w: the name of a secret item holds a control character", ErrInvalid)
+	}
+
+	return CheckSecretValue(value)
 }
 
 // ErrSecretNotFound reports a secret item the store does not know.

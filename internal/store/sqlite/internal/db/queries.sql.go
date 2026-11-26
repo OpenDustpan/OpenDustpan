@@ -3254,13 +3254,16 @@ func (q *Queries) DeleteAgentConnectionPending(ctx context.Context, probeID stri
 	return result.RowsAffected()
 }
 
-const deleteAgentConnectionPendingAll = `-- name: DeleteAgentConnectionPendingAll :exec
+const deleteAgentConnectionPendingAll = `-- name: DeleteAgentConnectionPendingAll :execrows
 DELETE FROM agent_connection_pending
 `
 
-func (q *Queries) DeleteAgentConnectionPendingAll(ctx context.Context) error {
-	_, err := q.db.ExecContext(ctx, deleteAgentConnectionPendingAll)
-	return err
+func (q *Queries) DeleteAgentConnectionPendingAll(ctx context.Context) (int64, error) {
+	result, err := q.db.ExecContext(ctx, deleteAgentConnectionPendingAll)
+	if err != nil {
+		return 0, err
+	}
+	return result.RowsAffected()
 }
 
 const deleteAgentEgressAllowlistHosts = `-- name: DeleteAgentEgressAllowlistHosts :exec
@@ -14637,6 +14640,41 @@ func (q *Queries) ListActiveGroupNamesOfPrincipal(ctx context.Context, principal
 			return nil, err
 		}
 		items = append(items, name)
+	}
+	if err := rows.Close(); err != nil {
+		return nil, err
+	}
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+	return items, nil
+}
+
+const listAgentConnectionPending = `-- name: ListAgentConnectionPending :many
+SELECT probe_id, document, version
+FROM agent_connection_pending
+ORDER BY created_at_ms, probe_id
+`
+
+type ListAgentConnectionPendingRow struct {
+	ProbeID  string
+	Document []byte
+	Version  int64
+}
+
+func (q *Queries) ListAgentConnectionPending(ctx context.Context) ([]ListAgentConnectionPendingRow, error) {
+	rows, err := q.db.QueryContext(ctx, listAgentConnectionPending)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	var items []ListAgentConnectionPendingRow
+	for rows.Next() {
+		var i ListAgentConnectionPendingRow
+		if err := rows.Scan(&i.ProbeID, &i.Document, &i.Version); err != nil {
+			return nil, err
+		}
+		items = append(items, i)
 	}
 	if err := rows.Close(); err != nil {
 		return nil, err

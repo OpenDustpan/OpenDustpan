@@ -2844,7 +2844,7 @@ WHERE ref = 'cur-1';
 DELETE FROM agent_connection_pending
 WHERE probe_id = ?;
 
--- name: DeleteAgentConnectionPendingAll :exec
+-- name: DeleteAgentConnectionPendingAll :execrows
 DELETE FROM agent_connection_pending;
 
 -- name: DeleteAgentEgressAllowlistHosts :exec
@@ -2895,6 +2895,11 @@ VALUES (?, ?, ?, ?);
 -- name: InsertAgentSecretRef :exec
 INSERT INTO agent_secret_refs (ref, secret)
 VALUES (?, ?);
+
+-- name: ListAgentConnectionPending :many
+SELECT probe_id, document, version
+FROM agent_connection_pending
+ORDER BY created_at_ms, probe_id;
 
 -- name: ListAgentEgressAllowlistHosts :many
 SELECT host

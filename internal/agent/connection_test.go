@@ -50,14 +50,14 @@ func TestParseConnectionSpec_Hostile(t *testing.T) {
 		},
 		{
 			name: "document above 32 KiB",
-			// A valid document with a pad value long enough to cross the
-			// size limit: only the size limit refuses it, so the case
-			// fails when the limit is removed.
+			// A valid document whose whitespace between two top-level
+			// fields crosses the size limit: the pad is valid JSON that
+			// no field bound sees, so only the size limit refuses it and
+			// the case fails when the limit is removed.
 			raw: strings.Replace(
 				validDocument(),
-				`"tools": { "choice": "auto", "parallel": "on" }`,
-				`"tools": { "choice": "auto", "parallel": "on" },
-  "providerFields": { "options": { "pad": "`+strings.Repeat(" ", 33*1024)+`" } }`,
+				`"model": "example-model",`,
+				`"model": "example-model",`+strings.Repeat(" ", 33*1024),
 				1,
 			),
 			want: agent.ErrConnectionInvalid,
@@ -432,6 +432,22 @@ func mustParseValidSpec(t *testing.T, raw string) agent.ConnectionSpec {
 	}
 
 	return spec
+}
+
+func TestConnectionSpec_ZeroValue(t *testing.T) {
+	t.Parallel()
+
+	// The zero ConnectionSpec holds a nil baseURL: the accessors that
+	// read it and Marshal must answer without a nil dereference.
+	var zero agent.ConnectionSpec
+
+	if got := zero.BaseURL(); got != "" {
+		t.Fatalf("BaseURL() = %q, want empty", got)
+	}
+
+	if out := zero.Marshal(); len(out) == 0 {
+		t.Fatal("Marshal() wrote no bytes, want the canonical form of the zero value")
+	}
 }
 
 func TestBaseURL_Hostile(t *testing.T) {

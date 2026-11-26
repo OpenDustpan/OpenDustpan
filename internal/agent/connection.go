@@ -699,8 +699,15 @@ func (c ConnectionSpec) Version() int { return c.version }
 // Format returns the wire format of each model call.
 func (c ConnectionSpec) Format() string { return c.format }
 
-// BaseURL returns the absolute address before the path of the format.
-func (c ConnectionSpec) BaseURL() string { return c.baseURL.String() }
+// BaseURL returns the absolute address before the path of the format. It
+// returns "" for the zero ConnectionSpec, whose baseURL is the nil URL.
+func (c ConnectionSpec) BaseURL() string {
+	if c.baseURL == nil {
+		return ""
+	}
+
+	return c.baseURL.String()
+}
 
 // Model returns the model name the request sends.
 func (c ConnectionSpec) Model() string { return c.model }
@@ -858,10 +865,15 @@ func (c ConnectionSpec) SecretRefs() ([]SecretRef, error) {
 // each field that the document set; a field that the document did not set
 // stays out.
 func (c ConnectionSpec) marshalValue() any {
+	base := ""
+	if c.baseURL != nil {
+		base = c.baseURL.String()
+	}
+
 	v := map[string]any{
 		"version": c.version,
 		"format":  c.format,
-		"baseURL": c.baseURL.String(),
+		"baseURL": base,
 		"model":   c.model,
 		"auth":    c.auth.marshal(),
 	}
@@ -1771,6 +1783,17 @@ func (p ProbeRef) DocumentRef() string {
 	return "pnd-" + string(p)
 }
 
+// PendingDocument is one pending document of the store, with the probe
+// that owns it. The document holds references only: no secret value.
+type PendingDocument struct {
+	// Probe is the reference of the probe that wrote the document.
+	Probe ProbeRef
+	// Spec is the pending document.
+	Spec ConnectionSpec
+	// Version is the version of the pending document.
+	Version int64
+}
+
 // ConnectionStore is the persistence port for the stored connection of an
 // installation. Current returns ErrDisabled when no document exists.
 type ConnectionStore interface {
@@ -1781,6 +1804,9 @@ type ConnectionStore interface {
 	// Pending returns the pending document for probe, or ErrNotFound when
 	// none exists.
 	Pending(ctx context.Context, probe ProbeRef) (ConnectionSpec, int64, error)
+	// PendingAll returns every pending document with its probe, oldest
+	// first. The answer holds references only: no secret value.
+	PendingAll(ctx context.Context) ([]PendingDocument, error)
 	// PutPending stores the document as the pending document for probe,
 	// replacing an earlier one for the same probe.
 	PutPending(ctx context.Context, probe ProbeRef, c ConnectionSpec, e audit.Entry) error

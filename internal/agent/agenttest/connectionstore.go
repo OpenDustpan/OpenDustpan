@@ -3,6 +3,7 @@ package agenttest
 import (
 	"errors"
 	"testing"
+	"time"
 
 	"opendustpan.org/opendustpan/internal/agent"
 	"opendustpan.org/opendustpan/pkg/audit"
@@ -30,6 +31,8 @@ func RunConnectionStore(t *testing.T, f ConnectionStoreFactory) {
 	}{
 		{name: "current answers ErrDisabled when none exists", run: caseConnectionStoreDisabled},
 		{name: "pending and promote", run: caseConnectionStorePendingPromote},
+		{name: "pending only delete", run: caseConnectionStorePendingOnlyDelete},
+		{name: "list all pending", run: caseConnectionStoreListPending},
 		{name: "delete all in one transaction", run: caseConnectionStoreDeleteAll},
 		{name: "missing secret reference", run: caseConnectionStoreMissingSecretRef},
 		{name: "secret item in use", run: caseConnectionStoreSecretInUse},
@@ -106,6 +109,135 @@ func caseConnectionStorePendingPromote(t *testing.T, h ConnectionStoreHarness) {
 	_, _, err = h.Store.Pending(t.Context(), probe)
 	if !errors.Is(err, agent.ErrNotFound) {
 		t.Fatalf("Pending() after promote = %v, want ErrNotFound", err)
+	}
+}
+
+func caseConnectionStorePendingOnlyDelete(t *testing.T, h ConnectionStoreHarness) {
+	t.Helper()
+
+	entry := TestEntry(audit.ServerScope, "admin", "server:manage-agent")
+
+	doc := mustParseConnectionSpec(t, `{
+  "version": 1,
+  "format": "chat-completions",
+  "baseURL": "https://example.local/v1",
+  "model": "example-model",
+  "auth": { "none": true },
+  "outputTokens": { "field": "max_tokens", "max": 8192 },
+  "tools": { "choice": "auto", "parallel": "omit" }
+}`)
+
+	// No document was promoted yet, so only the pending document exists.
+	probe := agent.ProbeRef("probe-pending-only")
+
+	if err := h.Store.PutPending(t.Context(), probe, doc, entry); err != nil {
+		t.Fatalf("PutPending() = %v", err)
+	}
+
+	// The disconnect removes the pending document too, also when no
+	// current document exists.
+	if err := h.Store.Delete(t.Context(), entry); err != nil {
+		t.Fatalf("Delete() of a pending document without a current one = %v, want nil", err)
+	}
+
+	if _, _, pendErr := h.Store.Pending(t.Context(), probe); !errors.Is(pendErr, agent.ErrNotFound) {
+		t.Fatalf("Pending() after delete = %v, want ErrNotFound", pendErr)
+	}
+
+	if _, _, curErr := h.Store.Current(t.Context()); !errors.Is(curErr, agent.ErrDisabled) {
+		t.Fatalf("Current() after delete = %v, want ErrDisabled", curErr)
+	}
+}
+
+func caseConnectionStoreListPending(t *testing.T, h ConnectionStoreHarness) {
+	t.Helper()
+
+	entry := TestEntry(audit.ServerScope, "admin", "server:manage-agent")
+
+	doc := mustParseConnectionSpec(t, `{
+  "version": 1,
+  "format": "chat-completions",
+  "baseURL": "https://example.local/v1",
+  "model": "example-model",
+  "auth": { "none": true },
+  "outputTokens": { "field": "max_tokens", "max": 8192 },
+  "tools": { "choice": "auto", "parallel": "omit" }
+}`)
+
+	first := agent.ProbeRef("probe-list-1")
+
+	if err := h.Store.PutPending(t.Context(), first, doc, entry); err != nil {
+		t.Fatalf("PutPending() = %v", err)
+	}
+
+	// created_at_ms holds Unix milliseconds: wait one millisecond, so
+	// that the two writes keep their order.
+	waitOneMillisecond(t)
+
+	second := agent.ProbeRef("probe-list-2")
+
+	if err := h.Store.PutPending(t.Context(), second, doc, entry); err != nil {
+		t.Fatalf("PutPending() = %v", err)
+	}
+
+	wantPendingList(t, h, first, second)
+
+	// A promote removes its pending document from the list.
+	if err := h.Store.Promote(t.Context(), first, entry); err != nil {
+		t.Fatalf("Promote() = %v", err)
+	}
+
+	list, err := h.Store.PendingAll(t.Context())
+	if err != nil {
+		t.Fatalf("PendingAll() after promote = %v", err)
+	}
+
+	if len(list) != 1 || list[0].Probe != second {
+		t.Fatalf("PendingAll() after promote = %d entries, want the second probe only", len(list))
+	}
+}
+
+// wantPendingList checks that PendingAll returns the two pending documents,
+// oldest first, each with its version and its format.
+func wantPendingList(t *testing.T, h ConnectionStoreHarness, first, second agent.ProbeRef) {
+	t.Helper()
+
+	list, err := h.Store.PendingAll(t.Context())
+	if err != nil {
+		t.Fatalf("PendingAll() = %v", err)
+	}
+
+	if len(list) != 2 {
+		t.Fatalf("PendingAll() = %d pending documents, want 2", len(list))
+	}
+
+	if list[0].Probe != first || list[1].Probe != second {
+		t.Fatalf("PendingAll() = %v, %v, want the probes oldest first", list[0].Probe, list[1].Probe)
+	}
+
+	for i := range list {
+		if list[i].Version != 1 {
+			t.Fatalf("PendingAll() entry %d version = %d, want 1", i, list[i].Version)
+		}
+
+		if list[i].Spec.Format() != "chat-completions" {
+			t.Fatalf("PendingAll() entry %d format = %q, want chat-completions", i, list[i].Spec.Format())
+		}
+	}
+}
+
+// waitOneMillisecond waits one millisecond, or fails the test when its
+// context ends first.
+func waitOneMillisecond(t *testing.T) {
+	t.Helper()
+
+	timer := time.NewTimer(time.Millisecond)
+	defer timer.Stop()
+
+	select {
+	case <-timer.C:
+	case <-t.Context().Done():
+		t.Fatalf("wait of one millisecond: %v", t.Context().Err())
 	}
 }
 

@@ -193,7 +193,8 @@ func (s *Service) ReplaceSecret(
 		return agent.SecretItem{}, err
 	}
 
-	if err := agent.CheckSecretItem(string(ref), value); err != nil {
+	// The item keeps its name, so only the value rules apply here.
+	if err := agent.CheckSecretValue(value); err != nil {
 		return agent.SecretItem{}, err
 	}
 
@@ -241,6 +242,21 @@ func (s *Service) Connection(ctx context.Context, p identity.Principal) (Connect
 	}
 
 	return Connection{Spec: spec, Version: version}, nil
+}
+
+// PendingAll returns every pending connection document with its probe,
+// oldest first.
+func (s *Service) PendingAll(ctx context.Context, p identity.Principal) ([]agent.PendingDocument, error) {
+	if err := s.Authorize(ctx, p, identity.ActionServerManageAgent); err != nil {
+		return nil, err
+	}
+
+	list, err := s.connection.PendingAll(ctx)
+	if err != nil {
+		return nil, fmt.Errorf("list pending connections: %w", err)
+	}
+
+	return list, nil
 }
 
 // Disconnect removes the current document, each pending document and the

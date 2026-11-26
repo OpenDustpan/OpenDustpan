@@ -111,6 +111,10 @@ func (f *fakeConnections) Pending(context.Context, agent.ProbeRef) (agent.Connec
 	return agent.ConnectionSpec{}, 0, f.record(nil)
 }
 
+func (f *fakeConnections) PendingAll(context.Context) ([]agent.PendingDocument, error) {
+	return nil, f.record(nil)
+}
+
 func (f *fakeConnections) PutPending(_ context.Context, _ agent.ProbeRef, _ agent.ConnectionSpec, e audit.Entry) error {
 	return f.record(&e)
 }
