@@ -112,12 +112,31 @@ func installationReachDeclaration() setting.Declaration {
 // SettingInstallationGrantsReachNamespaces: true when a grant on the
 // installation reaches the actions inside each namespace. A nil settings port
 // answers the default, true. A failed read, and a value that is not "true" or
-// "false", return an error, and the caller must deny the decision.
+// "false", return an error, and the caller must deny the decision. A context
+// with a request cache keeps a good value, so one request reads the setting
+// once; the next request reads it again. An error is never kept.
 func InstallationGrantsReachNamespaces(ctx context.Context, settings Settings) (bool, error) {
 	if settings == nil {
 		return true, nil
 	}
 
+	cache := cacheOf(ctx)
+	if kept := cache.reachValue(); kept != nil {
+		return *kept, nil
+	}
+
+	value, err := readInstallationGrantsReachNamespaces(ctx, settings)
+	if err != nil {
+		return false, err
+	}
+
+	cache.keepReach(value)
+
+	return value, nil
+}
+
+// readInstallationGrantsReachNamespaces reads the setting from settings, with no cache.
+func readInstallationGrantsReachNamespaces(ctx context.Context, settings Settings) (bool, error) {
 	item, err := settings.Effective(ctx, setting.InstallationScope(), SettingInstallationGrantsReachNamespaces)
 	if err != nil {
 		return false, fmt.Errorf("read setting %s: %w", SettingInstallationGrantsReachNamespaces, err)

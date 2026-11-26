@@ -13,7 +13,10 @@ type requestCache struct {
 	subjects map[string][]Subject
 	roles    map[string]Role
 	units    map[string]string
-	mu       sync.Mutex
+	// reach is the value of the setting that decides whether a grant on the
+	// installation reaches each namespace. It is nil until a decision reads it.
+	reach *bool
+	mu    sync.Mutex
 }
 
 // requestCacheKey is the context key of the request cache.
@@ -28,6 +31,7 @@ func WithRequestCache(ctx context.Context) context.Context {
 		subjects: map[string][]Subject{},
 		roles:    map[string]Role{},
 		units:    map[string]string{},
+		reach:    nil,
 		mu:       sync.Mutex{},
 	})
 }
@@ -96,6 +100,30 @@ func (c *requestCache) keepRole(r Role) {
 	defer c.mu.Unlock()
 
 	c.roles[r.ID] = r
+}
+
+// reachValue returns the kept value of the reach setting, and nil when the
+// cache has not read it.
+func (c *requestCache) reachValue() *bool {
+	if c == nil {
+		return nil
+	}
+
+	c.mu.Lock()
+	defer c.mu.Unlock()
+
+	return c.reach
+}
+
+func (c *requestCache) keepReach(value bool) {
+	if c == nil {
+		return
+	}
+
+	c.mu.Lock()
+	defer c.mu.Unlock()
+
+	c.reach = &value
 }
 
 // unitID returns the stable ID of the unit with the wire form ref, "" for a

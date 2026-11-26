@@ -371,6 +371,62 @@ func TestFixedSettingsAnswersTheReachSetting(t *testing.T) {
 	}
 }
 
+// TestInstallationReachReadOncePerRequest proves that one request makes one read
+// of the setting, that the next request reads the new value, and that a context
+// with no request cache reads each time.
+func TestInstallationReachReadOncePerRequest(t *testing.T) {
+	t.Parallel()
+
+	port := &countingReach{value: "true", reads: 0}
+
+	first := access.WithRequestCache(t.Context())
+	second := access.WithRequestCache(t.Context())
+
+	// Each step runs after the one before it. The value of the port changes
+	// before the step "the same request after a change".
+	steps := []struct {
+		name    string
+		request string
+		set     string
+		want    bool
+		reads   int
+	}{
+		{name: "the first read of a request", request: "first", set: "true", want: true, reads: 1},
+		{name: "the second read of the request", request: "first", set: "true", want: true, reads: 1},
+		{name: "the same request after a change", request: "first", set: "false", want: true, reads: 1},
+		{name: "the next request", request: "second", set: "false", want: false, reads: 2},
+		{name: "no request cache", request: "none", set: "true", want: true, reads: 3},
+		{name: "no request cache again", request: "none", set: "true", want: true, reads: 4},
+	}
+
+	contexts := map[string]context.Context{"first": first, "second": second, "none": t.Context()}
+
+	for _, step := range steps {
+		port.value = step.set
+
+		got, err := access.InstallationGrantsReachNamespaces(contexts[step.request], port)
+		if err != nil || got != step.want || port.reads != step.reads {
+			t.Fatalf("%s: reach = %t, %v, %d reads, want %t and %d reads",
+				step.name, got, err, port.reads, step.want, step.reads)
+		}
+	}
+}
+
+// countingReach answers the reach setting and counts the reads. A test that
+// uses it does not run its calls in parallel.
+type countingReach struct {
+	value string
+	reads int
+}
+
+func (c *countingReach) Effective(context.Context, setting.Scope, string) (setting.Item, error) {
+	c.reads++
+
+	value := c.value
+
+	return setting.Effective(reachDeclaration(), &value, nil), nil
+}
+
 // reachReader answers the value of the reach setting that a test sets. A nil
 // value answers the default, and err answers a read that fails.
 type reachReader struct {
