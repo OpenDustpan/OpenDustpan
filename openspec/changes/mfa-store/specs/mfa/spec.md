@@ -26,11 +26,16 @@ The pending sign-in port SHALL take the session, the digest of its secret and th
 
 ### Requirement: sign-in-step-use-keeps-step-up-counters
 
-The TOTP port SHALL have one method that accepts a time step for a sign-in with the single-use rule of the step-up, and the method SHALL change no step-up counter, lock or disable.
+The TOTP port SHALL have one method that accepts a time step for a sign-in with the single-use rule of the step-up, and the method SHALL change no step-up counter, lock or disable. The method SHALL refuse a TOTP factor that the step-up failures disabled, with `stepup.ErrDisabled`, until a reset, and SHALL append one audit entry for the refusal. A temporary step-up lock SHALL NOT block a sign-in.
 
 #### Scenario: Step-up lockout
 - **WHEN** the step-up of a person is locked and the person gives a valid TOTP code at the sign-in
 - **THEN** the server accepts the code and issues a session
+
+#### Scenario: Disabled factor
+- **WHEN** the step-up failures disabled the TOTP factor of a person and the person gives a valid TOTP code at the sign-in
+- **THEN** the server refuses the sign-in step and the audit log has one entry for the refusal
+- **AND** the factor stays disabled until a reset
 
 #### Scenario: Wrong sign-in codes
 - **WHEN** a person gives wrong TOTP codes at the sign-in
@@ -50,7 +55,7 @@ The TOTP port SHALL count each failed TOTP check at the sign-in on the factor, a
 
 ### Requirement: restore-keeps-second-factor-safe
 
-A restore SHALL NOT make a used recovery code valid again, SHALL NOT end a lock of a TOTP factor (the step-up lock or the sign-in lock) or make a used step valid again, and SHALL leave no TOTP attempts row of a factor that the restored data does not have. A backup SHALL carry no recovery code, and a restore that replaces access SHALL empty the recovery codes and, when it removes one or more codes, write one audit entry that names the reason. A restore that removes no recovery code SHALL write no such entry.
+A restore SHALL NOT make a used recovery code valid again, SHALL NOT end a lock of a TOTP factor (the step-up lock or the sign-in lock) or make a used step valid again, except in one case: a factor that the restored data does not hold (the person enrolled it after the backup) has no factor in the restored data, so its lock ends with its attempts row and the restore SHALL write one audit entry with the count of such factors, and SHALL leave no TOTP attempts row of a factor that the restored data does not have. A backup SHALL carry no recovery code, and a restore that replaces access SHALL empty the recovery codes and, when it removes one or more codes, write one audit entry that names the reason. A restore that removes no recovery code SHALL write no such entry.
 
 #### Scenario: Older backup and a used recovery code
 - **WHEN** a person uses a recovery code and a restore of an older backup replaces access
@@ -68,3 +73,9 @@ A restore SHALL NOT make a used recovery code valid again, SHALL NOT end a lock 
 #### Scenario: Factor not in the backup
 - **WHEN** a restore replaces access and the restored data does not have a factor that has a TOTP attempts row
 - **THEN** no attempts row of that factor stays and the audit log has one entry that gives the count
+
+#### Scenario: Locked factor enrolled after the backup
+- **WHEN** a TOTP factor is locked, the person enrolled it after the backup, and a restore of that backup replaces access
+- **THEN** the lock ends with the factor, because the restored data has no such factor
+- **AND** the audit log has one entry that gives the count of such factors
+- **AND** this is the only case where a restore ends a lock
