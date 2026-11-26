@@ -2,6 +2,7 @@ package postgres_test
 
 import (
 	"bytes"
+	"net/netip"
 	"os"
 	"testing"
 
@@ -10,6 +11,8 @@ import (
 	"opendustpan.org/opendustpan/internal/agent"
 	"opendustpan.org/opendustpan/internal/agent/agenttest"
 	"opendustpan.org/opendustpan/internal/store/postgres"
+	"opendustpan.org/opendustpan/pkg/audit"
+	"opendustpan.org/opendustpan/pkg/egress"
 	"opendustpan.org/opendustpan/pkg/secret"
 )
 
@@ -101,6 +104,54 @@ func TestAgentConnectionStoreConformance(t *testing.T) {
 
 		s, secrets, _ := openAgentStore(t, base)
 
-		return agenttest.ConnectionStoreHarness{Store: s.AgentConnections(), Items: s.AgentSecretItems(secrets)}
+		return agenttest.ConnectionStoreHarness{
+			Store:     s.AgentConnections(),
+			Items:     s.AgentSecretItems(secrets),
+			Allowlist: s.AgentEgressAllowlist(),
+		}
 	})
+}
+
+// TestAgentEgressAllowlistGetFailsClosedOnStoredCIDR stores a rule with Set,
+// corrupts its CIDR text in the row, past the checks of Set and of the
+// service, and reads the allowlist. The read fails closed: a stored text that
+// no parse can read must not come back as a rule of the list.
+func TestAgentEgressAllowlistGetFailsClosedOnStoredCIDR(t *testing.T) {
+	t.Parallel()
+
+	base := os.Getenv(envURL)
+	if base == "" {
+		t.Skipf("set %s to run the PostgreSQL conformance suite", envURL)
+	}
+
+	s, _, schemaURL := openAgentStore(t, base)
+
+	entry := agenttest.TestEntry(audit.ServerScope, "admin", "server:manage-settings")
+	allow := egress.Allowlist{
+		Hosts: []string{"models.example.com"},
+		CIDRs: []egress.CIDRRule{{CIDR: netip.MustParsePrefix("10.20.0.0/16"), Port: 443, HTTP: false}},
+	}
+
+	if err := s.AgentEgressAllowlist().Set(t.Context(), allow, entry); err != nil {
+		t.Fatalf("Set() = %v, want nil", err)
+	}
+
+	conn, err := pgx.Connect(t.Context(), schemaURL)
+	if err != nil {
+		t.Fatalf("connect to the schema: %v", err)
+	}
+
+	defer func() {
+		if closeErr := conn.Close(t.Context()); closeErr != nil {
+			t.Errorf("close the schema connection: %v", closeErr)
+		}
+	}()
+
+	if _, err = conn.Exec(t.Context(), "UPDATE agent_egress_allowlist_rules SET cidr = 'not-a-prefix'"); err != nil {
+		t.Fatalf("corrupt the stored rule: %v", err)
+	}
+
+	if _, err = s.AgentEgressAllowlist().Get(t.Context()); err == nil {
+		t.Fatal("Get() = nil, want an error for the stored rule that does not parse")
+	}
 }

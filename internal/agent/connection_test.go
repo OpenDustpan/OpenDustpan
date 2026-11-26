@@ -792,3 +792,114 @@ func TestHeaders_PlainSecretByName(t *testing.T) {
 		})
 	}
 }
+
+// TestAuthSecret_MustBeAReference sends a document whose auth.secret holds a
+// plain value. The parse refuses it: auth.secret must be a reference, and the
+// refusal names the command that stores the value and never the value itself.
+func TestAuthSecret_MustBeAReference(t *testing.T) {
+	t.Parallel()
+
+	raw := strings.Replace(
+		validDocument(),
+		`"secret": "itm-abc1"`,
+		`"secret": "sk-123"`,
+		1,
+	)
+
+	_, err := agent.ParseConnectionSpec([]byte(raw))
+	if !errors.Is(err, agent.ErrPlainSecret) {
+		t.Fatalf("ParseConnectionSpec() = %v, want ErrPlainSecret", err)
+	}
+
+	if !strings.Contains(err.Error(), "auth.secret") {
+		t.Fatalf("ParseConnectionSpec() error = %q, want it to name auth.secret", err)
+	}
+
+	if !strings.Contains(err.Error(), "POST /api/agent/secrets") {
+		t.Fatalf("ParseConnectionSpec() error = %q, want it to name POST /api/agent/secrets", err)
+	}
+
+	if strings.Contains(err.Error(), "sk-123") {
+		t.Fatalf("ParseConnectionSpec() error = %q, holds the value", err)
+	}
+}
+
+// TestParseConnectionSpec_TextBodyRefused sends documents whose text a JSON
+// decode would change: a byte that is not valid UTF-8, and a lone surrogate
+// escape. The text check refuses them before the decode, so the stored
+// document never differs from the document that the caller sent.
+func TestParseConnectionSpec_TextBodyRefused(t *testing.T) {
+	t.Parallel()
+
+	cases := []struct {
+		name string
+		raw  string
+	}{
+		{
+			name: "byte that is not valid UTF-8",
+			// The byte is built at run time: a source escape of it would
+			// not survive into the JSON text as the byte itself.
+			raw: strings.Replace(
+				validDocument(), `"example-model"`, "\"ex"+string([]byte{255})+"ample\"", 1,
+			),
+		},
+		{
+			name: "lone surrogate escape",
+			// The escape stays text: the document holds the six characters
+			// backslash, u, d, 8, 0, 0 inside the string, as a client that
+			// escapes the model name would send them. The pieces come from
+			// byte values, so no escape of the source can change them.
+			raw: strings.Replace(
+				validDocument(),
+				`"example-model"`,
+				"\"ex"+string([]byte{92, 117, 100, 56, 48, 48})+"ample\"",
+				1,
+			),
+		},
+	}
+
+	for _, c := range cases {
+		t.Run(c.name, func(t *testing.T) {
+			t.Parallel()
+
+			_, err := agent.ParseConnectionSpec([]byte(c.raw))
+			if !errors.Is(err, agent.ErrConnectionInvalid) {
+				t.Fatalf("ParseConnectionSpec() on %q = %v, want ErrConnectionInvalid", c.raw, err)
+			}
+
+			if !strings.Contains(err.Error(), "a JSON decode would change") {
+				t.Fatalf("ParseConnectionSpec() error = %q, want the text-body refusal", err)
+			}
+		})
+	}
+}
+
+// TestParseConnectionSpec_TrailingJSON sends a document that holds a second
+// JSON value or trailing bytes. The parse refuses it, so a caller cannot hide
+// a second document behind the first one.
+func TestParseConnectionSpec_TrailingJSON(t *testing.T) {
+	t.Parallel()
+
+	cases := []struct {
+		name string
+		raw  string
+	}{
+		{name: "second JSON value", raw: validDocument() + "\n{}"},
+		{name: "bytes behind the document", raw: validDocument() + "\n nota value"},
+	}
+
+	for _, c := range cases {
+		t.Run(c.name, func(t *testing.T) {
+			t.Parallel()
+
+			_, err := agent.ParseConnectionSpec([]byte(c.raw))
+			if !errors.Is(err, agent.ErrConnectionInvalid) {
+				t.Fatalf("ParseConnectionSpec() = %v, want ErrConnectionInvalid", err)
+			}
+
+			if !strings.Contains(err.Error(), "more than one JSON value") {
+				t.Fatalf("ParseConnectionSpec() error = %q, want the trailing-JSON refusal", err)
+			}
+		})
+	}
+}

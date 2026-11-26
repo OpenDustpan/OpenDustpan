@@ -4,6 +4,7 @@ package e2e
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"testing"
 	"time"
@@ -74,6 +75,9 @@ func withAgentConnections(st namespace.Store, fn func(agent.ConnectionStore) err
 	case *postgres.Store:
 		return fn(s.AgentConnections())
 	default:
-		return fmt.Errorf("%w: %T", errNoPasskeyRows, st)
+		return fmt.Errorf("%w: %T", errNoAgentConnections, st)
 	}
 }
+
+// errNoAgentConnections reports a store that keeps no agent connections.
+var errNoAgentConnections = errors.New("the store keeps no agent connections")

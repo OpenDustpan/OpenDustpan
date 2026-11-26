@@ -2,11 +2,14 @@ package agenttest
 
 import (
 	"errors"
+	"net/netip"
 	"testing"
 	"time"
 
 	"opendustpan.org/opendustpan/internal/agent"
 	"opendustpan.org/opendustpan/pkg/audit"
+	"opendustpan.org/opendustpan/pkg/egress"
+	"opendustpan.org/opendustpan/pkg/namespace"
 )
 
 // ConnectionStoreHarness is one fresh store of connection documents for one
@@ -15,6 +18,9 @@ type ConnectionStoreHarness struct {
 	Store agent.ConnectionStore
 	// Items is the secret item store of the same database as Store.
 	Items agent.SecretItems
+	// Allowlist is the egress allowlist store of the same database as Store.
+	// A factory can leave it nil: the suite then skips its allowlist case.
+	Allowlist agent.EgressAllowlistStore
 }
 
 // ConnectionStoreFactory returns a fresh harness for one case.
@@ -35,7 +41,10 @@ func RunConnectionStore(t *testing.T, f ConnectionStoreFactory) {
 		{name: "list all pending", run: caseConnectionStoreListPending},
 		{name: "delete all in one transaction", run: caseConnectionStoreDeleteAll},
 		{name: "missing secret reference", run: caseConnectionStoreMissingSecretRef},
+		{name: "missing secret reference names the item", run: caseConnectionStoreMissingSecretRefSentinel},
 		{name: "secret item in use", run: caseConnectionStoreSecretInUse},
+		{name: "a write with an entry of another scope is refused", run: caseConnectionStoreWrongScopeEntry},
+		{name: "an allowlist that the rules refuse is refused in Set", run: caseConnectionStoreAllowlistRules},
 	}
 
 	for _, c := range cases {
@@ -298,6 +307,109 @@ func caseConnectionStoreMissingSecretRef(t *testing.T, h ConnectionStoreHarness)
 
 	if err := h.Store.PutPending(t.Context(), probe, doc, entry); err == nil {
 		t.Fatal("PutPending() with a missing secret ref = nil, want an error")
+	}
+}
+
+// caseConnectionStoreMissingSecretRefSentinel sends a document that refers to
+// a secret item that the store does not know. The write fails with
+// agent.ErrSecretNotFound, so a caller can tell a missing item from a fault of
+// the store.
+func caseConnectionStoreMissingSecretRefSentinel(t *testing.T, h ConnectionStoreHarness) {
+	t.Helper()
+
+	entry := TestEntry(audit.ServerScope, "admin", "server:manage-agent")
+
+	doc := mustParseConnectionSpec(t, `{
+  "version": 1,
+  "format": "chat-completions",
+  "baseURL": "https://example.local/v1",
+  "model": "example-model",
+  "auth": { "header": "Authorization", "prefix": "Bearer ", "secret": "itm-nothere" },
+  "outputTokens": { "field": "max_tokens", "max": 8192 },
+  "tools": { "choice": "auto", "parallel": "omit" }
+}`)
+
+	probe := agent.ProbeRef("probe-3-ref")
+
+	err := h.Store.PutPending(t.Context(), probe, doc, entry)
+	if !errors.Is(err, agent.ErrSecretNotFound) {
+		t.Fatalf("PutPending() with a missing secret ref = %v, want ErrSecretNotFound", err)
+	}
+}
+
+// caseConnectionStoreWrongScopeEntry writes a pending document with an audit
+// entry of a namespace scope. The store refuses it: a write of the connection
+// records its entry in the scope @server, and a new caller cannot store a
+// record of another scope.
+func caseConnectionStoreWrongScopeEntry(t *testing.T, h ConnectionStoreHarness) {
+	t.Helper()
+
+	entry := TestEntry(namespace.Name("ns-other"), "admin", "server:manage-agent")
+
+	doc := mustParseConnectionSpec(t, `{
+  "version": 1,
+  "format": "chat-completions",
+  "baseURL": "https://example.local/v1",
+  "model": "example-model",
+  "auth": { "none": true },
+  "outputTokens": { "field": "max_tokens", "max": 8192 },
+  "tools": { "choice": "auto", "parallel": "omit" }
+}`)
+
+	probe := agent.ProbeRef("probe-scope")
+
+	err := h.Store.PutPending(t.Context(), probe, doc, entry)
+	if !errors.Is(err, agent.ErrInvalid) {
+		t.Fatalf("PutPending() with an entry of a namespace scope = %v, want ErrInvalid", err)
+	}
+
+	if _, _, pendErr := h.Store.Pending(t.Context(), probe); !errors.Is(pendErr, agent.ErrNotFound) {
+		t.Fatalf("Pending() after the refused write = %v, want ErrNotFound: the write stored nothing", pendErr)
+	}
+}
+
+// caseConnectionStoreAllowlistRules writes an allowlist with a rule without a
+// port. The store refuses it, as the service does, so a new caller cannot
+// store a list that the rules would refuse. A list that the rules accept is
+// stored and read back unchanged.
+func caseConnectionStoreAllowlistRules(t *testing.T, h ConnectionStoreHarness) {
+	t.Helper()
+
+	if h.Allowlist == nil {
+		t.Skip("the harness has no allowlist store")
+	}
+
+	entry := TestEntry(audit.ServerScope, "admin", "server:manage-settings")
+
+	noPort := egress.Allowlist{
+		Hosts: []string{"models.example.com"},
+		CIDRs: []egress.CIDRRule{{CIDR: netip.MustParsePrefix("10.20.0.0/16"), Port: 0, HTTP: false}},
+	}
+
+	if err := h.Allowlist.Set(t.Context(), noPort, entry); !errors.Is(err, agent.ErrInvalid) {
+		t.Fatalf("Set() with a rule without a port = %v, want ErrInvalid", err)
+	}
+
+	stored := egress.Allowlist{
+		Hosts: []string{"models.example.com"},
+		CIDRs: []egress.CIDRRule{{CIDR: netip.MustParsePrefix("10.20.0.0/16"), Port: 443, HTTP: true}},
+	}
+
+	if err := h.Allowlist.Set(t.Context(), stored, entry); err != nil {
+		t.Fatalf("Set() = %v, want nil", err)
+	}
+
+	got, err := h.Allowlist.Get(t.Context())
+	if err != nil {
+		t.Fatalf("Get() = %v, want nil", err)
+	}
+
+	if len(got.Hosts) != 1 || got.Hosts[0] != stored.Hosts[0] {
+		t.Fatalf("Get() hosts = %v, want %v", got.Hosts, stored.Hosts)
+	}
+
+	if len(got.CIDRs) != 1 || got.CIDRs[0] != stored.CIDRs[0] {
+		t.Fatalf("Get() rules = %v, want %v", got.CIDRs, stored.CIDRs)
 	}
 }
 

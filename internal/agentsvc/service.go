@@ -193,7 +193,9 @@ func (s *Service) ReplaceSecret(
 		return agent.SecretItem{}, err
 	}
 
-	// The item keeps its name, so only the value rules apply here.
+	// The item keeps its name, so only the value rules apply here. Defense in
+	// depth: the handler and the store check the value too; this check stays
+	// so that a new caller cannot skip it.
 	if err := agent.CheckSecretValue(value); err != nil {
 		return agent.SecretItem{}, err
 	}
@@ -312,6 +314,8 @@ func (s *Service) SetAllowlist(ctx context.Context, p identity.Principal, base a
 		return err
 	}
 
+	// Defense in depth: the handler checks each range too; this check stays so
+	// that a new caller cannot store a range that no rule may open.
 	for _, r := range a.CIDRs {
 		if err := egress.CheckAllowedRange(r.CIDR); err != nil {
 			return fmt.Errorf("%w: %w", agent.ErrInvalid, err)

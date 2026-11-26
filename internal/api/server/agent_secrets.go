@@ -267,9 +267,17 @@ func classifyAgent(err error) (failure, bool) {
 		return failCoded(http.StatusConflict,
 			"The secret item is in use: disconnect with DELETE /api/agent/connection, then delete it.",
 			errcode.AgentConnectionSecretInUse), true
+	case errors.Is(err, agent.ErrInvalid):
+		// The service refuses a name, a value or an allowlist that fails
+		// its rules, also when the input reaches it past the handler. The
+		// refusal is a bad request, and the caller that sent it gets the
+		// denied audit entry with the answer.
+		return failCoded(http.StatusBadRequest,
+			"The secret item is not valid: check the name and the value, then send it again.",
+			errcode.AgentConnectionSecretInvalid), true
 	case errors.Is(err, agent.ErrDisabled):
 		return failCoded(http.StatusNotFound,
-			"No model is connected: the route that writes a connection document is not available in this version.",
+			"No model is connected: this version has no command that writes a connection document.",
 			errcode.AgentConnectionNotConnected), true
 	}
 

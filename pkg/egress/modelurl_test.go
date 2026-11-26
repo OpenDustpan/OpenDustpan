@@ -3,6 +3,7 @@ package egress_test
 import (
 	"errors"
 	"net/netip"
+	"strings"
 	"testing"
 
 	"opendustpan.org/opendustpan/internal/fakecred"
@@ -295,6 +296,14 @@ func TestCheckModelAddrs_IPLiteral(t *testing.T) {
 		{"http with no entry", "http://93.184.216.34/", egress.Allowlist{Hosts: nil, CIDRs: nil}, false},
 		{"https with an entry for another port", "https://93.184.216.34/", entry(8443, false), false},
 		{"http with an entry that lacks http", "http://93.184.216.34:80/", entry(80, false), false},
+		{"literal outside the entry, resolved address inside", "https://10.0.0.1/", entry(443, false), false},
+		{
+			"port that overflows an int, rule with port 0",
+			"https://93.184.216.34:99999999999999999999/",
+			entry(0, false),
+			false,
+		},
+		{"port over 65535, rule with port 0", "https://93.184.216.34:65536/", entry(0, false), false},
 		{"https with an entry", "https://93.184.216.34/", entry(443, false), true},
 		{"http with an entry that has http", "http://93.184.216.34:80/", entry(80, true), true},
 	}
@@ -474,4 +483,118 @@ func TestAllowlist_PublicOnlyDeniesPrivateRule(t *testing.T) {
 			}
 		})
 	}
+}
+
+// zonedPublicHost is the URL host form of a public address with a zone. The
+// zone names an interface of the server, and no model call resolves a host
+// to it on purpose.
+const zonedPublicHost = "https://[2606:4700::1%25eth0]/"
+
+// namedHost is an allowlist that names the host of the tests, so that the
+// host checks pass and only the guard under test can refuse.
+func namedHost() egress.Allowlist {
+	return egress.Allowlist{Hosts: []string{"api.example.com"}, CIDRs: nil}
+}
+
+// TestCheckModelAddrs_NoAddressFailsClosed sends no address for a host that
+// the allowlist names. The check of the resolved addresses refuses an empty
+// answer: without that check the loop sees no address and the call would
+// pass.
+func TestCheckModelAddrs_NoAddressFailsClosed(t *testing.T) {
+	t.Parallel()
+
+	for name, addrs := range map[string][]netip.Addr{
+		"nil": nil, "empty": {},
+	} {
+		t.Run(name, func(t *testing.T) {
+			t.Parallel()
+
+			err := egress.CheckModelAddrs("https://api.example.com/", addrs, namedHost(), false)
+			if !errors.Is(err, egress.ErrRefused) {
+				t.Fatalf("CheckModelAddrs with %v addresses = %v, want ErrRefused", addrs, err)
+			}
+
+			if !strings.Contains(err.Error(), "no address") {
+				t.Fatalf("CheckModelAddrs error = %q, want the empty-answer refusal", err)
+			}
+		})
+	}
+}
+
+// TestCheckModelURL_ZonedLiteral sends a URL whose host is an IP literal with
+// a zone. The URL check refuses it: a zone names an interface on the server,
+// and no CIDR entry opens it.
+func TestCheckModelURL_ZonedLiteral(t *testing.T) {
+	t.Parallel()
+
+	allow := egress.Allowlist{
+		Hosts: nil,
+		CIDRs: []egress.CIDRRule{{CIDR: netip.MustParsePrefix("2606:4700::1/128"), Port: 443, HTTP: false}},
+	}
+
+	err := egress.CheckModelURL(zonedPublicHost, allow, false)
+	if !errors.Is(err, egress.ErrRefused) {
+		t.Fatalf("CheckModelURL(%q) = %v, want ErrRefused", zonedPublicHost, err)
+	}
+
+	if !strings.Contains(err.Error(), "zone") {
+		t.Fatalf("CheckModelURL error = %q, want the zone refusal", err)
+	}
+}
+
+// TestCheckModelAddrs_ZonedAddress sends the address that the hostile answer
+// of a resolver holds: a public address with a zone, for a host that the
+// allowlist names. The check of the resolved addresses refuses it; without
+// that check the address passes once its zone is stripped.
+func TestCheckModelAddrs_ZonedAddress(t *testing.T) {
+	t.Parallel()
+
+	zoned := netip.MustParseAddr("2606:4700::1%eth0")
+
+	err := egress.CheckModelAddrs("https://api.example.com/", []netip.Addr{zoned}, namedHost(), false)
+	if !errors.Is(err, egress.ErrRefused) {
+		t.Fatalf("CheckModelAddrs(%v) = %v, want ErrRefused", zoned, err)
+	}
+
+	if !strings.Contains(err.Error(), "zone") {
+		t.Fatalf("CheckModelAddrs error = %q, want the zone refusal", err)
+	}
+}
+
+// TestModelURL_UserInformation sends a URL with user information for a host
+// that the allowlist names over https. Both checks refuse it: a caller that
+// embeds a credential in the URL must not reach the model call.
+func TestModelURL_UserInformation(t *testing.T) {
+	t.Parallel()
+
+	// fakecred joins the parts at run time, so the source holds no
+	// credential text.
+	raw := fakecred.URL("https", "user", "secret", "api.example.com", "/v1")
+	addrs := []netip.Addr{netip.MustParseAddr("93.184.216.34")}
+
+	t.Run("URL", func(t *testing.T) {
+		t.Parallel()
+
+		err := egress.CheckModelURL(raw, namedHost(), false)
+		if !errors.Is(err, egress.ErrRefused) {
+			t.Fatalf("CheckModelURL(%q) = %v, want ErrRefused", raw, err)
+		}
+
+		if !strings.Contains(err.Error(), "user information") {
+			t.Fatalf("CheckModelURL error = %q, want the user-information refusal", err)
+		}
+	})
+
+	t.Run("addresses", func(t *testing.T) {
+		t.Parallel()
+
+		err := egress.CheckModelAddrs(raw, addrs, namedHost(), false)
+		if !errors.Is(err, egress.ErrRefused) {
+			t.Fatalf("CheckModelAddrs(%q) = %v, want ErrRefused", raw, err)
+		}
+
+		if !strings.Contains(err.Error(), "user information") {
+			t.Fatalf("CheckModelAddrs error = %q, want the user-information refusal", err)
+		}
+	})
 }

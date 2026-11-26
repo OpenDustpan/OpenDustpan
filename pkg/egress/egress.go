@@ -530,6 +530,9 @@ func CheckModelURL(rawURL string, a Allowlist, publicOnly PublicOnly) error {
 	}
 
 	// A zone names an interface on the server. No model URL needs it.
+	// Defense in depth: the check of the resolved addresses refuses a zoned
+	// address too; this check stays so that the URL check alone refuses a
+	// URL whose host is a zoned literal.
 	if addr.Zone() != "" {
 		return fmt.Errorf("%w: the address has a zone", ErrRefused)
 	}
@@ -547,6 +550,12 @@ func CheckModelURL(rawURL string, a Allowlist, publicOnly PublicOnly) error {
 // private address that no CIDR entry opens for the port of the URL. A public
 // address passes.
 func CheckModelAddrs(rawURL string, addrs []netip.Addr, a Allowlist, publicOnly PublicOnly) error {
+	// The URL check refuses a host that is an IP literal outside the allowlist,
+	// whatever addresses the caller passes.
+	if err := CheckModelURL(rawURL, a, publicOnly); err != nil {
+		return err
+	}
+
 	u, err := parseModelURL(rawURL)
 	if err != nil {
 		return err
@@ -564,6 +573,9 @@ func CheckModelAddrs(rawURL string, addrs []netip.Addr, a Allowlist, publicOnly 
 	}
 
 	for _, addr := range addrs {
+		// Defense in depth: the URL check refuses a zoned literal too; this
+		// check stays so that the connect-time check alone refuses an
+		// address that a resolver answered with a zone.
 		if addr.Zone() != "" {
 			return fmt.Errorf("%w: the address has a zone", ErrRefused)
 		}
@@ -734,14 +746,17 @@ const (
 	defaultHTTPSPort = 443
 	// defaultHTTPPort is the port of an http URL without an explicit one.
 	defaultHTTPPort = 80
+	// invalidPort is a port that no rule holds: portOf returns it for a port
+	// that does not parse or is out of range.
+	invalidPort = -1
 )
 
 // portOf returns the port of u, or the default port of its scheme.
 func portOf(u *url.URL) int {
 	if u.Port() != "" {
 		port, err := strconv.Atoi(u.Port())
-		if err != nil {
-			return 0
+		if err != nil || port < 1 || port > maxPort {
+			return invalidPort
 		}
 
 		return port

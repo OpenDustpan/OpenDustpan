@@ -90,6 +90,8 @@ func agentSecretItemOf(ref, name string, created, changed, used int64) agent.Sec
 func (k AgentSecretItems) Create(
 	ctx context.Context, name string, value []byte, e audit.Entry,
 ) (agent.SecretItem, error) {
+	// Defense in depth: the handler and the service check the name and the
+	// value too; this check stays so that a new caller cannot skip it.
 	if err := agent.CheckSecretItem(name, value); err != nil {
 		return agent.SecretItem{}, err
 	}
@@ -535,6 +537,9 @@ func (k AgentEgressAllowlist) Set(ctx context.Context, a egress.Allowlist, e aud
 		return err
 	}
 
+	// Defense in depth: the service checks the allowlist too; this check
+	// stays so that a new caller cannot store a list that the rules would
+	// refuse.
 	if err := agent.CheckAllowlist(a); err != nil {
 		return err
 	}

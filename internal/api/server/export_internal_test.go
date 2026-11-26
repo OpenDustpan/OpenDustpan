@@ -88,6 +88,26 @@ func TokenCodeForTest(err error) (string, bool) {
 	return f.code, true
 }
 
+// ClassifyAgentForTest returns the status and the message that classifyAgent
+// gives for err.
+func ClassifyAgentForTest(err error) (int, string) {
+	f, ok := classifyAgent(err)
+	if !ok {
+		return 0, ""
+	}
+
+	return f.status, f.message
+}
+
+// WriteAgentRefusalForTest writes the refusal of err with the guard of h, as
+// the agent routes do. A test sends a service error to the refusal path with
+// it, without the checks that a route runs before the service.
+func (h *Handler) WriteAgentRefusalForTest(
+	w http.ResponseWriter, r *http.Request, p identity.Principal, action identity.Action, err error,
+) {
+	h.writeAgentRefusal(w, r, p, action, err)
+}
+
 // ReviewExportErrorForTest returns the error of an export that failed and
 // whose audit entry also failed, so a test reads its message.
 func ReviewExportErrorForTest(export, appendErr error) error {

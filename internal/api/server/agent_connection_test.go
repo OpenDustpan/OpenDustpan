@@ -2,6 +2,7 @@ package server_test
 
 import (
 	"encoding/json"
+	"errors"
 	"fmt"
 	"io"
 	"log/slog"
@@ -30,6 +31,9 @@ type agentFixture struct {
 	store   *sqlite.Store
 	handler testHandler
 	audit   *testAudit
+	// service is the agent service that the handler runs: a test that needs
+	// an error of the service calls it here, past no route.
+	service *agentsvc.Service
 }
 
 // newAgentFixture builds a handler whose Agent service runs over a fresh
@@ -115,7 +119,7 @@ func newAgentFixture(t *testing.T, authz identity.Authorizer) agentFixture {
 		t.Fatalf("handler: %v", err)
 	}
 
-	return agentFixture{store: st, handler: handler, audit: aud}
+	return agentFixture{store: st, handler: handler, audit: aud, service: svc}
 }
 
 // allowAgent returns the fixture with both agent actions allowed.
@@ -872,5 +876,70 @@ func TestFailClosed_Table(t *testing.T) {
 
 			checkAgentFailCase(t, tc)
 		})
+	}
+}
+
+// TestSecretServicePath_Refused sends the hostile item of the review, a
+// secret item whose value is empty, straight to the service of the agent
+// routes, past no check of a route. The service refuses it with
+// agent.ErrInvalid, the routes answer 400 for that error, and the answer
+// records the denied audit entry, as each refusal of a route does.
+func TestSecretServicePath_Refused(t *testing.T) {
+	t.Parallel()
+
+	f := allowAgent(t)
+
+	p := identity.Principal{
+		TemporaryAdministrator: false, TemporaryExpiresAt: time.Time{}, Subject: "admin", DisplayName: "Admin",
+		Admin: false, TokenID: "", TokenExpiresAt: time.Time{}, Kind: "", Credential: "", JobID: "",
+	}
+	base := agenttest.TestEntry(audit.ServerScope, "admin", "server:manage-agent")
+
+	_, err := f.service.CreateSecret(t.Context(), p, base, "api-key", nil)
+	if !errors.Is(err, agent.ErrInvalid) {
+		t.Fatalf("CreateSecret() = %v, want agent.ErrInvalid", err)
+	}
+
+	status, message := apiserver.ClassifyAgentForTest(err)
+	if status != http.StatusBadRequest {
+		t.Fatalf("classifyAgent() = %d, %q, want 400", status, message)
+	}
+
+	if strings.Contains(message, "api-key") {
+		t.Fatalf("classifyAgent() message %q holds a request value", message)
+	}
+
+	// The refusal that the routes write for this error is a bad request, and
+	// it records the denial with the refusal text, never the request value.
+	req := httptest.NewRequestWithContext(t.Context(), http.MethodPost, "/api/agent/secrets", http.NoBody)
+	req.RemoteAddr = "192.0.2.10:1234"
+	req.Header.Set("Authorization", "Bearer test-token")
+
+	rec := httptest.NewRecorder()
+
+	before := len(f.audit.entries)
+
+	f.handler.WriteAgentRefusalForTest(rec, req, p, identity.ActionServerManageAgent, err)
+
+	if rec.Code != http.StatusBadRequest {
+		t.Fatalf("refusal answers %d, want %d: %s", rec.Code, http.StatusBadRequest, rec.Body.String())
+	}
+
+	if got := decodeErrorBody(t, rec).ErrorCode; got != "agent-connection.secret-invalid" {
+		t.Fatalf("refusal errorCode = %q, want agent-connection.secret-invalid", got)
+	}
+
+	if len(f.audit.entries) != before+1 {
+		t.Fatalf("refusal wrote %d audit entries, want the one denial", len(f.audit.entries)-before)
+	}
+
+	last := f.audit.entries[len(f.audit.entries)-1]
+
+	if last.Outcome != audit.OutcomeDenied {
+		t.Fatalf("denial outcome = %q, want denied", last.Outcome)
+	}
+
+	if strings.Contains(fmt.Sprintf("%+v", last), "api-key") {
+		t.Fatalf("denial entry %+v holds a request value", last)
 	}
 }

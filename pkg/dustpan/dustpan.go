@@ -3957,7 +3957,7 @@ func mountOpenTofuAPI(mux *rootMux, a adapters, cfg *settings) {
 		"/api/v2/", metrics.AdapterOpenTofu,
 		withCORS(withMaintenance(a.tfe, a.maintenance, shapeTFE, cfg.logger), cfg.allowedOrigins),
 	)
-	// The OpenTofu http backend (ADR 49) answers tool calls under its own
+	// The OpenTofu http backend answers tool calls under its own
 	// prefix.
 	mux.Handle(
 		"/tofu/state/", metrics.AdapterOpenTofu,

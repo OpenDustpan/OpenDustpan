@@ -17,7 +17,9 @@ import (
 )
 
 // Prefix is the path prefix of the tool-neutral REST API. The description
-// covers a path under this prefix and no other path.
+// covers a path under this prefix and the two prefixes that
+// allowedOutsidePrefixes returns: /api/agent/ and /api/server/egress-allowlist.
+// It covers no other path.
 const Prefix = "/api/dustpan/v1/"
 
 // allowedOutsidePrefixes returns the path prefixes outside Prefix that the
