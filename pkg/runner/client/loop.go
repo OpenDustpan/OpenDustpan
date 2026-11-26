@@ -88,9 +88,9 @@ func (e *Error) Error() string {
 // Is matches the sentinel of the code of e. The code is matched as the server
 // sent it: a code with a control or format character is not a protocol code.
 func (e *Error) Is(target error) bool {
-	// A status of 500 or more is a fault of the server: the loop polls again
-	// after a backoff, whatever the code. A known terminal code under a 5xx
-	// does not end the loop.
+	// A status of 500 or more is a server fault: back off and keep the work,
+	// whatever the code. A proxy or a broken server must not end the loop with
+	// a forged body; a terminal code comes with its own 4xx status.
 	if e.Status >= statusServerError {
 		return target == ErrUnavailable
 	}
