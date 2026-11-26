@@ -7,6 +7,7 @@ import (
 	"time"
 
 	"opendustpan.org/opendustpan/internal/store/jobstore"
+	"opendustpan.org/opendustpan/pkg/idempotency"
 	"opendustpan.org/opendustpan/pkg/identity"
 	"opendustpan.org/opendustpan/pkg/job"
 	"opendustpan.org/opendustpan/pkg/namespace"
@@ -93,7 +94,7 @@ func TestApplyReadsTheSettingInItsWriteTransaction(t *testing.T) {
 	s := jobstore.New(changingRunner{
 		tx:          tx,
 		beforeWrite: func() { stored["freshAuthEnabled"] = "false" },
-	})
+	}, idempotency.JobStartRetention())
 	s.SetFreshResolver(testResolver())
 
 	c := changeOf(j.ID, j.Version, job.EventApproved)

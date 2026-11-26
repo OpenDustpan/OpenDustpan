@@ -2,6 +2,7 @@ package outputsharetest
 
 import (
 	"context"
+	"fmt"
 	"strings"
 	"testing"
 	"time"
@@ -124,8 +125,57 @@ func (u unitHooks) unit(
 	return p
 }
 
+// WithUnitFault returns h with the hook UnitFault, over the store s. The hook
+// calls arm, which injects a fault that the adapter raises after the write of
+// the first rule and before the commit, then makes the unit with the plain
+// create and returns the error of the create. It calls the function that arm
+// returns before it returns, so that the next create runs with no fault.
+// h.Namespace must be set.
+func WithUnitFault(h Harness, s UnitStore, arm func(t *testing.T) (disarm func())) Harness {
+	u := unitHooks{s: s, namespace: h.Namespace}
+
+	h.UnitFault = func(t *testing.T, tool string, ns namespace.Name, name string) error {
+		t.Helper()
+
+		fence := u.namespace(t, ns.String())
+		disarm := arm(t)
+
+		defer disarm()
+
+		var err error
+
+		switch tool {
+		case ToolOpenTofu:
+			_, err = u.createWorkspace(t, ns, name, fence)
+		case ToolPulumi:
+			_, err = u.createStack(t, ns, name, fence)
+		default:
+			t.Fatalf("unit fault hook: unknown tool %q", tool)
+		}
+
+		return err
+	}
+
+	return h
+}
+
 // makeWorkspace makes the workspace and returns its stable ID.
 func (u unitHooks) makeWorkspace(t *testing.T, ns namespace.Name, name string, fence namespace.Fence) string {
+	t.Helper()
+
+	id, err := u.createWorkspace(t, ns, name, fence)
+	if err != nil {
+		t.Fatalf("make workspace %s/%s: %v", ns, name, err)
+	}
+
+	return id
+}
+
+// createWorkspace makes the workspace and returns its stable ID and the error
+// of the create.
+func (u unitHooks) createWorkspace(
+	t *testing.T, ns namespace.Name, name string, fence namespace.Fence,
+) (string, error) {
 	t.Helper()
 
 	at := time.UnixMilli(settingAtMs).UTC()
@@ -150,14 +200,27 @@ func (u unitHooks) makeWorkspace(t *testing.T, ns namespace.Name, name string, f
 	}
 
 	if err = u.s.CreateWorkspace(t.Context(), w, fence); err != nil {
-		t.Fatalf("make workspace %s/%s: %v", ns, name, err)
+		return "", fmt.Errorf("create workspace: %w", err)
 	}
 
-	return w.ID.String()
+	return w.ID.String(), nil
 }
 
 // makeStack makes the stack "project/stack" and returns its stable ID.
 func (u unitHooks) makeStack(t *testing.T, ns namespace.Name, name string, fence namespace.Fence) string {
+	t.Helper()
+
+	id, err := u.createStack(t, ns, name, fence)
+	if err != nil {
+		t.Fatalf("make stack %s/%s: %v", ns, name, err)
+	}
+
+	return id
+}
+
+// createStack makes the stack "project/stack" and returns its stable ID and the
+// error of the create.
+func (u unitHooks) createStack(t *testing.T, ns namespace.Name, name string, fence namespace.Fence) (string, error) {
 	t.Helper()
 
 	at := time.UnixMilli(settingAtMs).UTC()
@@ -179,10 +242,10 @@ func (u unitHooks) makeStack(t *testing.T, ns namespace.Name, name string, fence
 	}
 
 	if err = u.s.CreateStack(t.Context(), st, fence); err != nil {
-		t.Fatalf("make stack %s/%s: %v", ns, name, err)
+		return "", fmt.Errorf("create stack: %w", err)
 	}
 
-	return st.ID.String()
+	return st.ID.String(), nil
 }
 
 // place makes the collection to when it does not exist, moves the unit from

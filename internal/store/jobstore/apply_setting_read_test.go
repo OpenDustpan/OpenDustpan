@@ -6,6 +6,7 @@ import (
 	"time"
 
 	"opendustpan.org/opendustpan/internal/store/jobstore"
+	"opendustpan.org/opendustpan/pkg/idempotency"
 	"opendustpan.org/opendustpan/pkg/job"
 )
 
@@ -93,7 +94,7 @@ func TestApplyReadsTheSettingOnlyForAnApproval(t *testing.T) {
 			base := settingTx{fakeTx: fake, settings: map[string]string{"freshAuthEnabled": "true"}, err: nil}
 			tx := countingTx{settingTx: base, reads: &reads}
 
-			s := jobstore.New(changingRunner{tx: tx, beforeWrite: func() {}})
+			s := jobstore.New(changingRunner{tx: tx, beforeWrite: func() {}}, idempotency.JobStartRetention())
 			s.SetFreshResolver(testResolver())
 
 			c := changeOf(j.ID, j.Version, tc.event)

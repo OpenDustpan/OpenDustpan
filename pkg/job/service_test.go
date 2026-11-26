@@ -774,6 +774,10 @@ func TestStartRefusesBadRequests(t *testing.T) {
 		},
 		{"reason with a line break", "ada", job.ErrInvalid, 0, func(r *job.StartRequest) { r.Reason = "a\nb" }, nil},
 		{
+			"user agent too long", "ada", audit.ErrInvalidEntry, 1,
+			func(r *job.StartRequest) { r.UserAgent = strings.Repeat("a", audit.MaxUserAgentLen+1) }, nil,
+		},
+		{
 			"object is not a unit", "ada", job.ErrInvalid, 0,
 			func(r *job.StartRequest) { r.Unit = identity.NamespaceObject("acme") }, nil,
 		},

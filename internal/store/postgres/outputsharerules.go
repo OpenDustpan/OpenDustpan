@@ -4,12 +4,15 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"time"
 
 	"github.com/jackc/pgx/v5"
 
+	"opendustpan.org/opendustpan/internal/ident"
 	"opendustpan.org/opendustpan/internal/store/outputsharestore"
 	"opendustpan.org/opendustpan/internal/store/postgres/internal/db"
 	"opendustpan.org/opendustpan/pkg/audit"
+	"opendustpan.org/opendustpan/pkg/history"
 	"opendustpan.org/opendustpan/pkg/identity"
 	"opendustpan.org/opendustpan/pkg/namespace"
 	"opendustpan.org/opendustpan/pkg/outputshare"
@@ -183,6 +186,160 @@ type ruleTx struct {
 }
 
 var _ outputsharestore.Lookup = ruleTx{q: nil}
+
+// newUnitRuleIDPrefix starts the ID of the rule that the store writes for a
+// new unit.
+const newUnitRuleIDPrefix = "osr-"
+
+// unknownCreator names the creator of a unit in the reason of the audit entry when
+// the create has no audit entry of its own.
+const unknownCreator = "a create with no audit entry"
+
+// newUnit is a unit that the transaction of a create just wrote.
+type newUnit struct {
+	At        time.Time
+	Namespace namespace.Name
+	Tool      string
+	Name      string
+	ID        string
+	Cause     unitCause
+}
+
+// unitCause is the event that made a unit: the fence of the create and, when
+// the create has an audit entry, who made the unit and in which request.
+type unitCause struct {
+	Fence     namespace.Fence
+	Creator   string
+	RequestID string
+	Channel   audit.Channel
+}
+
+// causeOfCreate returns the cause of a create that has no audit entry.
+func causeOfCreate(fence namespace.Fence) unitCause {
+	return unitCause{Fence: fence, Creator: "", RequestID: "", Channel: audit.ChannelAPI}
+}
+
+// causeOfEntry returns the cause of a create with the audit entry e of its
+// placement.
+func causeOfEntry(fence namespace.Fence, e audit.Entry) unitCause {
+	return unitCause{Fence: fence, Creator: e.Subject, RequestID: e.RequestID, Channel: e.Channel}
+}
+
+// writeNewUnitRule writes the first rule of the new unit in the transaction of
+// q, from the setting that the same transaction reads. With the setting
+// namespace it writes one rule whose consumer is the namespace of the unit,
+// and its audit entry. With the setting nobody it writes nothing. A stored
+// setting that fails Validate refuses the create with ErrInvalid. The create
+// has no caller, so the server is the actor of the rule.
+func writeNewUnitRule(ctx context.Context, q *db.Queries, u newUnit) error {
+	raw, err := q.GetNamespaceOutputSharingDefault(ctx, u.Namespace.String())
+	if errors.Is(err, pgx.ErrNoRows) {
+		return namespace.ErrNotFound
+	}
+
+	if err != nil {
+		return fmt.Errorf("select output sharing setting: %w", err)
+	}
+
+	// Defense in depth: the setting store validates each value that it
+	// writes. This check stays so that a row of another version or a restored
+	// backup fails closed and never gives a unit a rule.
+	setting := outputshare.Default(raw)
+	if validErr := setting.Validate(); validErr != nil {
+		return fmt.Errorf(
+			"read output sharing setting of namespace %s: %w; run GET /api/dustpan/v1/namespaces/%s/output-sharing",
+			u.Namespace, validErr, u.Namespace,
+		)
+	}
+
+	if setting != outputshare.DefaultNamespace {
+		return nil
+	}
+
+	producer, err := identity.UnitObject(u.Tool, u.Namespace, u.Name)
+	if err != nil {
+		return fmt.Errorf("%w: the new unit", outputshare.ErrInvalid)
+	}
+
+	r := outputshare.Rule{
+		CreatedAt: u.At.UTC(),
+		ID:        outputshare.ID(ident.NewID(newUnitRuleIDPrefix)),
+		CreatedBy: history.ServerSubject,
+		Producer:  producer.WithUnitID(u.ID),
+		Consumer:  outputshare.Consumer{Kind: outputshare.ConsumerNamespace, Namespace: u.Namespace, ID: ""},
+	}
+
+	e := newUnitRuleEntry(r, u.Cause)
+
+	// Defense in depth: the fenced transaction checks the failover version
+	// only, and the create checks the entry of its own placement. This check
+	// stays so that the entry of the rule never names another namespace than
+	// the fence of the create, and never fails Validate inside the append.
+	if entryErr := checkFencedEntry(u.Cause.Fence, e); entryErr != nil {
+		return entryErr
+	}
+
+	row, err := outputsharestore.CheckPut(r, u.Cause.Fence, e)
+	if err != nil {
+		return err
+	}
+
+	if putErr := outputsharestore.Put(ctx, ruleTx{q: q}, r, row); putErr != nil {
+		return putErr
+	}
+
+	if _, appendErr := appendAuditEntry(ctx, q, e); appendErr != nil {
+		return fmt.Errorf("append audit entry: %w", appendErr)
+	}
+
+	return nil
+}
+
+// newUnitRuleEntry returns the audit entry of the rule r of a new unit. The
+// server is the subject. The request ID and the channel are those of the create
+// that caused the rule, and the reason names its creator and the namespace.
+func newUnitRuleEntry(r outputshare.Rule, c unitCause) audit.Entry {
+	creator := c.Creator
+	if creator == "" {
+		creator = unknownCreator
+	}
+
+	reason := fmt.Sprintf(
+		"the output sharing setting of namespace %s is namespace; the unit was created by %s",
+		r.Producer.Namespace(), creator,
+	)
+
+	return audit.Entry{
+		At:         r.CreatedAt,
+		Namespace:  r.Producer.Namespace(),
+		Subject:    history.ServerSubject,
+		IDPSubject: "",
+		TokenID:    "",
+		Action:     "unit:manage-sharing",
+		Object:     r.Producer.String(),
+		Version:    "",
+		ValuePath:  "",
+		ValueCount: nil,
+		Changes: []audit.Change{
+			{Key: "output-sharing-rule", Old: nil, New: string(r.ID), Layer: "", TakesEffect: ""},
+		},
+		SourceIP:      "",
+		UserAgent:     "",
+		Channel:       c.Channel,
+		Kind:          audit.KindChange,
+		Outcome:       audit.OutcomeSuccess,
+		RequestID:     c.RequestID,
+		ObjectID:      string(r.ID),
+		PrevHash:      "",
+		Hash:          "",
+		Sequence:      0,
+		FenceVersion:  0,
+		PrincipalKind: "",
+		JobID:         "",
+		Reason:        reason,
+		Origin:        nil,
+	}
+}
 
 // UnitExists implements outputsharestore.Lookup.
 func (t ruleTx) UnitExists(ctx context.Context, ns namespace.Name, id string) (bool, error) {

@@ -486,6 +486,15 @@ BEGIN SELECT RAISE(ABORT, 'forced audit failure'); END`
 					t.Fatalf("create the audit fault: %v", err)
 				}
 			},
+			AgeJob: func(t *testing.T, id job.ID, by time.Duration) {
+				t.Helper()
+
+				err := s.ExecForTest(t.Context(),
+					`UPDATE jobs SET created_at_ms = created_at_ms - ? WHERE id = ?`, by.Milliseconds(), string(id))
+				if err != nil {
+					t.Fatalf("age job %s: %v", id, err)
+				}
+			},
 		}
 	})
 }
@@ -571,7 +580,7 @@ func newRecorderHarnessOf(
 		Harness: jobtest.Harness{
 			Jobs: j, Durable: ops, Freezes: j, Claimer: job.NewClaimer(j, ops, s, jobtest.NoGates{}), Namespaces: s,
 			Domain: d, WriteState: d.WriteState(),
-			FailAudit: nil, Claims: nil,
+			FailAudit: nil, Claims: nil, AgeJob: nil,
 		},
 		Records:  j,
 		ItemKeys: s,

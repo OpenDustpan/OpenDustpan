@@ -226,8 +226,10 @@ type Store interface {
 	// stores the job whatever manual lock covers the unit: the lock stops
 	// the dispatch, not the queue. A second create with the
 	// key of j returns the first job and created false, when the spec is
-	// equal. It returns ErrKeyConflict when the key names a job with
-	// another spec, and ErrLimit when the unit has MaxOpenPerUnit jobs that
+	// equal. A key names its job for 24 hours from the creation of that job:
+	// a later create with the same key stores a new job. It returns
+	// ErrKeyConflict when the key names a live job with another spec, and
+	// ErrLimit when the unit has MaxOpenPerUnit jobs that
 	// are not terminal, or the namespace MaxOpenPerNamespace.
 	Create(ctx context.Context, j Job, dispatch *durable.StartRequest, fence namespace.Fence,
 		e []audit.Entry) (stored Job, created bool, err error)

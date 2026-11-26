@@ -497,6 +497,15 @@ FOR EACH ROW EXECUTE FUNCTION fail_audit()`,
 					}
 				}
 			},
+			AgeJob: func(t *testing.T, id job.ID, by time.Duration) {
+				t.Helper()
+
+				_, err := postgres.Pool(s).Exec(t.Context(),
+					`UPDATE jobs SET created_at_ms = created_at_ms - $1 WHERE id = $2`, by.Milliseconds(), string(id))
+				if err != nil {
+					t.Fatalf("age job %s: %v", id, err)
+				}
+			},
 		}
 	})
 }
@@ -592,7 +601,7 @@ func newRecorderHarnessOf(
 		Harness: jobtest.Harness{
 			Jobs: j, Durable: ops, Freezes: j, Claimer: job.NewClaimer(j, ops, s, jobtest.NoGates{}), Namespaces: s,
 			Domain: d, WriteState: d.WriteState(),
-			FailAudit: nil, Claims: nil,
+			FailAudit: nil, Claims: nil, AgeJob: nil,
 		},
 		Records:  j,
 		ItemKeys: s,

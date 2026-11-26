@@ -6,6 +6,7 @@ import (
 	"time"
 
 	"opendustpan.org/opendustpan/internal/store/jobstore"
+	"opendustpan.org/opendustpan/pkg/idempotency"
 	"opendustpan.org/opendustpan/pkg/identity"
 	"opendustpan.org/opendustpan/pkg/job"
 )
@@ -112,7 +113,7 @@ func TestFreshRequiredFailsClosed(t *testing.T) {
 		t.Run(tc.name, func(t *testing.T) {
 			t.Parallel()
 
-			s := jobstore.New(nil)
+			s := jobstore.New(nil, idempotency.JobStartRetention())
 			if tc.resolver != nil {
 				s.SetFreshResolver(tc.resolver)
 			}

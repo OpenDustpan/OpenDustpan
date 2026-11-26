@@ -25566,8 +25566,9 @@ UPDATE jobs
 SET state = ?1, wait = ?2, current_phase = ?3,
     current_changes = ?4, current_operation = ?5,
     version = ?6, body = ?7, updated_at_ms = ?8,
-    state_changed_at_ms = ?9
-WHERE id = ?10 AND version = ?11
+    state_changed_at_ms = ?9,
+    idempotency_key = CASE WHEN CAST(?10 AS BOOLEAN) THEN '' ELSE idempotency_key END
+WHERE id = ?11 AND version = ?12
 `
 
 type UpdateJobParams struct {
@@ -25580,12 +25581,14 @@ type UpdateJobParams struct {
 	Body             string
 	UpdatedAtMs      int64
 	StateChangedAtMs int64
+	ClearKey         bool
 	ID               string
 	PrevVersion      int64
 }
 
 // It changes no row when the stored version is not the one that the caller
-// read.
+// read. The query never sets or changes a key: only an update that carries
+// the clear signal clears the stored key.
 func (q *Queries) UpdateJob(ctx context.Context, arg UpdateJobParams) (int64, error) {
 	result, err := q.db.ExecContext(ctx, updateJob,
 		arg.State,
@@ -25597,6 +25600,7 @@ func (q *Queries) UpdateJob(ctx context.Context, arg UpdateJobParams) (int64, er
 		arg.Body,
 		arg.UpdatedAtMs,
 		arg.StateChangedAtMs,
+		arg.ClearKey,
 		arg.ID,
 		arg.PrevVersion,
 	)

@@ -36,9 +36,21 @@ The TOTP port SHALL have one method that accepts a time step for a sign-in with 
 - **WHEN** a person gives wrong TOTP codes at the sign-in
 - **THEN** the step-up failure count of the person does not change
 
+### Requirement: sign-in-failures-lock-the-factor
+
+The TOTP port SHALL count each failed TOTP check at the sign-in on the factor, apart from the step-up count, across all pending sign-ins. After 5 failed checks the factor SHALL refuse each sign-in step with `ErrLocked` until the lock duration ends, and SHALL append one audit entry for each refusal. A success SHALL set the count to 0.
+
+#### Scenario: Guesses across pending sign-ins
+- **WHEN** a person who has the password fails 5 TOTP checks in 5 different pending sign-ins
+- **THEN** the factor refuses the next sign-in step, also with a good code, with `ErrLocked`, and the refusal has an audit entry
+
+#### Scenario: Success resets the count
+- **WHEN** 4 checks failed and the next code is good
+- **THEN** the sign-in succeeds and the count is 0
+
 ### Requirement: restore-keeps-second-factor-safe
 
-A restore SHALL NOT make a used recovery code valid again, SHALL NOT end a lock of a TOTP factor or make a used step valid again, and SHALL leave no TOTP attempts row of a factor that the restored data does not have. A backup SHALL carry no recovery code, and a restore that replaces access SHALL empty the recovery codes and, when it removes one or more codes, write one audit entry that names the reason. A restore that removes no recovery code SHALL write no such entry.
+A restore SHALL NOT make a used recovery code valid again, SHALL NOT end a lock of a TOTP factor (the step-up lock or the sign-in lock) or make a used step valid again, and SHALL leave no TOTP attempts row of a factor that the restored data does not have. A backup SHALL carry no recovery code, and a restore that replaces access SHALL empty the recovery codes and, when it removes one or more codes, write one audit entry that names the reason. A restore that removes no recovery code SHALL write no such entry.
 
 #### Scenario: Older backup and a used recovery code
 - **WHEN** a person uses a recovery code and a restore of an older backup replaces access

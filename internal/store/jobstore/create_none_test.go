@@ -7,6 +7,7 @@ import (
 	"time"
 
 	"opendustpan.org/opendustpan/internal/store/jobstore"
+	"opendustpan.org/opendustpan/pkg/idempotency"
 	"opendustpan.org/opendustpan/pkg/identity"
 	"opendustpan.org/opendustpan/pkg/job"
 	"opendustpan.org/opendustpan/pkg/namespace"
@@ -127,7 +128,7 @@ func TestCreateNoneAuthKinds(t *testing.T) {
 				tx = lookupErrTx{ct}
 			}
 
-			s := jobstore.New(changingRunner{tx: tx, beforeWrite: func() {}})
+			s := jobstore.New(changingRunner{tx: tx, beforeWrite: func() {}}, idempotency.JobStartRetention())
 
 			_, _, err := s.Create(t.Context(), j, nil, testFence(), nil)
 			if !errors.Is(err, tc.wantErr) {

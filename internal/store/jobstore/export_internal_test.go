@@ -4,6 +4,7 @@ import (
 	"context"
 	"time"
 
+	"opendustpan.org/opendustpan/pkg/audit"
 	"opendustpan.org/opendustpan/pkg/identity"
 	"opendustpan.org/opendustpan/pkg/job"
 )
@@ -50,3 +51,8 @@ func ReadFreshRequired(ctx context.Context, s *Store, tx Tx) (bool, error) {
 
 // NextJobUpdateAt exposes nextUpdateAt to the black-box tests.
 func NextJobUpdateAt(now, stored time.Time) time.Time { return nextUpdateAt(now, stored) }
+
+// BuildKeyExpiredEntries exposes keyExpiredEntries to the black-box tests.
+func BuildKeyExpiredEntries(e []audit.Entry, old *job.Job, now time.Time) ([]audit.Entry, error) {
+	return keyExpiredEntries(e, old, now)
+}

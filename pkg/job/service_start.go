@@ -769,6 +769,13 @@ func startChanges(j *Job) []audit.Change {
 // transaction as the create, so a failure never leaves a queued job with a
 // closed gate, and a retry with the key finds the job as it should be.
 func (s *service) persist(ctx context.Context, j *Job, fence namespace.Fence, e audit.Entry) (Job, bool, error) {
+	// Defense in depth: the store refuses a clear of an expired key with no
+	// audit entry too, and it validates the entry of the start; this check
+	// stays so that a new caller cannot create a job with no record.
+	if err := e.Validate(); err != nil {
+		return Job{}, false, fmt.Errorf("audit entry of the start: %w", err)
+	}
+
 	entries := []audit.Entry{e}
 	// No approval exists yet, so the policy counts no signature.
 	closedPolicy := gate.ApproverPolicy{Production: true, IsDev: nil}
