@@ -702,7 +702,7 @@ func (s *Store) CreateStack(ctx context.Context, st stack.Stack, fence namespace
 	defer s.mu.RUnlock()
 
 	return s.inFencedTx(ctx, fence, func(q *db.Queries) error {
-		return createStackRows(ctx, q, st)
+		return createStackRows(ctx, q, st, causeOfCreate(fence))
 	})
 }
 
@@ -725,7 +725,7 @@ func (s *Store) CreateStackPlaced(
 	e := p.Entry
 
 	return s.inFencedAuditedTx(ctx, fence, &e, func(q *db.Queries) error {
-		if err := createStackRows(ctx, q, st); err != nil {
+		if err := createStackRows(ctx, q, st, causeOfEntry(fence, e)); err != nil {
 			return err
 		}
 
@@ -750,7 +750,7 @@ func placementMove(st stack.Stack, p stack.Placement) collection.Move {
 
 // createStackRows inserts the stack, its tags and its inventory entry in the
 // transaction of q.
-func createStackRows(ctx context.Context, q *db.Queries, st stack.Stack) error {
+func createStackRows(ctx context.Context, q *db.Queries, st stack.Stack, cause unitCause) error {
 	// Defense in depth: the handler and the service check the tags too. This
 	// check stays so that a new caller of the store cannot write a tag value
 	// that one dialect refuses or stores in another way than the other
@@ -778,16 +778,25 @@ func createStackRows(ctx context.Context, q *db.Queries, st stack.Stack) error {
 		return stack.ErrAlreadyExists
 	}
 
-	if err := insertStackTags(ctx, q, row.ID, st.Tags); err != nil {
-		return err
+	if tagsErr := insertStackTags(ctx, q, row.ID, st.Tags); tagsErr != nil {
+		return tagsErr
 	}
 
-	return publishStackInventory(
+	err = publishStackInventory(
 		ctx,
 		q,
 		st.Ref,
 		unitWrite{unitID: row.ID, atMs: row.UpdatedAtMs, kind: inventory.ChangeCreated},
 	)
+	if err != nil {
+		return err
+	}
+
+	// The first rule of the new stack commits with the stack, or neither does.
+	return writeNewUnitRule(ctx, q, newUnit{
+		At: st.CreatedAt, Namespace: st.Ref.Namespace, Tool: inventoryTool, Name: stackUnitName(st.Ref), ID: row.ID,
+		Cause: cause,
+	})
 }
 
 // GetStack implements stack.Store.

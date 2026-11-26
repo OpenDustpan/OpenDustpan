@@ -59,6 +59,11 @@ func outputShareHarness(base string) outputsharetest.Factory {
 
 				return auditActionsOf(t, s, namespace.Name(ns))
 			},
+			AuditEntries: func(t *testing.T, ns string) []audit.Entry {
+				t.Helper()
+
+				return allAuditEntries(t, s, namespace.Name(ns))
+			},
 			Calls: nil,
 			StoreRaw: func(t *testing.T, r outputshare.Rule) {
 				t.Helper()
@@ -72,7 +77,55 @@ func outputShareHarness(base string) outputsharetest.Factory {
 			},
 		}
 
-		return outputsharetest.WithUnits(h, s)
+		h = outputsharetest.WithUnits(h, s)
+
+		return outputsharetest.WithUnitFault(h, s, func(t *testing.T) func() {
+			t.Helper()
+
+			return armAuditFault(t, schemaURL)
+		})
+	}
+}
+
+// armAuditFault makes each insert of an audit entry fail in the schema that
+// schemaURL names, as a fault after the write of the first rule of a new unit
+// and before the commit. The function that it returns removes the fault.
+func armAuditFault(t *testing.T, schemaURL string) func() {
+	t.Helper()
+
+	conn := rawSettingConn(t, schemaURL)
+	defer closeSettingConn(t, conn)
+
+	const arm = `CREATE FUNCTION inject_audit_fault() RETURNS trigger LANGUAGE plpgsql AS
+		$$ BEGIN RAISE EXCEPTION 'injected fault'; END $$;
+		CREATE TRIGGER inject_audit_fault BEFORE INSERT ON audit_entries
+		FOR EACH ROW EXECUTE FUNCTION inject_audit_fault()`
+
+	if _, err := conn.Exec(t.Context(), arm); err != nil {
+		t.Fatalf("arm the audit fault: %v", err)
+	}
+
+	return func() {
+		ctx := context.WithoutCancel(t.Context())
+
+		disarm, err := pgx.Connect(ctx, schemaURL)
+		if err != nil {
+			t.Errorf("connect to remove the audit fault: %v", err)
+
+			return
+		}
+
+		defer func() {
+			if closeErr := disarm.Close(ctx); closeErr != nil {
+				t.Errorf("close: %v", closeErr)
+			}
+		}()
+
+		const drop = `DROP TRIGGER inject_audit_fault ON audit_entries; DROP FUNCTION inject_audit_fault()`
+
+		if _, err = disarm.Exec(ctx, drop); err != nil {
+			t.Errorf("remove the audit fault: %v", err)
+		}
 	}
 }
 
