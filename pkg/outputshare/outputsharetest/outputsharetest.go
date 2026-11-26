@@ -12,6 +12,7 @@ import (
 	"slices"
 	"testing"
 
+	"opendustpan.org/opendustpan/pkg/audit"
 	"opendustpan.org/opendustpan/pkg/identity"
 	"opendustpan.org/opendustpan/pkg/namespace"
 	"opendustpan.org/opendustpan/pkg/outputshare"
@@ -117,6 +118,10 @@ type Harness struct {
 	// of the namespace, oldest first. A case that needs it skips when it is
 	// nil.
 	Audited func(t *testing.T, ns string) []string
+	// AuditEntries is an optional hook: it returns each audit entry of the
+	// namespace, oldest first. A case that checks the fields of an entry skips
+	// when it is nil.
+	AuditEntries func(t *testing.T, ns string) []audit.Entry
 	// Calls is an optional hook: it returns the port calls that the checker
 	// made since the last call of Calls, in order, each as the port and the
 	// method with no argument. A case that needs it skips when it is nil.
@@ -222,7 +227,7 @@ func storeCases() []suiteCase {
 	rules := withRuleStore(ruleCases())
 
 	return slices.Concat(rules, settingCases(), []suiteCase{
-		{nil, "store: set setting changes no rule of a unit that exists"},
+		{testSetSettingKeepsUnits, "store: set setting changes no rule of a unit that exists"},
 		{nil, "store: each write appends one audit entry in its transaction"},
 	})
 }

@@ -205,8 +205,9 @@ var _ outputsharestore.Lookup = ruleTx{q: nil}
 // new unit.
 const newUnitRuleIDPrefix = "osr-"
 
-// newUnitRuleReason is the reason of the audit entry of the rule of a new unit.
-const newUnitRuleReason = "the output sharing setting of the namespace is namespace"
+// unknownCreator names the creator of a unit in the reason of the audit entry when
+// the create has no audit entry of its own.
+const unknownCreator = "a create with no audit entry"
 
 // newUnit is a unit that the transaction of a create just wrote.
 type newUnit struct {
@@ -215,6 +216,27 @@ type newUnit struct {
 	Tool      string
 	Name      string
 	ID        string
+	Cause     unitCause
+}
+
+// unitCause is the event that made a unit: the fence of the create and, when
+// the create has an audit entry, who made the unit and in which request.
+type unitCause struct {
+	Fence     namespace.Fence
+	Creator   string
+	RequestID string
+	Channel   audit.Channel
+}
+
+// causeOfCreate returns the cause of a create that has no audit entry.
+func causeOfCreate(fence namespace.Fence) unitCause {
+	return unitCause{Fence: fence, Creator: "", RequestID: "", Channel: audit.ChannelAPI}
+}
+
+// causeOfEntry returns the cause of a create with the audit entry e of its
+// placement.
+func causeOfEntry(fence namespace.Fence, e audit.Entry) unitCause {
+	return unitCause{Fence: fence, Creator: e.Subject, RequestID: e.RequestID, Channel: e.Channel}
 }
 
 // writeNewUnitRule writes the first rule of the new unit in the transaction of
@@ -238,7 +260,10 @@ func writeNewUnitRule(ctx context.Context, q *db.Queries, u newUnit) error {
 	// backup fails closed and never gives a unit a rule.
 	setting := outputshare.Default(raw)
 	if validErr := setting.Validate(); validErr != nil {
-		return fmt.Errorf("read output sharing setting: %w", validErr)
+		return fmt.Errorf(
+			"read output sharing setting of namespace %s: %w; run GET /api/dustpan/v1/namespaces/%s/output-sharing",
+			u.Namespace, validErr, u.Namespace,
+		)
 	}
 
 	if setting != outputshare.DefaultNamespace {
@@ -258,9 +283,17 @@ func writeNewUnitRule(ctx context.Context, q *db.Queries, u newUnit) error {
 		Consumer:  outputshare.Consumer{Kind: outputshare.ConsumerNamespace, Namespace: u.Namespace, ID: ""},
 	}
 
-	e := newUnitRuleEntry(r)
+	e := newUnitRuleEntry(r, u.Cause)
 
-	row, err := outputsharestore.CheckPut(r, namespace.Fence{Namespace: u.Namespace, FailoverVersion: 0}, e)
+	// Defense in depth: the fenced transaction checks the failover version
+	// only, and the create checks the entry of its own placement. This check
+	// stays so that the entry of the rule never names another namespace than
+	// the fence of the create, and never fails Validate inside the append.
+	if entryErr := checkFencedEntry(u.Cause.Fence, e); entryErr != nil {
+		return entryErr
+	}
+
+	row, err := outputsharestore.CheckPut(r, u.Cause.Fence, e)
 	if err != nil {
 		return err
 	}
@@ -276,8 +309,20 @@ func writeNewUnitRule(ctx context.Context, q *db.Queries, u newUnit) error {
 	return nil
 }
 
-// newUnitRuleEntry returns the audit entry of the rule r of a new unit.
-func newUnitRuleEntry(r outputshare.Rule) audit.Entry {
+// newUnitRuleEntry returns the audit entry of the rule r of a new unit. The
+// server is the subject. The request ID and the channel are those of the create
+// that caused the rule, and the reason names its creator and the namespace.
+func newUnitRuleEntry(r outputshare.Rule, c unitCause) audit.Entry {
+	creator := c.Creator
+	if creator == "" {
+		creator = unknownCreator
+	}
+
+	reason := fmt.Sprintf(
+		"the output sharing setting of namespace %s is namespace; the unit was created by %s",
+		r.Producer.Namespace(), creator,
+	)
+
 	return audit.Entry{
 		At:         r.CreatedAt,
 		Namespace:  r.Producer.Namespace(),
@@ -294,10 +339,10 @@ func newUnitRuleEntry(r outputshare.Rule) audit.Entry {
 		},
 		SourceIP:      "",
 		UserAgent:     "",
-		Channel:       audit.ChannelAPI,
+		Channel:       c.Channel,
 		Kind:          audit.KindChange,
 		Outcome:       audit.OutcomeSuccess,
-		RequestID:     "",
+		RequestID:     c.RequestID,
 		ObjectID:      string(r.ID),
 		PrevHash:      "",
 		Hash:          "",
@@ -305,7 +350,7 @@ func newUnitRuleEntry(r outputshare.Rule) audit.Entry {
 		FenceVersion:  0,
 		PrincipalKind: "",
 		JobID:         "",
-		Reason:        newUnitRuleReason,
+		Reason:        reason,
 		Origin:        nil,
 	}
 }

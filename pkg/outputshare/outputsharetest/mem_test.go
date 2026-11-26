@@ -132,8 +132,9 @@ func (m *memSettings) harness() outputsharetest.Harness {
 
 			return append([]string(nil), m.spaces[namespace.Name(ns)].audited...)
 		},
-		Calls:    nil,
-		StoreRaw: nil,
+		Calls:        nil,
+		StoreRaw:     nil,
+		AuditEntries: nil,
 		SettingRaw: func(t *testing.T, ns namespace.Name, value string) {
 			t.Helper()
 

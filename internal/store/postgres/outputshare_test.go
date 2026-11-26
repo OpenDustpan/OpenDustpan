@@ -59,6 +59,11 @@ func outputShareHarness(base string) outputsharetest.Factory {
 
 				return auditActionsOf(t, s, namespace.Name(ns))
 			},
+			AuditEntries: func(t *testing.T, ns string) []audit.Entry {
+				t.Helper()
+
+				return allAuditEntries(t, s, namespace.Name(ns))
+			},
 			Calls: nil,
 			StoreRaw: func(t *testing.T, r outputshare.Rule) {
 				t.Helper()

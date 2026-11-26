@@ -33,7 +33,7 @@ var (
 // inventory entry is written in the same transaction.
 func (s *Store) CreateWorkspace(ctx context.Context, w workspace.Workspace, fence namespace.Fence) error {
 	return s.inFencedTx(ctx, fence, func(q *db.Queries) error {
-		return createWorkspaceRows(ctx, q, w)
+		return createWorkspaceRows(ctx, q, w, causeOfCreate(fence))
 	})
 }
 
@@ -53,7 +53,7 @@ func (s *Store) CreateWorkspacePlaced(
 	e := p.Entry
 
 	return s.inFencedAuditedTx(ctx, fence, &e, func(q *db.Queries) error {
-		if err := createWorkspaceRows(ctx, q, w); err != nil {
+		if err := createWorkspaceRows(ctx, q, w, causeOfEntry(fence, e)); err != nil {
 			return err
 		}
 
@@ -74,7 +74,7 @@ func workspacePlacementMove(w workspace.Workspace, p workspace.Placement) collec
 
 // createWorkspaceRows inserts the workspace and its inventory entry in the
 // transaction of q.
-func createWorkspaceRows(ctx context.Context, q *db.Queries, w workspace.Workspace) error {
+func createWorkspaceRows(ctx context.Context, q *db.Queries, w workspace.Workspace, cause unitCause) error {
 	row := codec.ToWorkspaceRow(w)
 
 	if err := q.LockNamespaceCreatesShared(ctx, w.Ref.Namespace.String()); err != nil {
@@ -127,7 +127,7 @@ func createWorkspaceRows(ctx context.Context, q *db.Queries, w workspace.Workspa
 	// neither does.
 	return writeNewUnitRule(ctx, q, newUnit{
 		At: w.CreatedAt, Namespace: w.Ref.Namespace, Tool: workspace.InventoryTool, Name: w.Ref.Name.String(),
-		ID: row.ID,
+		ID: row.ID, Cause: cause,
 	})
 }
 

@@ -218,6 +218,7 @@ func (r *outputShareRig) harness() outputsharetest.Harness {
 		Calls:        nil,
 		StoreRaw:     nil,
 		SettingRaw:   nil,
+		AuditEntries: nil,
 		Checker:      r.checker,
 		States:       r.states,
 		Outputs:      r.outputs,

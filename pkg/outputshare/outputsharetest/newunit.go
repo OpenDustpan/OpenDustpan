@@ -3,8 +3,11 @@ package outputsharetest
 import (
 	"errors"
 	"slices"
+	"strings"
 	"testing"
 
+	"opendustpan.org/opendustpan/pkg/audit"
+	"opendustpan.org/opendustpan/pkg/history"
 	"opendustpan.org/opendustpan/pkg/outputshare"
 )
 
@@ -92,6 +95,10 @@ func testNewUnitNamespace(t *testing.T, h Harness) {
 			t.Fatalf("the rule of %s has the producer %s", p.Unit, r.Producer)
 		}
 
+		if r.CreatedBy != history.ServerSubject {
+			t.Fatalf("the rule of %s has CreatedBy %q, want %q", p.Unit, r.CreatedBy, history.ServerSubject)
+		}
+
 		if err := r.Validate(); err != nil {
 			t.Fatalf("the rule of %s fails Validate: %v", p.Unit, err)
 		}
@@ -118,7 +125,7 @@ func testNewUnitAudit(t *testing.T, h Harness) {
 		beforeAcme := h.Audited(t, acme.String())
 		beforeGlobex := h.Audited(t, globex.String())
 
-		h.Unit(t, tool, acme, newUnitName(tool), "")
+		p := h.Unit(t, tool, acme, newUnitName(tool), "")
 
 		afterAcme := h.Audited(t, acme.String())
 		if len(afterAcme) != len(beforeAcme)+1 || afterAcme[len(afterAcme)-1] != actionManageSharing {
@@ -129,6 +136,84 @@ func testNewUnitAudit(t *testing.T, h Harness) {
 		if afterGlobex := h.Audited(t, globex.String()); !slices.Equal(afterGlobex, beforeGlobex) {
 			t.Fatalf("audit actions of globex = %q, want %q: the rule is in acme only", afterGlobex, beforeGlobex)
 		}
+
+		if h.AuditEntries != nil {
+			wantNewUnitEntry(t, h, p, tool)
+		}
+	}
+}
+
+// wantNewUnitEntry fails the test unless the last audit entry of acme is the
+// entry of the rule of the new unit p, with each field that names the actor,
+// the cause and the reason. The plain create of the hooks has no audit entry of
+// its own, so the request ID is empty and the channel is the API.
+func wantNewUnitEntry(t *testing.T, h Harness, p outputshare.Placement, tool string) {
+	t.Helper()
+
+	entries := h.AuditEntries(t, acme.String())
+	if len(entries) == 0 {
+		t.Fatalf("the %s unit has no audit entry in acme", tool)
+	}
+
+	e := entries[len(entries)-1]
+	rules := wantRules(t, h, p, 1)
+
+	checks := []struct {
+		name string
+		ok   bool
+		got  string
+	}{
+		{"Subject", e.Subject == history.ServerSubject, e.Subject},
+		{"Action", e.Action == actionManageSharing, e.Action},
+		{"Object", e.Object == p.Unit.String(), e.Object},
+		{"ObjectID", e.ObjectID == string(rules[0].ID), e.ObjectID},
+		{"RequestID", e.RequestID == "", e.RequestID},
+		{"Channel", e.Channel == audit.ChannelAPI, string(e.Channel)},
+		{"Reason", strings.Contains(e.Reason, acme.String()) && strings.Contains(e.Reason, "created by"), e.Reason},
+	}
+
+	for _, c := range checks {
+		if !c.ok {
+			t.Fatalf("the audit entry of the rule of the new %s unit has %s = %q", tool, c.name, c.got)
+		}
+	}
+}
+
+// laterUnitName returns a second unit name of the tool that the hooks accept.
+func laterUnitName(tool string) string {
+	if tool == ToolPulumi {
+		return "proj/later"
+	}
+
+	return "later"
+}
+
+// testSetSettingKeepsUnits proves that a change of the setting changes no rule
+// of a unit that exists, and that only a later unit uses the new value.
+func testSetSettingKeepsUnits(t *testing.T, h Harness) {
+	t.Helper()
+	needNewUnitHooks(t, h)
+
+	fence := h.Namespace(t, acme.String())
+	setSetting(t, h, fence, outputshare.DefaultNamespace)
+
+	for _, tool := range newUnitTools() {
+		first := h.Unit(t, tool, acme, newUnitName(tool), "")
+		want := wantRules(t, h, first, 1)[0]
+
+		setSetting(t, h, fence, outputshare.DefaultNobody)
+
+		if got := wantRules(t, h, first, 1)[0]; got.ID != want.ID {
+			t.Fatalf("the rule of %s after the setting nobody = %s, want %s", first.Unit, got.ID, want.ID)
+		}
+
+		later := h.Unit(t, tool, acme, laterUnitName(tool), "")
+		wantRules(t, h, later, 0)
+
+		setSetting(t, h, fence, outputshare.DefaultNamespace)
+
+		wantRules(t, h, later, 0)
+		wantRules(t, h, first, 1)
 	}
 }
 
@@ -184,6 +269,13 @@ func testNewUnitInvalidSetting(t *testing.T, h Harness) {
 		err := h.UnitFault(t, tool, acme, newUnitName(tool))
 		if !errors.Is(err, outputshare.ErrInvalid) {
 			t.Fatalf("the create of the %s unit with the setting %q = %v, want ErrInvalid", tool, "every one", err)
+		}
+
+		// The answer names the namespace and the one command that helps.
+		wantCommand := "GET /api/dustpan/v1/namespaces/" + acme.String() + "/output-sharing"
+		if !strings.Contains(err.Error(), "namespace "+acme.String()) || !strings.Contains(err.Error(), wantCommand) {
+			t.Fatalf("the error of the refused %s create = %q, want the namespace %s and %q",
+				tool, err, acme, wantCommand)
 		}
 
 		if after := h.Audited(t, acme.String()); !slices.Equal(after, before) {
