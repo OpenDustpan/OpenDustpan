@@ -3,6 +3,7 @@ package servertest_test
 import (
 	"crypto/ed25519"
 	"crypto/rand"
+	"errors"
 	"net/http"
 	"strings"
 	"testing"
@@ -11,6 +12,7 @@ import (
 	"opendustpan.org/opendustpan/pkg/durable"
 	"opendustpan.org/opendustpan/pkg/dustpan"
 	"opendustpan.org/opendustpan/pkg/launcher/session"
+	"opendustpan.org/opendustpan/pkg/namespace"
 	"opendustpan.org/opendustpan/pkg/runner"
 	"opendustpan.org/opendustpan/pkg/runner/protocol"
 )
@@ -21,17 +23,17 @@ type poolRunner struct {
 	id  string
 }
 
-// createJobPool makes the runner pool name with the purpose jobs and the
-// lease in milliseconds, and returns the ID of the pool. A lease of zero takes
-// the default lease.
-func createJobPool(h *rtHarness, name string, leaseMs int64) string {
+// createJobPool makes the runner pool name with the purpose jobs and no lease
+// (a lease of zero), and returns the ID of the pool. The pool takes the default
+// lease.
+func createJobPool(h *rtHarness, name string) string {
 	h.t.Helper()
 
 	var pool struct {
 		ID string `json:"id"`
 	}
 
-	body := encodeJSON(h, map[string]any{"name": name, "purpose": "jobs", "lease": leaseMs})
+	body := encodeJSON(h, map[string]any{"name": name, "purpose": "jobs", "lease": 0})
 
 	h.decode(h.call(http.MethodPost, "/api/dustpan/v1/namespaces/acme/runner-pools", string(body),
 		http.StatusCreated), &pool)
@@ -203,8 +205,8 @@ func TestRunnerOfAnotherPoolGetsNoWork(t *testing.T) {
 
 	client := &session.Client{Server: publicURL, Transport: httpTransport{h: h}, Release: "0.0.1", Now: nil}
 
-	poolA := createJobPool(h, "pool-a", 0)
-	poolB := createJobPool(h, "pool-b", 0)
+	poolA := createJobPool(h, "pool-a")
+	poolB := createJobPool(h, "pool-b")
 	runnerA := joinPoolRunner(h, client, poolA, "builder-a")
 	runnerB := joinPoolRunner(h, client, poolB, "builder-b")
 
@@ -248,7 +250,7 @@ func TestLoopStopsOnRetiredAndLostClaim(t *testing.T) {
 	client := &session.Client{Server: publicURL, Transport: httpTransport{h: h}, Release: "0.0.1", Now: nil}
 
 	// The pool takes the default lease; expireClaim shortens the claim.
-	poolID := createJobPool(h, "short-lease", 0)
+	poolID := createJobPool(h, "short-lease")
 	retired := joinPoolRunner(h, client, poolID, "builder-retired")
 	live := joinPoolRunner(h, client, poolID, "builder-live")
 
@@ -286,6 +288,85 @@ func TestLoopStopsOnRetiredAndLostClaim(t *testing.T) {
 
 	wantProtocolError(h, "renew after the expiry of the lease", runnerPost(h, client, live, path, nil),
 		http.StatusConflict, protocol.ErrorClaimLost)
+}
+
+// TestRenewWithAStaleFenceIsDenied checks that a claim write with a fence that
+// moved is denied with namespace.ErrFenced, and that the stored claim keeps its
+// expiry. A renewal with the new fence still extends the same claim.
+func TestRenewWithAStaleFenceIsDenied(t *testing.T) {
+	t.Parallel()
+
+	h := newRoundTripHarness(t, traceOff, dustpan.WithPublicURL(publicURL))
+	h.workspace = h.createWorkspace("web")
+
+	client := &session.Client{Server: publicURL, Transport: httpTransport{h: h}, Release: "0.0.1", Now: nil}
+
+	poolID := createJobPool(h, "fence-pool")
+	live := joinPoolRunner(h, client, poolID, "builder-fence")
+	queuePlanJob(h, "fence-pool")
+
+	resp := pollOnce(h, client, live)
+	if resp.Status != http.StatusOK {
+		t.Fatalf("poll of the live runner = %d %s, want 200", resp.Status, resp.Body)
+	}
+
+	var work protocol.Work
+
+	h.decode(string(resp.Body), &work)
+
+	st := h.cluster.Store(h.t, 0)
+	ctx := h.t.Context()
+
+	claim := durable.Claim{
+		Operation: durable.ID(work.Operation), Owner: live.id, Token: work.Token, ExpiresAt: work.ExpiresAt,
+	}
+
+	storedExpiry := func() time.Time {
+		h.t.Helper()
+
+		op, err := st.DurableOperations().Get(ctx, claim.Operation)
+		if err != nil {
+			h.t.Fatalf("read the claim of %s: %v", work.Operation, err)
+		}
+
+		return op.Claim.ExpiresAt
+	}
+
+	before := storedExpiry()
+
+	stale, err := st.GetNamespace(ctx, "acme")
+	if err != nil {
+		h.t.Fatalf("namespace acme: %v", err)
+	}
+
+	// Hostile case: the fence moves after the claim is taken, so the fence the
+	// runner holds is stale.
+	if _, err = st.BumpFailoverVersions(ctx); err != nil {
+		h.t.Fatalf("bump the fence: %v", err)
+	}
+
+	now, err := st.DatabaseNow(ctx)
+	if err != nil {
+		h.t.Fatalf("read the clock of the database: %v", err)
+	}
+
+	_, err = st.Runners().RunnerRenew(ctx, claim, stale.Fence(), runner.DefaultLease, now)
+	if !errors.Is(err, namespace.ErrFenced) {
+		h.t.Fatalf("renew with a stale fence = %v, want namespace.ErrFenced", err)
+	}
+
+	if after := storedExpiry(); !after.Equal(before) {
+		h.t.Fatalf("the denied renewal moved the claim expiry from %v to %v", before, after)
+	}
+
+	current, err := st.GetNamespace(ctx, "acme")
+	if err != nil {
+		h.t.Fatalf("namespace acme: %v", err)
+	}
+
+	if _, err = st.Runners().RunnerRenew(ctx, claim, current.Fence(), runner.DefaultLease, now); err != nil {
+		h.t.Fatalf("renew with the new fence: %v", err)
+	}
 }
 
 // TestPoolShowsTheEffectiveLease checks that a pool that sets no lease shows
