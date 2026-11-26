@@ -238,10 +238,11 @@ func TestRunnerOfAnotherPoolGetsNoWork(t *testing.T) {
 	}
 }
 
-// TestLoopStopsOnRetiredAndLostClaim checks that a retired runner key gets
-// the code retired on a poll, and that the renewal of a claim after its lease
-// expired gets the code claim-lost. Neither answer holds work.
-func TestLoopStopsOnRetiredAndLostClaim(t *testing.T) {
+// TestSingleRequestsRefuseRetiredAndLostClaim checks, with single requests and
+// no runner loop, that a retired runner key gets the code retired on a poll,
+// and that the renewal of a claim after its lease expired gets the code
+// claim-lost. Neither answer holds work.
+func TestSingleRequestsRefuseRetiredAndLostClaim(t *testing.T) {
 	t.Parallel()
 
 	h := newRoundTripHarness(t, traceOff, dustpan.WithPublicURL(publicURL))
@@ -366,6 +367,29 @@ func TestRenewWithAStaleFenceIsDenied(t *testing.T) {
 
 	if _, err = st.Runners().RunnerRenew(ctx, claim, current.Fence(), runner.DefaultLease, now); err != nil {
 		h.t.Fatalf("renew with the new fence: %v", err)
+	}
+
+	clockAfter, err := st.DatabaseNow(ctx)
+	if err != nil {
+		h.t.Fatalf("read the clock of the database: %v", err)
+	}
+
+	checkRenewedExpiry(h, now, clockAfter, storedExpiry())
+}
+
+// checkRenewedExpiry fails the test when the stored expiry is not the clock of
+// the database plus the lease of the pool. The store reads that clock again
+// inside the renewal, so the expiry lies between the two clock reads around
+// the call, plus the lease.
+func checkRenewedExpiry(h *rtHarness, clockBefore, clockAfter, stored time.Time) {
+	h.t.Helper()
+
+	lowest := clockBefore.UnixMilli() + runner.DefaultLease.Milliseconds()
+	highest := clockAfter.UnixMilli() + runner.DefaultLease.Milliseconds()
+
+	if got := stored.UnixMilli(); got < lowest || got > highest {
+		h.t.Fatalf("the renewal set the claim expiry to %d ms, want from %d to %d ms: "+
+			"the clock of the database plus the pool lease", got, lowest, highest)
 	}
 }
 

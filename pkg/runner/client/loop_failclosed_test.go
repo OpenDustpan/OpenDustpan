@@ -48,16 +48,16 @@ func loggedLoop(t *testing.T, srv *fakeServer, ticks *fakeTicks) (*client.Loop, 
 	return l, logs
 }
 
-// checkWorkStops runs l, fires one renewal of lease, and checks that the
-// cause that stopped the work matches want. The caller cancel then ends Run
+// checkWorkStops runs l, fires one renewal of the default lease, and checks that
+// the cause that stopped the work matches want. The caller cancel then ends Run
 // with nil.
-func checkWorkStops(t *testing.T, l *client.Loop, ticks *fakeTicks, lease time.Duration, want error) {
+func checkWorkStops(t *testing.T, l *client.Loop, ticks *fakeTicks, want error) {
 	t.Helper()
 
 	ctx, cancel := context.WithTimeout(t.Context(), 5*time.Second)
 	defer cancel()
 
-	go ticks.fire(ctx, t, runner.RenewEvery(lease))
+	go ticks.fire(ctx, t, runner.RenewEvery(runner.DefaultLease))
 
 	var stopped error
 
@@ -109,7 +109,7 @@ func TestLoopStopsTheWorkOnARenewalCanceled(t *testing.T) {
 	})
 	l, _ := loggedLoop(t, srv, ticks)
 
-	checkWorkStops(t, l, ticks, lease, client.ErrCanceled)
+	checkWorkStops(t, l, ticks, client.ErrCanceled)
 }
 
 func TestLoopStopsTheWorkOnARenewalWithNoExpiry(t *testing.T) {
@@ -126,7 +126,7 @@ func TestLoopStopsTheWorkOnARenewalWithNoExpiry(t *testing.T) {
 	})
 	l, logs := loggedLoop(t, srv, ticks)
 
-	checkWorkStops(t, l, ticks, lease, client.ErrInvalid)
+	checkWorkStops(t, l, ticks, client.ErrInvalid)
 
 	if !logs.has(slog.LevelWarn, refusedMessage, "the renewal has no expiry") {
 		t.Error("no log record of the renewal with no expiry")
@@ -148,7 +148,7 @@ func TestLoopFailsClosedOnAnUnknownCode(t *testing.T) {
 			})
 			l, logs := loggedLoop(t, srv, ticks)
 
-			checkWorkStops(t, l, ticks, lease, client.ErrRefused)
+			checkWorkStops(t, l, ticks, client.ErrRefused)
 
 			if !logs.has(slog.LevelWarn, refusedMessage, unknownCodeMessage) {
 				t.Error("no log record of the unknown code")

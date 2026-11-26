@@ -385,8 +385,9 @@ func TestLoopStopsTheWorkOnAClaimLeaseOutOfRange(t *testing.T) {
 	}
 }
 
-// checkClaimLeaseOutOfRange runs a claim with the lease lease. The work must
-// stop with ErrInvalid, with no renewal and a log record of the refusal.
+// checkClaimLeaseOutOfRange polls a claim with the lease lease. The poll must
+// refuse the claim with ErrInvalid: the handler must not run, no renewal is
+// sent, and a log record names the refusal.
 func checkClaimLeaseOutOfRange(t *testing.T, lease time.Duration) {
 	t.Helper()
 
@@ -405,25 +406,19 @@ func checkClaimLeaseOutOfRange(t *testing.T, lease time.Duration) {
 		t.Fatalf("New: %v", err)
 	}
 
+	// The timeout only bounds the test when the handler runs: the fake poll
+	// answers 204 after the claim, so the loop would go on until the timeout.
 	ctx, cancel := context.WithTimeout(t.Context(), 5*time.Second)
 	defer cancel()
 
-	var stopped error
-
-	err = l.Run(ctx, func(wctx context.Context, _ protocol.Work) error {
-		<-wctx.Done()
-		stopped = context.Cause(wctx)
-
+	err = l.Run(ctx, func(context.Context, protocol.Work) error {
+		t.Error("the handler ran for a claim with a lease out of range")
 		cancel()
 
 		return nil
 	})
-	if err != nil {
-		t.Fatalf("Run = %v, want nil", err)
-	}
-
-	if !errors.Is(stopped, client.ErrInvalid) {
-		t.Errorf("work stopped with %v, want ErrInvalid", stopped)
+	if !errors.Is(err, client.ErrInvalid) {
+		t.Errorf("Run = %v, want ErrInvalid", err)
 	}
 
 	// No renewal ticker with a lease of another source.

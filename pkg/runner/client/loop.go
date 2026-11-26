@@ -75,15 +75,16 @@ type Error struct {
 
 // Error returns the status, the code and the message of the answer.
 func (e *Error) Error() string {
-	return fmt.Sprintf("the server answered %d %s: %s", e.Status, e.Code, e.Message)
+	return fmt.Sprintf("the server answered %d %s: %s", e.Status, logText(e.Code), e.Message)
 }
 
-// Is matches the sentinel of the code of e.
+// Is matches the sentinel of the code of e. The code is matched as the server
+// sent it: a code with a control or format character is not a protocol code.
 func (e *Error) Is(target error) bool {
 	// A status of 500 or more is a fault of the server: the loop polls again
 	// after a backoff, whatever the code.
-	if e.Status >= statusServerError && target == ErrUnavailable {
-		return true
+	if e.Status >= statusServerError {
+		return target == ErrUnavailable
 	}
 
 	switch e.Code {
@@ -598,9 +599,11 @@ func answerError(resp session.Response) error {
 		RetryAfter: resp.RetryAfter, codeLength: 0,
 	}
 
+	// The code stays as the server sent it: Is and isProtocolCode match it
+	// exactly. Only the message is cut and cleaned, because it goes into text.
 	if json.Unmarshal(resp.Body, &body) == nil && body.Code != "" {
 		e.codeLength = len(body.Code)
-		e.Code, e.Message = logText(body.Code), logText(body.Message)
+		e.Code, e.Message = body.Code, logText(body.Message)
 	}
 
 	switch {
@@ -615,12 +618,18 @@ func answerError(resp session.Response) error {
 
 		return e
 	case resp.Status == statusTooManyRequests:
-		// A proxy in front of the server answers 429 with no protocol body.
-		e.Code = protocol.ErrorRateLimited
+		// A proxy in front of the server answers 429 with no protocol body. A
+		// body with a code keeps its code: a code that is not a protocol code
+		// is refused.
+		if e.Code == "" {
+			e.Code = protocol.ErrorRateLimited
+		}
 
 		return e
 	case resp.Status >= statusServerError:
-		e.Code = protocol.ErrorUnavailable
+		if e.Code == "" {
+			e.Code = protocol.ErrorUnavailable
+		}
 
 		return e
 	case resp.Status < statusBadRequest:
@@ -644,6 +653,11 @@ func (l *Loop) poll(ctx context.Context) (protocol.Work, bool, error) {
 	}
 
 	if aerr := answerError(resp); aerr != nil {
+		if errors.Is(aerr, ErrRefused) {
+			// Fail closed: a code that the loop does not know ends the poll with an error.
+			l.refused(ctx, protocol.PathPoll, "the code of the answer is not known", errorAttr("error", aerr))
+		}
+
 		return none, false, aerr
 	}
 
@@ -673,6 +687,16 @@ func (l *Loop) poll(ctx context.Context) (protocol.Work, bool, error) {
 		l.refused(ctx, protocol.PathPoll, "the work has no expiry", slog.String("operation", w.Operation))
 
 		return none, false, fmt.Errorf("%w: the work has no expiry", ErrInvalid)
+	}
+
+	// Defense in depth: renewals check the lease of the claim too; this check
+	// stays so that the handler never runs with a lease out of range.
+	if lease := w.Lease.Std(); lease < runner.MinLease || lease > runner.MaxLease {
+		l.refused(ctx, protocol.PathPoll, "the lease of the claim is out of range",
+			slog.String("operation", w.Operation), slog.Duration("lease", lease))
+
+		return none, false, fmt.Errorf("%w: the lease %v of the claim is not from %v to %v",
+			ErrInvalid, lease, runner.MinLease, runner.MaxLease)
 	}
 
 	return w, true, nil
@@ -722,6 +746,8 @@ func (l *Loop) renewals(
 	// The renewals use the lease of the claim only, as the server sent it.
 	// A lease outside the bounds of a pool is a hostile or broken answer: the
 	// work stops, with no lease of another source.
+	// Defense in depth: poll refuses such a claim before the handler runs; this
+	// check stays so that a renewal never uses a lease out of range.
 	lease := w.Lease.Std()
 	if lease < runner.MinLease || lease > runner.MaxLease {
 		l.refused(wctx, protocol.PathPoll, "the lease of the claim is out of range",
@@ -865,8 +891,9 @@ const maxLogText = 256
 // protocol.
 const unknownCode = "unknown"
 
-// isProtocolCode reports whether code is a code of the runner protocol: the
-// allowlist of the codes that a log record names.
+// isProtocolCode reports whether code is exactly a code of the runner protocol:
+// the allowlist of the codes that a log record names. The code is not cleaned
+// first, so a code with a control or format character is not a protocol code.
 func isProtocolCode(code string) bool {
 	switch code {
 	case protocol.ErrorInvalid, protocol.ErrorBadProof, protocol.ErrorKeyExpired, protocol.ErrorRetired,
@@ -972,8 +999,7 @@ func (l *Loop) heartbeats(ctx context.Context, stop context.CancelCauseFunc) {
 
 		resp, err := l.heartbeatAnswer(ctx, claims, free)
 		if stopsWorkOnHeartbeat(err) {
-			l.refused(ctx, protocol.PathHeartbeat, "the work stopped", errorAttr("error", err))
-			l.stopCurrentWork(err)
+			l.stopNamedClaim(ctx, claims, err)
 
 			continue
 		}
@@ -1012,15 +1038,25 @@ func (l *Loop) heartbeats(ctx context.Context, stop context.CancelCauseFunc) {
 	}
 }
 
-// stopCurrentWork stops the work that runs now, if any. The loop goes on.
-func (l *Loop) stopCurrentWork(err error) {
+// stopNamedClaim stops the work of the claim that the heartbeat named, and only
+// that claim, when it still runs. A claim that started after the heartbeat was
+// sent is not in the answer: its work goes on. The loop goes on in both cases.
+func (l *Loop) stopNamedClaim(ctx context.Context, claims []string, err error) {
 	l.mu.Lock()
-	stop := l.stopWork
+	named := len(claims) == 1 && claims[0] == l.current && l.stopWork != nil
+	if named {
+		l.stopWork(err)
+	}
 	l.mu.Unlock()
 
-	if stop != nil {
-		stop(err)
+	if named {
+		l.refused(ctx, protocol.PathHeartbeat, "the work stopped", errorAttr("error", err))
+
+		return
 	}
+
+	l.refused(ctx, protocol.PathHeartbeat, "the claim of the answer is not running: the work goes on",
+		errorAttr("error", err))
 }
 
 // applyHeartbeat stops the work that the heartbeat answer names and records

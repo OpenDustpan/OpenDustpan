@@ -251,3 +251,96 @@ func TestLoopStopsTheWorkOnAHeartbeatWithCancel(t *testing.T) {
 		Cancel: []string{testOp}, Lost: nil, RotateKey: false, Draining: false,
 	}, client.ErrCanceled)
 }
+
+// TestLoopRefusesACodeThatIsNotExactlyAProtocolCode checks that a code with a
+// control or format character, next to a protocol code, is refused on each
+// call: the loop matches the code as the server sent it.
+func TestLoopRefusesACodeThatIsNotExactlyAProtocolCode(t *testing.T) {
+	t.Parallel()
+
+	for _, code := range hostileCodes() {
+		t.Run("poll "+strconv.Quote(code), func(t *testing.T) {
+			t.Parallel()
+
+			checkHostilePoll(t, code)
+		})
+
+		t.Run("renew "+strconv.Quote(code), func(t *testing.T) {
+			t.Parallel()
+
+			checkHostileRenew(t, code)
+		})
+
+		t.Run("heartbeat "+strconv.Quote(code), func(t *testing.T) {
+			t.Parallel()
+
+			checkHostileHeartbeat(t, code)
+		})
+	}
+}
+
+// hostileCodes returns codes that are each a protocol code with a control or
+// format character added. The loop refuses each of them as an unknown code.
+func hostileCodes() []string {
+	return []string{"rate-limited\r", "bad-proof" + string(rune(0x200b)), "claim-lost\n"}
+}
+
+// checkHostilePoll checks that a poll answered with code is refused as a code
+// that the loop does not know.
+func checkHostilePoll(t *testing.T, code string) {
+	t.Helper()
+
+	srv := newFakeServer(map[string][]answer{protocol.PathPoll: {refusal(http.StatusBadRequest, code, 0)}})
+
+	logs, err := runRefused(t, srv)
+	if !errors.Is(err, client.ErrRefused) {
+		t.Errorf("Run = %v, want ErrRefused", err)
+	}
+
+	if !logs.hasAttrs(refusedMessage, map[string]string{"error.code": "unknown"}) {
+		t.Error("no refusal record with the code unknown")
+	}
+}
+
+// checkHostileRenew checks that a renewal answered with code stops the work as
+// a code that the loop does not know.
+func checkHostileRenew(t *testing.T, code string) {
+	t.Helper()
+
+	lease := runner.DefaultLease
+	ticks := newFakeTicks()
+	srv := newFakeServer(map[string][]answer{
+		protocol.PathPoll:       {ok(work(lease)), noWork()},
+		protocol.PathClaimRenew: {refusal(http.StatusBadRequest, code, 0)},
+	})
+	l, logs := loggedLoop(t, srv, ticks)
+
+	checkWorkStops(t, l, ticks, client.ErrRefused)
+
+	if !logs.hasAttrs(refusedMessage, map[string]string{"error.code": "unknown"}) {
+		t.Error("no refusal record with the code unknown")
+	}
+}
+
+// checkHostileHeartbeat checks that a heartbeat answered with code ends the
+// loop as a code that the loop does not know.
+func checkHostileHeartbeat(t *testing.T, code string) {
+	t.Helper()
+
+	ticks := newFakeTicks()
+	srv := newFakeServer(map[string][]answer{
+		protocol.PathPoll:      {noWork()},
+		protocol.PathHeartbeat: {refusal(http.StatusBadRequest, code, 0)},
+	})
+	l, logs := loggedLoop(t, srv, ticks)
+
+	go ticks.fire(t.Context(), t, runner.HeartbeatEvery)
+
+	if res := boundedRun(t, l); !errors.Is(res.run, client.ErrRefused) {
+		t.Errorf("Run = %v, want ErrRefused", res.run)
+	}
+
+	if !logs.hasAttrs(refusedMessage, map[string]string{"error.code": "unknown"}) {
+		t.Error("no refusal record with the code unknown")
+	}
+}
