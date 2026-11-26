@@ -93,8 +93,8 @@ func readOptionalWorkflow(read func(string) ([]byte, error), path string) ([]byt
 }
 
 // releaseWorkflowSources returns each patched release workflow file that
-// the checker reads in full. The operator rule keeps the workflow change in
-// .github-workflows-staging/ until a person moves it into .github/workflows/.
+// the checker reads in full. The staged copy in .github-workflows-staging/
+// holds the patched workflow until it moves to .github/workflows/.
 func releaseWorkflowSources(t *testing.T) []workflowSource {
 	t.Helper()
 
@@ -342,6 +342,38 @@ func checkWorkflowFilePermissions(path string, doc *yaml.Node) []string {
 	return []string{
 		"workflow " + path + ": permissions: the file has no top-level permissions key, want an empty mapping",
 	}
+}
+
+// allowedWorkflowTopLevelKeys answers the allowlist of the top-level keys of
+// the workflow. A YAML comment is not a key, so a comment stays allowed.
+func allowedWorkflowTopLevelKeys() []string {
+	return []string{"name", "on", "permissions", "env", "jobs"}
+}
+
+// checkWorkflowTopLevelKeys answers a finding for each top-level key outside
+// the allowlist, such as defaults. It reads the YAML node, not a decoded
+// struct, because a decoded struct drops an unknown top-level key.
+func checkWorkflowTopLevelKeys(path string, doc *yaml.Node) []string {
+	top := doc
+	if top.Kind == yaml.DocumentNode && len(top.Content) > 0 {
+		top = top.Content[0]
+	}
+
+	if top.Kind != yaml.MappingNode {
+		return []string{"workflow " + path + ": top-level keys: the file is not a mapping"}
+	}
+
+	var out []string
+
+	for i := 0; i+1 < len(top.Content); i += 2 {
+		key := top.Content[i].Value
+		if !slices.Contains(allowedWorkflowTopLevelKeys(), key) {
+			out = append(out, "workflow "+path+": top-level keys: the file holds the key "+
+				key+", which the allowlist refuses")
+		}
+	}
+
+	return out
 }
 
 // allowedWorkflowJobKeys answers the allowlist of the keys of a job.
@@ -614,10 +646,25 @@ func checkWorkflowPins(raw string) []string {
 	return out
 }
 
+// secretWord matches the word secrets in any expression: the dot form
+// ${{ secrets.NAME }}, the index form ${{ secrets['NAME'] }} and a call such
+// as ${{ toJSON(secrets) }}. The word boundaries keep a longer word from a
+// match.
+func secretWord() *regexp.Regexp {
+	return regexp.MustCompile(`\bsecrets\b`)
+}
+
+// readsSecret answers whether one value is an expression that reads a secret.
+func readsSecret(v any) bool {
+	s, ok := v.(string)
+
+	return ok && secretWord().MatchString(s)
+}
+
 // envReadsSecrets answers whether an env map reads a secret.
 func envReadsSecrets(env map[string]any) bool {
 	for _, v := range env {
-		if s, ok := v.(string); ok && strings.Contains(s, "secrets.") {
+		if readsSecret(v) {
 			return true
 		}
 	}
@@ -627,7 +674,7 @@ func envReadsSecrets(env map[string]any) bool {
 
 // stepReadsSecrets answers whether a step reads a secret.
 func stepReadsSecrets(step workflowStep) bool {
-	if strings.Contains(step.Run, "secrets.") {
+	if secretWord().MatchString(step.Run) {
 		return true
 	}
 
@@ -636,7 +683,7 @@ func stepReadsSecrets(step workflowStep) bool {
 	}
 
 	for _, v := range step.With {
-		if s, ok := v.(string); ok && strings.Contains(s, "secrets.") {
+		if readsSecret(v) {
 			return true
 		}
 	}
@@ -818,6 +865,8 @@ func expectedActorStep() workflowStep {
 		"ACTOR": "${{ github.actor }}",
 		"REPO":  "${{ github.repository }}",
 	}
+	// The key is split so that gosec G101 does not flag this test fixture as
+	// a hardcoded credential: the value is a workflow expression, not a token.
 	env["GH_"+"TOKEN"] = "${{ secrets.GITHUB_TOKEN }}"
 
 	return workflowStep{
@@ -1054,7 +1103,7 @@ func checkWorkflowChecksum(wf workflowFile) []string {
 // pins, the version as data and the authorization at the point of use. The
 // path names the file checked: file-level findings read "workflow <path>:",
 // job findings name the job and the item.
-func releaseWorkflowFindings(path string, raw []byte) []string {
+func releaseWorkflowFindingsAt(path string, raw []byte) []string {
 	var wf workflowFile
 	if err := yaml.Unmarshal(raw, &wf); err != nil {
 		return []string{"workflow " + path + ": the release workflow does not parse: " + err.Error()}
@@ -1069,6 +1118,7 @@ func releaseWorkflowFindings(path string, raw []byte) []string {
 
 	findings = append(findings, checkWorkflowTriggers(path, wf)...)
 	findings = append(findings, checkWorkflowFilePermissions(path, &doc)...)
+	findings = append(findings, checkWorkflowTopLevelKeys(path, &doc)...)
 	findings = append(findings, checkWorkflowKeyAllowlist(&doc)...)
 	findings = append(findings, checkWorkflowJobPresence(wf)...)
 
@@ -1097,6 +1147,12 @@ func releaseWorkflowFindings(path string, raw []byte) []string {
 	findings = append(findings, checkWorkflowChecksum(wf)...)
 
 	return findings
+}
+
+// releaseWorkflowFindings checks raw as the live release workflow. A caller
+// that checks another file uses releaseWorkflowFindingsAt.
+func releaseWorkflowFindings(raw []byte) []string {
+	return releaseWorkflowFindingsAt(liveWorkflowPath, raw)
 }
 
 // checkArchiveJobReadsNoSecret fails the test when an archive job reads a
@@ -1167,7 +1223,7 @@ func releaseWorkflowFindingsForSources(sources []workflowSource) []string {
 	all := make([]string, 0, len(sources))
 
 	for _, src := range sources {
-		all = append(all, releaseWorkflowFindings(src.path, src.raw)...)
+		all = append(all, releaseWorkflowFindingsAt(src.path, src.raw)...)
 	}
 
 	return all
@@ -1237,7 +1293,7 @@ func TestReleaseWorkflowArchiveJobsChecksEverySource(t *testing.T) {
 
 	cleanPath, clean := releaseWorkflowBytes(t)
 
-	if findings := releaseWorkflowFindings(cleanPath, clean); len(findings) != 0 {
+	if findings := releaseWorkflowFindingsAt(cleanPath, clean); len(findings) != 0 {
 		t.Fatalf(
 			"the clean workflow has %d findings:\n%s",
 			len(findings),
@@ -1250,8 +1306,7 @@ func TestReleaseWorkflowArchiveJobsChecksEverySource(t *testing.T) {
 		t.Fatal("the every-source row changed nothing: the weak guard equals the clean guard")
 	}
 
-	weakPath := liveWorkflowPath
-	weakFindings := releaseWorkflowFindings(weakPath, []byte(weakRaw))
+	weakFindings := releaseWorkflowFindings([]byte(weakRaw))
 
 	foundWeak := false
 
@@ -1270,7 +1325,7 @@ func TestReleaseWorkflowArchiveJobsChecksEverySource(t *testing.T) {
 
 	sources := []workflowSource{
 		{path: cleanPath, raw: clean},
-		{path: weakPath, raw: []byte(weakRaw)},
+		{path: liveWorkflowPath, raw: []byte(weakRaw)},
 	}
 
 	// The clean first source alone raises no error.
@@ -1360,6 +1415,32 @@ func workflowGuardTriggerMutations(guard string) []workflowMutation {
 					s,
 					"  push:\n    tags:\n      - \"v*\"",
 					"  push:\n    tags:\n      - \"v*\"\n    branches:\n      - main",
+					1,
+				)
+			},
+		},
+		{
+			"on push with an extra key",
+			"workflow",
+			"extra key",
+			func(s string) string {
+				return strings.Replace(
+					s,
+					"  push:\n    tags:\n      - \"v*\"",
+					"  push:\n    tags:\n      - \"v*\"\n    paths:\n      - \"**\"",
+					1,
+				)
+			},
+		},
+		{
+			"on push with an extra tag",
+			"workflow",
+			"tags is not",
+			func(s string) string {
+				return strings.Replace(
+					s,
+					"  push:\n    tags:\n      - \"v*\"",
+					"  push:\n    tags:\n      - \"v*\"\n      - latest",
 					1,
 				)
 			},
@@ -1588,6 +1669,19 @@ func workflowPinRunMutations() []workflowMutation {
 			},
 		},
 		{
+			"a checkout with persist-credentials as the string false",
+			"archives-build",
+			"persist-credentials",
+			func(s string) string {
+				return strings.Replace(
+					s,
+					"          persist-credentials: false",
+					"          persist-credentials: \"false\"",
+					1,
+				)
+			},
+		},
+		{
 			"a publish checkout with no persist-credentials false",
 			"publish",
 			"persist-credentials",
@@ -1796,8 +1890,10 @@ func moreWorkflowMutations() []workflowMutation {
 }
 
 // securityReviewMutations returns the hostile copies of the staged file from
-// the security review: a step "if" or "continue-on-error", an actor env value,
-// a job-level secret, a file-level secret, a step guard and an early exit.
+// the security review: a step "if" or "continue-on-error", a job
+// "continue-on-error", an actor env value, a job-level secret, a file-level
+// secret, a step guard, an early exit, the index and toJSON forms of a secret
+// at each level and a top-level defaults key.
 func securityReviewMutations() []workflowMutation {
 	return []workflowMutation{
 		{
@@ -1838,6 +1934,16 @@ func securityReviewMutations() []workflowMutation {
 				return replaceInJob(s, "archives-build",
 					"      - name: "+tagStepName+"\n",
 					"      - name: "+tagStepName+"\n        continue-on-error: true\n")
+			},
+		},
+		{
+			"continue-on-error true on the archives-build job",
+			"archives-build",
+			"job keys",
+			func(s string) string {
+				return replaceInJob(s, "archives-build",
+					"    runs-on: ubuntu-26.04\n",
+					"    runs-on: ubuntu-26.04\n    continue-on-error: true\n")
 			},
 		},
 		{
@@ -1894,6 +2000,113 @@ func securityReviewMutations() []workflowMutation {
 					"          exit 0\n"+`          PERMISSION="$(gh api`)
 			},
 		},
+		{
+			"B6 the index form in a step env",
+			"archives-build",
+			"secrets",
+			func(s string) string {
+				return replaceInJob(s, "archives-build",
+					"          RELEASE_OUT: ${{ runner.temp }}/release\n",
+					"          RELEASE_OUT: ${{ runner.temp }}/release\n"+
+						"          TOKEN: ${{ secrets['DOCKERHUB_TOKEN'] }}\n")
+			},
+		},
+		{
+			"B6 toJSON(secrets) in a step env",
+			"archives-build",
+			"secrets",
+			func(s string) string {
+				return replaceInJob(s, "archives-build",
+					"          RELEASE_OUT: ${{ runner.temp }}/release\n",
+					"          RELEASE_OUT: ${{ runner.temp }}/release\n"+
+						"          TOKEN: ${{ toJSON(secrets) }}\n")
+			},
+		},
+		{
+			"B6 the index form in a step with",
+			"archives-build",
+			"secrets",
+			func(s string) string {
+				return replaceInJob(s, "archives-build",
+					"          name: release-archives\n",
+					"          name: release-archives\n"+
+						"          token: ${{ secrets['DOCKERHUB_TOKEN'] }}\n")
+			},
+		},
+		{
+			"B6 toJSON(secrets) in a step with",
+			"archives-build",
+			"secrets",
+			func(s string) string {
+				return replaceInJob(s, "archives-build",
+					"          name: release-archives\n",
+					"          name: release-archives\n"+
+						"          token: ${{ toJSON(secrets) }}\n")
+			},
+		},
+		{
+			"B6 the index form in a job env",
+			"archives-build",
+			"secrets",
+			func(s string) string {
+				return replaceInJob(s, "archives-build",
+					"    runs-on: ubuntu-26.04\n",
+					"    runs-on: ubuntu-26.04\n    env:\n"+
+						"      TOKEN: ${{ secrets['DOCKERHUB_TOKEN'] }}\n")
+			},
+		},
+		{
+			"B6 toJSON(secrets) in a job env",
+			"archives-build",
+			"secrets",
+			func(s string) string {
+				return replaceInJob(s, "archives-build",
+					"    runs-on: ubuntu-26.04\n",
+					"    runs-on: ubuntu-26.04\n    env:\n"+
+						"      TOKEN: ${{ toJSON(secrets) }}\n")
+			},
+		},
+		{
+			"B6 the index form in the file env",
+			"workflow",
+			"secrets",
+			func(s string) string {
+				return strings.Replace(
+					s,
+					"  HUB_IMAGE: docker.io/opendustpan/opendustpan\n",
+					"  HUB_IMAGE: docker.io/opendustpan/opendustpan\n"+
+						"  DOCKERHUB_TOKEN: ${{ secrets['DOCKERHUB_TOKEN'] }}\n",
+					1,
+				)
+			},
+		},
+		{
+			"B6 toJSON(secrets) in the file env",
+			"workflow",
+			"secrets",
+			func(s string) string {
+				return strings.Replace(
+					s,
+					"  HUB_IMAGE: docker.io/opendustpan/opendustpan\n",
+					"  HUB_IMAGE: docker.io/opendustpan/opendustpan\n"+
+						"  DOCKERHUB_TOKEN: ${{ toJSON(secrets) }}\n",
+					1,
+				)
+			},
+		},
+		{
+			"B6 a top-level defaults key",
+			"workflow",
+			"top-level keys",
+			func(s string) string {
+				return strings.Replace(
+					s,
+					"permissions: {}\n",
+					"permissions: {}\ndefaults:\n  run:\n    shell: bash\n",
+					1,
+				)
+			},
+		},
 	}
 }
 
@@ -1943,7 +2156,7 @@ func checkOneMutation(t *testing.T, path, good string, tt workflowMutation) {
 		t.Fatalf("the mutation %q changed nothing", tt.name)
 	}
 
-	findings := releaseWorkflowFindings(path, []byte(mutated))
+	findings := releaseWorkflowFindingsAt(path, []byte(mutated))
 	if len(findings) == 0 {
 		t.Fatalf("the mutation %q yields no finding", tt.name)
 	}
@@ -2078,7 +2291,7 @@ func checkSourceGuardCase(t *testing.T, tc sourceGuardCase) {
 			t.Fatalf("file %d: want path %q, got %q", i, want.path, src.path)
 		}
 
-		findings := releaseWorkflowFindings(src.path, src.raw)
+		findings := releaseWorkflowFindingsAt(src.path, src.raw)
 
 		if got := slices.Contains(findings, missing); got != want.missingJob {
 			t.Errorf("%s: want missing-job finding %t, got %t", src.path, want.missingJob, got)
