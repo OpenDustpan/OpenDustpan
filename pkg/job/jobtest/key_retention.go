@@ -15,8 +15,8 @@ import (
 const keyExpiredAction = "job:key-expired"
 
 // keyRetentionCases returns the cases of the retention of a job-start key: a
-// key names its job for MinRetention from the creation of the job. Each case
-// needs a harness with AgeJob.
+// key names its job for MinRetention from the creation of the job. The cases
+// that age a job need a harness with AgeJob.
 func keyRetentionCases() []suiteCase {
 	return []suiteCase{
 		{"a key of a job inside the retention age replays", testKeyInsideRetentionReplays},
@@ -28,6 +28,11 @@ func keyRetentionCases() []suiteCase {
 		{"another request under an expired key starts a new job", testExpiredKeyWithAnotherRequestStarts},
 		{"a retry after the new job replays the new job", testRetryAfterNewJobReplays},
 		{"a failed start under an expired key keeps the old key and writes no entry", testFailedExpiredStartKeepsKey},
+		{"a key of a job that moves and cancels replays the first job", testKeyThroughTransitionsReplays},
+		{
+			"a waiting job past the retention approves and dispatches after a start cleared its key",
+			testWaitingJobAfterKeyClearApproves,
+		},
 	}
 }
 
@@ -169,6 +174,85 @@ func testRetryAfterNewJobReplays(t *testing.T, h Harness) {
 	if err != nil || created || again.ID != next.ID {
 		t.Fatalf("the retry after the new job = %s, created %v, error %v; want the new job %s", again.ID, created,
 			err, next.ID)
+	}
+}
+
+// testKeyThroughTransitionsReplays proves that the transitions of a job never
+// write its idempotency key: a job that dispatches, runs and cancels keeps its
+// key, so a start with that key inside the retention replays the first job.
+func testKeyThroughTransitionsReplays(t *testing.T, h Harness) {
+	t.Helper()
+
+	f := setUp(t, h)
+	first := create(t, h, f, newJob(f.unit, job.OperationRefresh, "start-moves"), nil)
+
+	dispatched := apply(t, h, f, dispatch(&first))
+	claimOp(t, h, "runner-1", job.RunnerKind(dispatched.Spec.Pool), time.Minute)
+	running := claimed(t, h, f, &dispatched, "runner-1")
+
+	canceled := apply(t, h, f, change(&running, job.EventCancel))
+	if canceled.State != job.StateCanceling {
+		t.Fatalf("cancel of the running job = %s, want canceling", canceled.State)
+	}
+
+	again, created, err := h.Jobs.Create(t.Context(), *newJob(f.unit, job.OperationRefresh, "start-moves"), nil,
+		f.fence, []audit.Entry{entry(f.unit, job.ActionUnitRunApply)})
+	if err != nil || created || again.ID != first.ID {
+		t.Fatalf("Create after the cancel = %s, created %v, error %v; want the first job %s", again.ID, created,
+			err, first.ID)
+	}
+
+	if again.IdempotencyKey != "start-moves" {
+		t.Fatalf("the replayed job holds key %q, want start-moves", again.IdempotencyKey)
+	}
+
+	entries := allEntries(t, h, f)
+	for i := range entries {
+		if entries[i].Action == keyExpiredAction {
+			t.Fatalf("the start after the cancel wrote a %s entry", keyExpiredAction)
+		}
+	}
+}
+
+// testWaitingJobAfterKeyClearApproves proves that the clear of the expired key
+// of a waiting job leaves the job usable: it takes its approvals and
+// dispatches.
+func testWaitingJobAfterKeyClearApproves(t *testing.T, h Harness) {
+	t.Helper()
+
+	requireAgeJob(t, h)
+	f := setUp(t, h)
+	waiting := awaitingApprovalKeyed(t, h, f, job.OperationApply, "start-waiting")
+	if waiting.State != job.StateAwaitingApproval {
+		t.Fatalf("the waiting job = %s, want awaiting-approval", waiting.State)
+	}
+
+	h.AgeJob(t, waiting.ID, idempotency.MinRetention+time.Millisecond)
+
+	next := create(t, h, f, newJob(f.unit, job.OperationApply, "start-waiting"), nil)
+	if next.ID == waiting.ID {
+		t.Fatal("the expired start answered the waiting job")
+	}
+
+	cleared, err := h.Jobs.Get(t.Context(), waiting.ID)
+	if err != nil {
+		t.Fatalf("Get the waiting job: %v", err)
+	}
+
+	if cleared.IdempotencyKey != "" {
+		t.Fatalf("the waiting job holds key %q after the clear, want no key", cleared.IdempotencyKey)
+	}
+
+	first := apply(t, h, f, verdict(&cleared, "cy", job.VerdictApprove, job.EventApprovalRecorded))
+	second := apply(t, h, f, verdict(&first, "di", job.VerdictApprove, job.EventApproved))
+	if second.State != job.StateQueued {
+		t.Fatalf("the waiting job after its approvals = %s, want queued", second.State)
+	}
+
+	dispatched := apply(t, h, f, dispatch(&second))
+	if dispatched.State != job.StateDispatched || dispatched.Phases[second.Current].Operation == "" {
+		t.Fatalf("the dispatched job = %s, operation %q; want dispatched with an operation", dispatched.State,
+			dispatched.Phases[second.Current].Operation)
 	}
 }
 

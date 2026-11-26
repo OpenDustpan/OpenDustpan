@@ -614,7 +614,10 @@ func clearExpiredKey(ctx context.Context, tx Tx, old *job.Job, now time.Time, e 
 		)
 	}
 
-	entries := keyExpiredEntries(e, old, now)
+	entries, err := keyExpiredEntries(e, old, now)
+	if err != nil {
+		return err
+	}
 
 	// Defense in depth: AppendAudit validates the entry too; this check stays
 	// so that the key is not cleared when an adapter appends the entry
@@ -627,7 +630,7 @@ func clearExpiredKey(ctx context.Context, tx Tx, old *job.Job, now time.Time, e 
 	old.IdempotencyKey, old.Version = "", prev+1
 	old.UpdatedAt = nextUpdateAt(now, old.UpdatedAt)
 
-	if err := update(ctx, tx, old, prev); err != nil {
+	if err := updateClearingKey(ctx, tx, old, prev); err != nil {
 		if errors.Is(err, job.ErrConflict) {
 			return ErrKeyIndex
 		}
@@ -640,9 +643,21 @@ func clearExpiredKey(ctx context.Context, tx Tx, old *job.Job, now time.Time, e 
 
 // keyExpiredEntries returns the audit entry of the clear of the key of the
 // expired job old: it has the actor fields of the entry of the new start, the
-// unit and the ID of old, and the reason for the clear. clearExpiredKey
-// refuses a start with no entry, so e holds at least one.
-func keyExpiredEntries(e []audit.Entry, old *job.Job, now time.Time) []audit.Entry {
+// unit and the ID of old, and the reason for the clear. It returns
+// audit.ErrInvalidEntry when the start gives no entry, so that a caller that
+// clears a key cannot write no record.
+func keyExpiredEntries(e []audit.Entry, old *job.Job, now time.Time) ([]audit.Entry, error) {
+	// Defense in depth: clearExpiredKey refuses a start with no entry too;
+	// this check stays so that a new caller cannot clear a key with no
+	// record.
+	if len(e) == 0 {
+		return nil, fmt.Errorf(
+			"%w: the start gives no audit entry for the clear of the key of job %s",
+			audit.ErrInvalidEntry,
+			old.ID,
+		)
+	}
+
 	start := e[0]
 	unit := old.Spec.Unit
 
@@ -675,7 +690,7 @@ func keyExpiredEntries(e []audit.Entry, old *job.Job, now time.Time) []audit.Ent
 		Origin:        nil,
 	}
 
-	return []audit.Entry{entry}
+	return []audit.Entry{entry}, nil
 }
 
 // sameSpec reports whether two specs encode to the same JSON.
@@ -708,13 +723,33 @@ func insert(ctx context.Context, tx Tx, j *job.Job) error {
 	return err
 }
 
-// update replaces the row of version prev with j.
+// update replaces the row of version prev with j. It never sets or changes
+// the idempotency key of the row.
 func update(ctx context.Context, tx CloseTx, j *job.Job, prev int64) error {
 	r, err := rowOf(j)
 	if err != nil {
 		return err
 	}
 
+	return updateRow(ctx, tx, r, prev)
+}
+
+// updateClearingKey replaces the row of version prev with j and clears the
+// stored idempotency key. Only clearExpiredKey calls it.
+func updateClearingKey(ctx context.Context, tx CloseTx, j *job.Job, prev int64) error {
+	r, err := rowOf(j)
+	if err != nil {
+		return err
+	}
+
+	r.MarkClearKey()
+
+	return updateRow(ctx, tx, r, prev)
+}
+
+// updateRow replaces the row of version prev with r. It clears the stored key
+// only for a row that carries the clear signal.
+func updateRow(ctx context.Context, tx CloseTx, r Row, prev int64) error {
 	ok, err := tx.UpdateJob(ctx, r, prev)
 	if errors.Is(err, ErrHolderIndex) {
 		return fmt.Errorf("%w: %w", job.ErrUnitBusy, err)
@@ -741,8 +776,8 @@ func rowOf(j *job.Job) (Row, error) {
 	r := Row{
 		ID: j.ID, Namespace: j.Spec.Unit.Namespace(), NamespaceID: j.NamespaceID, UnitID: j.Spec.Unit.UnitID(), Seq: 0,
 		State: j.State, Wait: j.Wait, Phase: j.Current, Changes: false, Operation: "", Key: j.IdempotencyKey,
-		Version: j.Version, Body: body, CreatedMs: j.CreatedAt.UnixMilli(), UpdatedMs: j.UpdatedAt.UnixMilli(),
-		StateChangedMs: j.StateChangedAt.UnixMilli(),
+		clearKey: false, Version: j.Version, Body: body, CreatedMs: j.CreatedAt.UnixMilli(),
+		UpdatedMs: j.UpdatedAt.UnixMilli(), StateChangedMs: j.StateChangedAt.UnixMilli(),
 	}
 
 	if j.Current < len(j.Phases) {

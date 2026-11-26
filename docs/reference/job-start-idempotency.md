@@ -9,7 +9,7 @@ The route is `POST /api/dustpan/v1/namespaces/{namespace}/jobs`. The
 
 ## Idempotency-Key retention
 
-The server keeps the record of a job start for 24 hours after the start.
+A key names its job for 24 hours after the start.
 The record is in the durable store of the installation.
 
 | Time of the retry | Result |
@@ -20,8 +20,8 @@ The record is in the durable store of the installation.
 A restart or a failover of the server does not remove the record. A retry
 within the 24 hours finds it.
 
-When a key expires, the server writes an audit entry with the action
-`job:key-expired` that names the old job.
+When a new start takes an expired key, the server writes an audit entry with
+the action `job:key-expired` that names the old job.
 
 The key belongs to the caller. The same key from another caller starts another
 job.

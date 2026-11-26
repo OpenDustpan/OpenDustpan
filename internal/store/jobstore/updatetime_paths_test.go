@@ -407,14 +407,28 @@ func (f *fakeTx) CountOpen(_ context.Context, ns namespace.Name, unitID string) 
 	return n, nil
 }
 
-// UpdateJob implements jobstore.Tx.
+// UpdateJob implements jobstore.Tx. It clears the stored key only for the
+// clear signal, as the query of an adapter does.
 func (f *fakeTx) UpdateJob(_ context.Context, r jobstore.Row, prev int64) (bool, error) {
 	cur, ok := f.rows[r.ID]
 	if !ok || cur.Version != prev {
 		return false, nil
 	}
 
-	f.rows[r.ID] = r
+	key := cur.Key
+	if r.ClearsKey() {
+		key = ""
+	}
+
+	// The stored row keeps no clear signal, as a column of an adapter does.
+	stored := jobstore.Row{
+		ID: r.ID, Namespace: r.Namespace, NamespaceID: r.NamespaceID, UnitID: r.UnitID, Seq: r.Seq,
+		State: r.State, Wait: r.Wait, Phase: r.Phase, Changes: r.Changes, Operation: r.Operation,
+		Key: key, Version: r.Version, Body: r.Body, CreatedMs: r.CreatedMs,
+		UpdatedMs: r.UpdatedMs, StateChangedMs: r.StateChangedMs,
+	}
+
+	f.rows[r.ID] = stored
 
 	return true, nil
 }

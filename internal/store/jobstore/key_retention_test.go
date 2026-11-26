@@ -425,6 +425,39 @@ func TestCreateKeyRetentionZeroValue(t *testing.T) {
 	}
 }
 
+// TestKeyExpiredEntriesRefusesNoEntry proves that the builder of the clear
+// entry fails closed when it gets no entry, so a caller that skips its own
+// guard cannot clear a key with no record.
+func TestKeyExpiredEntriesRefusesNoEntry(t *testing.T) {
+	t.Parallel()
+
+	clock := time.UnixMilli(testClockMs).UTC()
+	old := testJob(testUnit(t), clock)
+
+	tests := []struct {
+		name    string
+		entries []audit.Entry
+	}{
+		{name: "nil", entries: nil},
+		{name: "empty", entries: []audit.Entry{}},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			t.Parallel()
+
+			got, err := jobstore.BuildKeyExpiredEntries(tt.entries, &old, clock)
+			if !errors.Is(err, audit.ErrInvalidEntry) {
+				t.Fatalf("BuildKeyExpiredEntries(%s) = %v, %v; want ErrInvalidEntry", tt.name, got, err)
+			}
+
+			if got != nil {
+				t.Fatalf("BuildKeyExpiredEntries(%s) = %v, want no entry", tt.name, got)
+			}
+		})
+	}
+}
+
 // TestCreateKeyRetentionLostClear proves that a clear that finds a newer
 // version of the old row runs one more attempt, which replays the new job.
 func TestCreateKeyRetentionLostClear(t *testing.T) {
