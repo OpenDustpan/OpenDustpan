@@ -82,7 +82,7 @@ func (s *service) Approve(
 		// plan phase comes before.
 		ap.Plan = &plan
 
-		err = s.checkApproval(ctx, &j, a, gates, &ap)
+		err = s.checkApproval(ctx, &j, a, waiting{gates: gates, freshRequired: freshRequired}, &ap)
 		if err != nil {
 			return Job{}, err
 		}
@@ -91,17 +91,25 @@ func (s *service) Approve(
 	return s.record(ctx, &j, a, &ap, recordAs{action: ActionJobApprove, auth: ap.Auth, freshRequired: freshRequired})
 }
 
+// waiting holds the gates that wait for the verdict and the one read of the
+// setting freshAuthEnabled that chose them, so that each check of the verdict
+// answers from the same value.
+type waiting struct {
+	gates         []Gate
+	freshRequired bool
+}
+
 // checkApproval runs the checks that only an approval needs. ap.Plan holds the
 // binding of the caller, and stays as the binding to record.
-func (s *service) checkApproval(ctx context.Context, j *Job, a Actor, gates []Gate, ap *Approval) error {
+func (s *service) checkApproval(ctx context.Context, j *Job, a Actor, w waiting, ap *Approval) error {
 	if j.Spec.Operation == OperationDestroy {
-		err := s.checkDestroyAuth(ctx, a, ap)
+		err := checkDestroyAuth(a, ap, w)
 		if err != nil {
 			return err
 		}
 	}
 
-	err := s.checkApprover(ctx, j, a, gates, ap)
+	err := s.checkApprover(ctx, j, a, w.gates, ap)
 	if err != nil {
 		return err
 	}
@@ -115,18 +123,17 @@ func (s *service) checkApproval(ctx context.Context, j *Job, a Actor, gates []Ga
 }
 
 // checkDestroyAuth checks the fresh step of the approval of a destroy, and sets
-// ap.Auth and ap.AuthAt to what the audit entry records. With the setting
-// freshAuthEnabled off, the approval needs no step and records the
-// authentication none. checkApprover still refuses an agent then.
+// ap.Auth and ap.AuthAt to what the audit entry records. w.freshRequired is
+// the one read of the setting freshAuthEnabled in Approve. With the setting
+// off, the approval needs no step and records the authentication none.
+// checkApprover still refuses an agent then.
 //
 // Defense in depth: the HTTP handler and the job store check the proof of a
 // destroy too, with the same policy. This check stays so that another caller
-// cannot skip it. It does not rely on them. A zero guard requires the step, so
-// a service without a guard fails closed.
-func (s *service) checkDestroyAuth(ctx context.Context, a Actor, ap *Approval) error {
-	// The guard returns nil only when the policy requires no step. Any error
-	// from it means that the step is required: the session proof below decides.
-	if err := s.fresh.Require(ctx, a.Principal.Subject); err == nil {
+// cannot skip it. It does not rely on them. A zero guard answers true, so a
+// service without a guard fails closed.
+func checkDestroyAuth(a Actor, ap *Approval, w waiting) error {
+	if !w.freshRequired {
 		// Defense in depth: the HTTP handler and the job store also allow only a
 		// person here. This check stays so that a service, a workload or an agent
 		// never gets the authentication none, whatever credential it holds.

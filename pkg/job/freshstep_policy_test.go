@@ -3,6 +3,7 @@ package job_test
 import (
 	"context"
 	"errors"
+	"sync/atomic"
 	"testing"
 	"time"
 
@@ -130,6 +131,30 @@ func TestDestroyApprovalFollowsTheFreshPolicy(t *testing.T) {
 
 			checkFreshOutcome(t, r, err, tc.wantErr, tc.wantAuth)
 		})
+	}
+}
+
+// TestDestroyApprovalReadsTheSettingOnce proves that one approval of a destroy
+// reads the policy once, so that the gates and the recorded authentication
+// answer from one value. The policy is off at the first read and on after it.
+// With a second read in checkDestroyAuth, the approval is refused for want of a
+// step, and the read count is 2.
+func TestDestroyApprovalReadsTheSettingOnce(t *testing.T) {
+	t.Parallel()
+
+	var reads atomic.Int32
+
+	flips := freshstep.PolicyFunc(func(context.Context) bool { return reads.Add(1) > 1 })
+
+	r := freshRig(t, flips)
+	r.seed(func(j *job.Job) { j.Spec.Operation = job.OperationDestroy })
+
+	_, err := r.svc.Approve(t.Context(), actorOf("carol"), approveID, job.VerdictApprove, r.binding(), "")
+
+	checkFreshOutcome(t, r, err, nil, "none")
+
+	if got := reads.Load(); got != 1 {
+		t.Errorf("policy reads = %d, want 1", got)
 	}
 }
 

@@ -385,6 +385,7 @@ func FreshAuthEnabledDeclaration() Declaration {
 		// "false" is a weaker change.
 		ReducesSecurity: func(old, next string) bool { return old != valueFalse && next == valueFalse },
 		Doc: "Ask a person for a fresh authentication at each step of the fresh-authentication window. " +
-			"Off lets an access token with the grant approve a destroy and make a setting weaker.",
+			"Off lets a person's access token with the grant approve a destroy, " +
+			"and lets an access token with the grant make a setting weaker.",
 	}
 }

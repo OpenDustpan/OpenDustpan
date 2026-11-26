@@ -1075,6 +1075,11 @@ func (m *memDB) checkCreateNoneKind(j *job.Job) error {
 // checkNoneProof checks an approval of a destroy with the authentication none.
 // The setting is off, so the approval carries no proof: only a person may
 // give it, and no agent and no proof time may come with it.
+//
+// This fake models the setting freshAuthEnabled off only: it reads no setting,
+// so it accepts the authentication none where the real store refuses it with
+// the setting on. The suite runs no case with auth none and the setting on.
+// The tests of internal/store/jobstore cover the store with the setting on.
 func checkNoneProof(ap *job.Approval, kind identity.Kind) error {
 	// Defense in depth: the handler and the service check the kind too; this
 	// check stays so that a direct store caller cannot skip it.
