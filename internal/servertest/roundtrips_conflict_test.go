@@ -24,8 +24,12 @@ import (
 // forgeStripClassTrips more. Each attempt takes the advisory lock of the
 // server audit scope first, so it adds serverAuditLockTrips more. The check of
 // the working break-glass accounts reads the clock and counts the live data
-// before the swap fails, which adds breakGlassFloorRetryTrips.
-const swapRetryTrips = 47 + forgeStripClassTrips + serverAuditLockTrips + breakGlassFloorRetryTrips
+// before the swap fails, which adds breakGlassFloorRetryTrips. The swap
+// decision reads the restore access setting twice (readAccessSetting and the
+// static reader, each ListSettings then GetSettingsState through
+// pkg/setting/service.go Effective/Get), so each attempt adds
+// 2*reachSettingReadTrips.
+const swapRetryTrips = 47 + forgeStripClassTrips + serverAuditLockTrips + breakGlassFloorRetryTrips + 2*reachSettingReadTrips
 
 // breakGlassFloorRetryTrips is the number of round trips of the check of the
 // working break-glass accounts in a failed attempt of the swap step: the read

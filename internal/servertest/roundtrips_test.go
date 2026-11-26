@@ -1514,7 +1514,7 @@ func (m costModel) withoutClaimReads() costModel {
 // directory exists.
 func backupModel() costModel {
 	return costModel{
-		fixed:        47 + attemptClaimTrips + reachSettingReadTrips,
+		fixed:        47 + attemptClaimTrips,
 		perTable:     3 + claimReadTrips,
 		perOther:     1,
 		perMigration: 0,
@@ -1526,12 +1526,14 @@ func backupModel() costModel {
 // a put under the directory of an attempt.
 const claimReadTrips = 4
 
-// reachSettingReadTrips is the number of round trips of one read of the
-// SettingInstallationGrantsReachNamespaces setting for each authorized
-// request: ListSettings and then GetSettingsState, the two statements of the
-// Load of the scope. The authorizer reads the value once for each decision;
-// the request cache keeps the value for the request, so a request reads it at
-// most once.
+// reachSettingReadTrips is the number of round trips of one read of a setting
+// through pkg/setting/service.go: ListSettings (Effective, :65) and then
+// GetSettingsState (Get, :54), two statements. A restore swap reads the restore
+// access setting twice in swapDecision: readAccessSetting
+// (restore_access_setting.go:139, settings_resource.go:167) and the static
+// reader (restore_access_setting.go:158, settings_resource.go:147), so one swap
+// attempt costs 2*reachSettingReadTrips. The backup path counts no settings
+// statement. No counted read comes from pkg/access.
 const reachSettingReadTrips = 2
 
 // attemptClaimTrips is the number of round trips that the reads of the claim
