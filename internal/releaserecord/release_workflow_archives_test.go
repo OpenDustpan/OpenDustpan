@@ -2,6 +2,7 @@ package releaserecord_test
 
 import (
 	"errors"
+	"fmt"
 	"io/fs"
 	"os"
 	"regexp"
@@ -811,29 +812,29 @@ func releaseWorkflowFindings(path string, raw []byte) []string {
 }
 
 // checkArchiveJobReadsNoSecret fails the test when an archive job reads a secret.
-func checkArchiveJobReadsNoSecret(t *testing.T, wf workflowFile, name string) {
-	t.Helper()
+func checkArchiveJobReadsNoSecret(tb testing.TB, wf workflowFile, name string) {
+	tb.Helper()
 
 	for _, step := range wf.Jobs[name].Steps {
 		if stepReadsSecrets(step) {
-			t.Errorf("job %s reads secrets in step %q", name, step.Name)
+			tb.Errorf("job %s reads secrets in step %q", name, step.Name)
 		}
 	}
 }
 
 // checkSameGuardAsPublish fails the test when a job guard differs from publish.
-func checkSameGuardAsPublish(t *testing.T, wf workflowFile, name string) {
-	t.Helper()
+func checkSameGuardAsPublish(tb testing.TB, wf workflowFile, name string) {
+	tb.Helper()
 
 	if wf.Jobs[name].If != wf.Jobs["publish"].If {
-		t.Errorf("job %s uses a guard text that differs from publish", name)
+		tb.Errorf("job %s uses a guard text that differs from publish", name)
 	}
 }
 
 // checkActorBeforeDownload fails the test when the draft actor step is
 // missing or runs after the download step.
-func checkActorBeforeDownload(t *testing.T, wf workflowFile) {
-	t.Helper()
+func checkActorBeforeDownload(tb testing.TB, wf workflowFile) {
+	tb.Helper()
 
 	draft := wf.Jobs["release-draft"]
 	actor := -1
@@ -850,16 +851,29 @@ func checkActorBeforeDownload(t *testing.T, wf workflowFile) {
 	}
 
 	if actor < 0 {
-		t.Error("release-draft lacks the actor step")
+		tb.Error("release-draft lacks the actor step")
 	}
 
 	if download < 0 {
-		t.Error("release-draft lacks the download step")
+		tb.Error("release-draft lacks the download step")
 	}
 
 	if actor >= 0 && download >= 0 && actor > download {
-		t.Error("release-draft runs the actor step after the download step")
+		tb.Error("release-draft runs the actor step after the download step")
 	}
+}
+
+// releaseWorkflowFindingsForSources runs releaseWorkflowFindings on every
+// source and returns the combined findings, so a weak second file cannot hide
+// behind a clean first file.
+func releaseWorkflowFindingsForSources(sources []workflowSource) []string {
+	all := make([]string, 0, len(sources))
+
+	for _, src := range sources {
+		all = append(all, releaseWorkflowFindings(src.path, src.raw)...)
+	}
+
+	return all
 }
 
 // TestReleaseWorkflowArchiveJobs checks the structure of the staged release
@@ -870,32 +884,51 @@ func checkActorBeforeDownload(t *testing.T, wf workflowFile) {
 func TestReleaseWorkflowArchiveJobs(t *testing.T) {
 	t.Parallel()
 
-	sources := releaseWorkflowSources(t)
+	checkReleaseWorkflowSources(t, releaseWorkflowSources(t))
+}
 
-	for _, src := range sources {
-		if findings := releaseWorkflowFindings(src.path, src.raw); len(findings) != 0 {
-			t.Fatalf(
-				"the release workflow has %d findings in %s:\n%s",
-				len(findings),
-				src.path,
-				strings.Join(findings, "\n"),
-			)
-		}
+// checkReleaseWorkflowSources runs every check of the archive jobs on every
+// source: the findings, the secret read, the guard text and the actor step.
+func checkReleaseWorkflowSources(tb testing.TB, sources []workflowSource) {
+	tb.Helper()
+
+	if findings := releaseWorkflowFindingsForSources(sources); len(findings) != 0 {
+		tb.Errorf(
+			"the release workflow has %d findings:\n%s",
+			len(findings),
+			strings.Join(findings, "\n"),
+		)
 	}
 
 	for _, src := range sources {
 		var wf workflowFile
 		if err := yaml.Unmarshal(src.raw, &wf); err != nil {
-			t.Fatal(err)
+			tb.Fatal(err)
 		}
 
-		checkArchiveJobReadsNoSecret(t, wf, "archives-build")
-		checkArchiveJobReadsNoSecret(t, wf, "archives-verify")
-		checkSameGuardAsPublish(t, wf, "archives-build")
-		checkSameGuardAsPublish(t, wf, "archives-verify")
-		checkSameGuardAsPublish(t, wf, "release-draft")
-		checkActorBeforeDownload(t, wf)
+		checkArchiveJobReadsNoSecret(tb, wf, "archives-build")
+		checkArchiveJobReadsNoSecret(tb, wf, "archives-verify")
+		checkSameGuardAsPublish(tb, wf, "archives-build")
+		checkSameGuardAsPublish(tb, wf, "archives-verify")
+		checkSameGuardAsPublish(tb, wf, "release-draft")
+		checkActorBeforeDownload(tb, wf)
 	}
+}
+
+// recordingTB records the errors that a check reports, so a test can assert
+// that a check finds a weak file without failing itself.
+type recordingTB struct {
+	testing.TB
+
+	messages []string
+}
+
+func (r *recordingTB) Error(args ...any) {
+	r.messages = append(r.messages, fmt.Sprint(args...))
+}
+
+func (r *recordingTB) Errorf(format string, args ...any) {
+	r.messages = append(r.messages, fmt.Sprintf(format, args...))
 }
 
 // TestReleaseWorkflowArchiveJobsChecksEverySource fails when the archive jobs
@@ -905,46 +938,68 @@ func TestReleaseWorkflowArchiveJobs(t *testing.T) {
 func TestReleaseWorkflowArchiveJobsChecksEverySource(t *testing.T) {
 	t.Parallel()
 
-	_, clean := releaseWorkflowBytes(t)
+	cleanPath, clean := releaseWorkflowBytes(t)
 
-	var cleanWf workflowFile
-	if err := yaml.Unmarshal(clean, &cleanWf); err != nil {
-		t.Fatal(err)
+	if findings := releaseWorkflowFindings(cleanPath, clean); len(findings) != 0 {
+		t.Fatalf(
+			"the clean workflow has %d findings:\n%s",
+			len(findings),
+			strings.Join(findings, "\n"),
+		)
 	}
 
-	var weakWf workflowFile
-	if err := yaml.Unmarshal(clean, &weakWf); err != nil {
-		t.Fatal(err)
-	}
-
-	draft := weakWf.Jobs["release-draft"]
-	draft.If = "github.event_name == 'push'"
-	weakWf.Jobs["release-draft"] = draft
-
-	if cleanWf.Jobs["release-draft"].If == weakWf.Jobs["release-draft"].If {
+	weakRaw := replaceInJob(string(clean), "release-draft", expectedReleaseGuard, "github.event_name == 'push'")
+	if weakRaw == string(clean) {
 		t.Fatal("the every-source row changed nothing: the weak guard equals the clean guard")
 	}
 
-	sources := []workflowFile{cleanWf, weakWf}
+	weakPath := liveWorkflowPath
+	weakFindings := releaseWorkflowFindings(weakPath, []byte(weakRaw))
 
-	checked := 0
-	weakCaught := false
+	foundWeak := false
 
-	for _, wf := range sources {
-		checked++
-
-		if wf.Jobs["release-draft"].If != wf.Jobs["publish"].If {
-			weakCaught = true
+	for _, finding := range weakFindings {
+		if strings.HasPrefix(finding, "job release-draft:") && strings.Contains(finding, "guard") {
+			foundWeak = true
 		}
 	}
 
-	if checked != len(sources) {
-		t.Fatalf("want to check %d sources, checked %d", len(sources), checked)
+	if !foundWeak {
+		t.Fatalf(
+			"the weak live file yields no guard finding:\n%s",
+			strings.Join(weakFindings, "\n"),
+		)
 	}
 
-	if !weakCaught {
-		t.Fatal(
-			"the every-source row yields no finding: a test that checks only the first source misses the weak second file",
+	sources := []workflowSource{
+		{path: cleanPath, raw: clean},
+		{path: weakPath, raw: []byte(weakRaw)},
+	}
+
+	// The clean first source alone raises no error.
+	first := &recordingTB{TB: t, messages: nil}
+	checkReleaseWorkflowSources(first, sources[:1])
+
+	if len(first.messages) != 0 {
+		t.Fatalf("the clean first source raises errors:\n%s", strings.Join(first.messages, "\n"))
+	}
+
+	// The clean-first, weak-second list must raise a release-draft guard error.
+	both := &recordingTB{TB: t, messages: nil}
+	checkReleaseWorkflowSources(both, sources)
+
+	found := false
+
+	for _, msg := range both.messages {
+		if strings.Contains(msg, "job release-draft:") && strings.Contains(msg, "guard") {
+			found = true
+		}
+	}
+
+	if !found {
+		t.Fatalf(
+			"checkReleaseWorkflowSources misses the weak second file, want a guard finding for release-draft:\n%s",
+			strings.Join(both.messages, "\n"),
 		)
 	}
 }
