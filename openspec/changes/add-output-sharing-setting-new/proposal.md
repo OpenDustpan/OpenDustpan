@@ -71,10 +71,10 @@ Where the path still costs the person time or surprises them:
 Each fact names its file, line and function on main. The change specifies only the difference.
 
 - The setting has a port, `outputshare.Settings`, with `Setting` and `SetSetting` that append the audit entry in the transaction. (`pkg/outputshare/ports.go:106`)
-- `outputshare.Store` declares Put, Get, List, Delete and Find for the rules. No adapter implements them: the SQL adapters return `outputshare.Settings` only. (`pkg/outputshare/ports.go:41`, `internal/store/sqlite/outputshare.go:23`, `internal/store/postgres/outputshare.go:24`)
+- `outputshare.Store` declares Put, Get, List, Delete and Find for the rules. The SQL adapters implement them since part 1. (`pkg/outputshare/ports.go:41`, `internal/store/sqlite/outputsharerules.go:34`, `internal/store/postgres/outputsharerules.go`)
 - The types `Rule`, `Default`, `ID`, `Placement` and their validation exist. (`pkg/outputshare/outputshare.go:181`, `:208`, `:239`)
 - The setting column and its CHECK exist in both baselines, and the backup holds the column. (`internal/store/sqlite/migrations/0168_baseline.sql:23`, `internal/store/postgres/migrations/0168_baseline.sql:799`, `pkg/backup/portable_tables.go:92`)
-- No table keeps a sharing rule. `rg -n -i "sharing_rule|output_sharing_rule" pkg/store/*/migrations` finds nothing.
+- The table `output_sharing_rules` keeps the rules since part 1. (`internal/store/sqlite/internal/db/queries.sql.go:1631`)
 - The service `Setting` and `SetSetting` check `namespace:read` and `unit:manage-sharing` and write the audit entry of the change. (`internal/outputsharesvc/outputsharesvc.go:74`, `:96`)
 - The routes `GET` and `PUT` `/api/dustpan/v1/namespaces/{namespace}/output-sharing` exist, with the body `{"newUnitDefault":"nobody"}` or `"namespace"`. (`internal/api/inventory/outputsharing.go:49`, `internal/api/inventory/routes.go:143`)
 - The action `unit:manage-sharing` has the object kinds unit, collection and namespace, and the built-in `admin` role holds it. (`pkg/identity/identity.go:226`) The actions `unit:read-access`, `collection:read-access` and `namespace:read-access` have a unit, a collection and a namespace object, and the access-review routes use them in that order. (`pkg/identity/identity.go:356`, `:353`, `:350`, `internal/api/server/review.go:307`, `:308`, `:309`)
