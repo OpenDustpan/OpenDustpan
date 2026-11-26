@@ -6,7 +6,7 @@
 
 - [x] 1.1 Cross-tool read tests with a naming rule exist in internal/outputsharesvc/checker_test.go:305 (TestCheckerDecisions). Check: the test passes on main.
 - [x] 1.2 Refusal tests exist in internal/outputsharesvc/checker_test.go:445 (TestCheckerAuditsADenialInTheProducerNamespace) and internal/outputsharesvc/reader_test.go:137 (TestReaderRefusals). Check: the tests pass on main.
-- [ ] 1.3 Add a failing test in internal/outputsharesvc/checker_test.go that reads a rule from the stored rules. Name it TestCheckerReadsStoredRules (NEW). Check: TestCheckerReadsStoredRules fails on main, passes after the fix.
+- [ ] 1.3 Add a failing test in internal/outputsharesvc/checker_test.go that reads a rule from the stored rules. Name it TestCheckerReadsStoredRules (NEW). Check: TestCheckerReadsStoredRules fails on main (main lacks NEW `TestCheckerReadsStoredRules`; the nearest test on main is internal/outputsharesvc/checker_test.go:305), passes after the fix.
 
 ## 2. Side effects (computed from main)
 
@@ -22,4 +22,4 @@
 - [ ] 3.7 SECURITY. Build the per-job-token denial rate limit in internal/outputsharesvc/checker.go (type Checker). After the limit, a denied outputs read returns 429 and writes no more audit entries until the window ends. If the audit store fails, the read fails closed with 500 and no outputs. Check: `go test -race ./internal/outputsharesvc/...` passes and a denied read past the limit returns 429.
 - [ ] 3.8 SECURITY. Add a hostile test TestCheckerDeniedReadFlood in NEW file internal/outputsharesvc/ratelimit_test.go. It sends a flood of denied reads for one job token straight to the Checker. Check: `go test -run TestCheckerDeniedReadFlood ./internal/outputsharesvc/...` fails when the rate limit is removed, and the test sees 429 after the limit and no extra audit writes.
 - [ ] 3.9 SECURITY. Add a hostile test TestCheckerAuditStoreOutage in NEW file internal/outputsharesvc/auditoutage_test.go. It makes the audit store fail on a read and on a denial, and sends both straight to the Checker. Check: `go test -run TestCheckerAuditStoreOutage ./internal/outputsharesvc/...` fails when the fail-closed guard is removed, and the test sees 500 with no outputs.
-- [ ] 3.6 Agent pre-run (human run-through in person-steps (output-sharing 3.6)): Run usability check and full check. Check: Developer follows docs/guides/output-sharing.md alone and each error names its one command; `make check` passes with zero findings. Record the transcript in the pull request body.
+- [ ] 3.6 Agent pre-run (human run-through in person-steps (output-sharing 3.6)): Run usability check and full check. Check: Developer follows docs/guides/output-sharing.md alone and each error names its one command; `make check` passes with zero findings. Confirmed by: CI (the agent runs the fast checks only). Record the transcript in the pull request body.
