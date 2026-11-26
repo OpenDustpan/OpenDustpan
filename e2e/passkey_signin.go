@@ -159,7 +159,7 @@ func seedPasskey(ctx context.Context, st namespace.Store, in *passkeySeed) error
 	}
 	person := mfa.Person{ID: principalID, Name: principalID, DisplayName: principalID}
 
-	options, err := svc.BeginRegistration(ctx, actor, person)
+	options, err := svc.BeginRegistration(ctx, &actor, person)
 	if err != nil {
 		return fmt.Errorf("begin the registration: %w", err)
 	}
@@ -174,7 +174,7 @@ func seedPasskey(ctx context.Context, st namespace.Store, in *passkeySeed) error
 		return fmt.Errorf("register: %w", err)
 	}
 
-	if _, err := svc.FinishRegistration(ctx, actor, person, "e2e-key", response); err != nil {
+	if _, err := svc.FinishRegistration(ctx, &actor, person, "e2e-key", response); err != nil {
 		return fmt.Errorf("finish the registration: %w", err)
 	}
 
