@@ -38,11 +38,15 @@ The TOTP port SHALL have one method that accepts a time step for a sign-in with 
 
 ### Requirement: restore-keeps-second-factor-safe
 
-A restore SHALL NOT make a used recovery code valid again, SHALL NOT end a lock of a TOTP factor or make a used step valid again, and SHALL leave no TOTP attempts row of a factor that the restored data does not have. A backup SHALL carry no recovery code, and a restore that replaces access SHALL empty the recovery codes and write one audit entry that names the reason.
+A restore SHALL NOT make a used recovery code valid again, SHALL NOT end a lock of a TOTP factor or make a used step valid again, and SHALL leave no TOTP attempts row of a factor that the restored data does not have. A backup SHALL carry no recovery code, and a restore that replaces access SHALL empty the recovery codes and, when it removes one or more codes, write one audit entry that names the reason. A restore that removes no recovery code SHALL write no such entry.
 
 #### Scenario: Older backup and a used recovery code
 - **WHEN** a person uses a recovery code and a restore of an older backup replaces access
 - **THEN** the code is refused and the audit log has one entry that names the removal of the recovery codes
+
+#### Scenario: Restore with no recovery code
+- **WHEN** a restore of an older backup replaces access and no recovery code exists
+- **THEN** the audit log has no entry about recovery codes
 
 #### Scenario: Restore during a lock
 - **WHEN** a TOTP factor is locked and a restore of an older backup runs

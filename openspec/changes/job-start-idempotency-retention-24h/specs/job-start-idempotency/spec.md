@@ -20,6 +20,10 @@ When a client sends a job start with an Idempotency-Key header that names a job 
 - **WHEN** the client sends the same key one millisecond more than 24 hours after the first job was created
 - **THEN** the server starts a new job, the new job holds the key, and the old job holds no key
 
+#### Scenario: The clear leaves a record
+- **WHEN** the client sends the same key more than 24 hours after the first job was created and the server clears the key of the old job
+- **THEN** the same transaction writes an audit entry with the action `job:key-expired` that names the old job, and no key is cleared with no such entry
+
 #### Scenario: Another body after 24 hours
 - **WHEN** the client sends the same key with another body more than 24 hours after the first job was created
 - **THEN** the server starts a new job and does not answer 422
@@ -34,7 +38,7 @@ When a client sends a job start with an Idempotency-Key header that names a job 
 
 #### Scenario: A failed start keeps the old key
 - **WHEN** the start with an expired key fails after the clear, for example because the unit is busy
-- **THEN** the transaction rolls back and the old job keeps its key
+- **THEN** the transaction rolls back, the old job keeps its key and no `job:key-expired` entry stays
 
 ### Requirement: Retention value
 
