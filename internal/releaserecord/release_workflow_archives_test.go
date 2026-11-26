@@ -217,34 +217,6 @@ func releaseWorkflowNeeds(v any) []string {
 	}
 }
 
-// releaseWorkflowJobForLine answers the job that holds lines[idx]: the last
-// job header at two spaces of indent after the jobs section.
-func releaseWorkflowJobForLine(lines []string, idx int) string {
-	job := "workflow"
-	header := regexp.MustCompile(`^ {2}([A-Za-z0-9_-]+):\s*$`)
-	jobsAt := -1
-
-	for i, line := range lines {
-		if line == "jobs:" {
-			jobsAt = i
-
-			break
-		}
-	}
-
-	for i := range idx + 1 {
-		if jobsAt >= 0 && i <= jobsAt {
-			continue
-		}
-
-		if m := header.FindStringSubmatch(lines[i]); m != nil {
-			job = m[1]
-		}
-	}
-
-	return job
-}
-
 // checkWorkflowPush checks that on push is exactly tags ["v*"] with no branch
 // filter and no extra key.
 func checkWorkflowPush(path string, pushMap map[string]any) []string {
@@ -602,48 +574,86 @@ func checkWorkflowJobPermissions(name string, job workflowJob) []string {
 	return nil
 }
 
-// checkWorkflowPins checks that each uses value is a full SHA with a release
-// comment. The comment is not in the parsed value, so this check reads lines.
-func checkWorkflowPins(raw string) []string {
+// checkWorkflowPins checks that every uses value of every step of every job
+// is a full 40-digit SHA with a release comment. The pin value comes from the
+// parsed steps, so a quoted uses key or a value on the next line cannot pass.
+// The comment is not part of the parsed value, so the comment check reads the
+// raw line that holds the value.
+func checkWorkflowPins(wf workflowFile, raw string) []string {
 	var out []string
 
 	lines := strings.Split(raw, "\n")
-	usesPin := regexp.MustCompile(`uses:\s*(\S+)`)
-	hex40 := regexp.MustCompile(`^[0-9a-f]{40}$`)
-	// The pin comment names a release # vX.Y.Z, that is # v[0-9]+\.[0-9]+\.[0-9]+.
-	releaseComment := regexp.MustCompile(`# v\d+\.\d+\.\d+`)
+	// claimed remembers the next raw line to read for one uses value, so a
+	// value that appears in more than one step is checked on each line that
+	// holds it.
+	claimed := make(map[string]int)
 
-	for i, line := range lines {
-		m := usesPin.FindStringSubmatch(line)
-		if m == nil {
-			continue
-		}
+	names := make([]string, 0, len(wf.Jobs))
+	for name := range wf.Jobs {
+		names = append(names, name)
+	}
 
-		job := releaseWorkflowJobForLine(lines, i)
-		ref := m[1]
-		head, pin, _ := strings.CutLast(ref, "@")
+	slices.Sort(names)
 
-		if head == "" {
-			out = append(out, "job "+job+": pins: the uses line has no pin: "+strings.TrimSpace(line))
+	for _, name := range names {
+		for _, step := range wf.Jobs[name].Steps {
+			if step.Uses == "" {
+				continue
+			}
 
-			continue
-		}
-
-		if !hex40.MatchString(pin) {
-			out = append(out, "job "+job+": pins: the pin is not a full 40-digit SHA: "+strings.TrimSpace(line))
-		}
-
-		comment := ""
-		if idx := strings.Index(line, "#"); idx >= 0 {
-			comment = line[idx:]
-		}
-
-		if !releaseComment.MatchString(comment) {
-			out = append(out, "job "+job+": pins: the pin has no release comment: "+strings.TrimSpace(line))
+			comment := pinLineComment(lines, step.Uses, claimed)
+			out = append(out, checkStepPin(name, step.Uses, comment)...)
 		}
 	}
 
 	return out
+}
+
+// checkStepPin checks one uses value against the pin rule: a full 40-digit
+// hexadecimal SHA, and a release comment on the raw line that holds the
+// value.
+func checkStepPin(job, ref, comment string) []string {
+	head, pin, _ := strings.CutLast(ref, "@")
+
+	if head == "" {
+		return []string{"job " + job + ": pins: the uses value has no pin: " + ref}
+	}
+
+	var out []string
+
+	hex40 := regexp.MustCompile(`^[0-9a-f]{40}$`)
+	if !hex40.MatchString(pin) {
+		out = append(out, "job "+job+": pins: the pin is not a full 40-digit SHA: "+ref)
+	}
+
+	// The pin comment names a release # vX.Y.Z, that is # v[0-9]+\.[0-9]+\.[0-9]+.
+	releaseComment := regexp.MustCompile(`# v\d+\.\d+\.\d+`)
+	if !releaseComment.MatchString(comment) {
+		out = append(out, "job "+job+": pins: the pin has no release comment: "+ref)
+	}
+
+	return out
+}
+
+// pinLineComment returns the text of the raw line after the uses value ref on
+// the first line that holds ref and that no earlier step claimed. It returns
+// an empty string when no line holds the value, so the caller reports a
+// missing release comment.
+func pinLineComment(lines []string, ref string, claimed map[string]int) string {
+	for i := claimed[ref]; i < len(lines); i++ {
+		idx := strings.Index(lines[i], ref)
+		if idx < 0 {
+			continue
+		}
+
+		claimed[ref] = i + 1
+
+		return lines[i][idx+len(ref):]
+	}
+
+	claimed[ref] = len(lines)
+
+	return ""
 }
 
 // secretWord matches the word secrets in any expression: the dot form
@@ -1137,7 +1147,7 @@ func releaseWorkflowFindingsAt(path string, raw []byte) []string {
 		findings = append(findings, checkWorkflowJobPermissions(name, job)...)
 	}
 
-	findings = append(findings, checkWorkflowPins(string(raw))...)
+	findings = append(findings, checkWorkflowPins(wf, string(raw))...)
 	findings = append(findings, checkWorkflowRuns(wf)...)
 	findings = append(findings, checkWorkflowEnvSecrets(path, wf)...)
 	findings = append(findings, checkWorkflowCheckouts(wf)...)
@@ -2104,6 +2114,32 @@ func securityReviewMutations() []workflowMutation {
 					"permissions: {}\n",
 					"permissions: {}\ndefaults:\n  run:\n    shell: bash\n",
 					1,
+				)
+			},
+		},
+		{
+			"B7 a quoted uses key",
+			"archives-build",
+			"pins",
+			func(s string) string {
+				return replaceInJob(
+					s,
+					"archives-build",
+					"      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1",
+					"      - \"uses\": attacker/act@main",
+				)
+			},
+		},
+		{
+			"B7 a uses value on the next line",
+			"archives-build",
+			"pins",
+			func(s string) string {
+				return replaceInJob(
+					s,
+					"archives-build",
+					"      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1",
+					"      - uses:\n          attacker/act@main",
 				)
 			},
 		},
