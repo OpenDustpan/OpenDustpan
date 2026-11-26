@@ -67,6 +67,9 @@ func TestCheckExchangeBundle(t *testing.T) {
 		{"a rule that names no bundle", func() error {
 			return trustrulestore.CheckExchangeBundle(row, rule(""), &same)
 		}, trustrule.ErrNotFound},
+		{"the row of another rule in the same bundle", func() error {
+			return trustrulestore.CheckExchangeBundle(row, ruleRow("trr-other", id, checkSPIFFEID), &same)
+		}, trustrule.ErrNotFound},
 		{"no row of the rule", func() error {
 			return trustrulestore.CheckExchangeBundle(row, zeroRow(), &same)
 		}, trustrule.ErrNotFound},

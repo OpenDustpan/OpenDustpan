@@ -331,6 +331,11 @@ func checkMtlsExchangeBundle(row *BundleRow, rule Row, x *trustrule.Exchange) er
 	switch {
 	case row == nil:
 		return fmt.Errorf("%w: the namespace has no trust bundle", trustrule.ErrNotFound)
+	// Defense in depth: RecordExchange reads the rule by its ID and the match
+	// check compares it too; this check stays so that a new caller of the
+	// bundle check cannot pass the row of another rule.
+	case rule.ID != string(x.Rule):
+		return fmt.Errorf("%w: the rule row is not the rule of the exchange", trustrule.ErrNotFound)
 	case row.ID != string(x.BundleID) || rule.BundleID != string(x.BundleID):
 		return fmt.Errorf("%w: the bundle of the exchange is not the bundle of its rule and its namespace",
 			trustrule.ErrNotFound)

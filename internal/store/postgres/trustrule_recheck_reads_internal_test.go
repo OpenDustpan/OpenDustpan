@@ -216,10 +216,23 @@ func TestRecheckExchangeHostileRowsCannotFillTheLimit(t *testing.T) {
 	cases := []struct {
 		name    string
 		twin    bool
+		decoys  []string
 		wantErr error
 	}{
-		{"the rule of the exchange alone is accepted", false, nil},
-		{"a real twin of the same bundle is refused", true, trustrule.ErrNotFound},
+		{"the rule of the exchange alone is accepted", false, nil, nil},
+		{"a real twin of the same bundle is refused", true, nil, trustrule.ErrNotFound},
+		{
+			"a real twin behind a rule of the same bundle with another SPIFFE ID is refused",
+			true,
+			[]string{"spiffe://example.org/ns/acme/sa/a-other"},
+			trustrule.ErrNotFound,
+		},
+		{
+			"a real twin behind a rule of the same bundle with a SPIFFE ID that differs by case is refused",
+			true,
+			[]string{"spiffe://example.org/ns/acme/sa/Deploy"},
+			trustrule.ErrNotFound,
+		},
 	}
 
 	base := testPostgresURL(t)
@@ -228,7 +241,7 @@ func TestRecheckExchangeHostileRowsCannotFillTheLimit(t *testing.T) {
 			t.Parallel()
 
 			s := openKeepLockStore(t, base)
-			fix := seedTrustRecheckLimitFixture(t, s)
+			fix := seedTrustRecheckLimitFixture(t, s, tc.decoys)
 			if tc.twin {
 				seedTrustRecheckRuleRow(t, s, trustRecheckRuleSpec{
 					ns: fix.fence.Namespace, worker: fix.rule.PrincipalID, name: "twin",
@@ -246,8 +259,9 @@ func TestRecheckExchangeHostileRowsCannotFillTheLimit(t *testing.T) {
 
 // seedTrustRecheckLimitFixture makes acme with its bundle, 2 hostile rules of
 // another bundle and 2 hostile rules with a NULL bundle, then the rule of the
-// exchange.
-func seedTrustRecheckLimitFixture(t *testing.T, s *Store) trustRecheckFixture {
+// exchange. A decoy is a rule of the same bundle with another SPIFFE ID. It is
+// stored before the rule of the exchange and its name sorts first.
+func seedTrustRecheckLimitFixture(t *testing.T, s *Store, decoys []string) trustRecheckFixture {
 	t.Helper()
 
 	fence, _ := seedStagedTrustNamespace(t, s, namespace.Name("acme"))
@@ -262,6 +276,13 @@ func seedTrustRecheckLimitFixture(t *testing.T, s *Store) trustRecheckFixture {
 	for i := range 2 {
 		seedTrustRecheckHostileRule(t, s, worker, fmt.Sprintf("a-hostile-%d", i), trustRecheckHostileBundle)
 		seedTrustRecheckHostileRule(t, s, worker, fmt.Sprintf("a-hostile-null-%d", i), nil)
+	}
+
+	for i, pattern := range decoys {
+		seedTrustRecheckRuleRow(t, s, trustRecheckRuleSpec{
+			ns: namespace.Name("acme"), worker: worker, name: fmt.Sprintf("a-decoy-%d", i),
+			pattern: pattern, bundle: b.ID,
+		})
 	}
 
 	spec := trustRecheckRuleSpec{
