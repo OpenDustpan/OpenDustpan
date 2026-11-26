@@ -193,7 +193,7 @@ func seedNamespaceWorkingBreakGlass(t *testing.T, st *sqlite.Store, ns namespace
 
 	grant := access.Grant{
 		CreatedAt: at, Condition: nil, Object: identity.NamespaceObject(ns), ID: "grt-" + id,
-		Role: access.RoleSiteAdministrator, CreatedBy: "admin",
+		Role: access.RoleAdmin, CreatedBy: "admin",
 		Subject: access.Subject{Kind: access.SubjectPrincipal, ID: id},
 	}
 

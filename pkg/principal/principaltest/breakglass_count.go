@@ -163,7 +163,7 @@ func countNamespaceWorking(t *testing.T, s workingBreakGlassStore, ns namespace.
 	countNamespaceBreakGlass(t, s, ns, id)
 	countPasskey(t, s, id, "pky-"+id)
 	countGrant(t, s, namespaceGrantOn("grt-"+id, ns,
-		access.Subject{Kind: access.SubjectPrincipal, ID: id}, access.RoleSiteAdministrator))
+		access.Subject{Kind: access.SubjectPrincipal, ID: id}, access.RoleAdmin))
 }
 
 // namespaceGrantOn returns a grant of an administration role on ns.

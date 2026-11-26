@@ -370,9 +370,10 @@ func breakGlassAccounts(t *testing.T, f accessFixture) []breakGlassAccountDoc {
 
 // TestBreakGlassAddRefusesHostileBody sends each hostile body to the add.
 // The handler checks the passkey before it stores the account, so a refusal
-// leaves no account. The passkey service checks the passkey too, but only
-// after the account is stored: a row whose guard is removed leaves an account
-// on the list, and fails.
+// leaves no account. The passkey service validates the passkey before the
+// store too, so this test catches a removed handler guard through the denied
+// entry on the "break-glass" object: the service writes a failure entry, not
+// a denied one.
 func TestBreakGlassAddRefusesHostileBody(t *testing.T) {
 	t.Parallel()
 

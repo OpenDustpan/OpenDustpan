@@ -95,6 +95,10 @@ func passkeyCases() []passkeyCase {
 			test: testAddBreakGlassPersonInsertFails,
 		},
 		{
+			name: "an add of a break-glass person whose subject is taken is refused and stores nothing",
+			test: testAddBreakGlassPersonSubjectTaken,
+		},
+		{
 			name: "an add of a hostile principal or passkey is refused and stores nothing",
 			test: testAddBreakGlassPersonGuards,
 		},
@@ -1097,6 +1101,33 @@ func testAddBreakGlassPersonInsertFails(t *testing.T, s PasskeyStore) {
 
 	wantEntries(t, s, principal.Ref(p.ID), 0)
 	wantEntries(t, s, passkeyObject(2), 0)
+}
+
+// testAddBreakGlassPersonSubjectTaken proves that a subject that another
+// principal holds is refused with principal.ErrAlreadyExists at the principal
+// insert, before any passkey insert: the store stores no passkey and no entry.
+func testAddBreakGlassPersonSubjectTaken(t *testing.T, s PasskeyStore) {
+	t.Helper()
+
+	p := breakGlassPrincipal()
+	mustPrincipal(t, s, principalOf("prn-2", p.Subject, principal.KindPerson))
+
+	first := passkeyOf(1, p.ID)
+
+	err := s.AddBreakGlassPerson(t.Context(), p, first,
+		entry(principal.Ref(p.ID), at(0)), entry(passkeyObject(1), at(11)))
+	wantErr(t, "add a break-glass person whose subject another principal holds", err, principal.ErrAlreadyExists)
+
+	if _, err := s.GetPrincipal(t.Context(), p.ID); !errors.Is(err, principal.ErrNotFound) {
+		t.Fatalf("principal after the refused add: err = %v, want ErrNotFound", err)
+	}
+
+	if _, err := s.PasskeyByCredentialID(t.Context(), credential(1)); !errors.Is(err, mfa.ErrNotFound) {
+		t.Fatalf("passkey after the refused add: err = %v, want ErrNotFound", err)
+	}
+
+	wantEntries(t, s, principal.Ref(p.ID), 0)
+	wantEntries(t, s, passkeyObject(1), 0)
 }
 
 // breakGlassPersonGuardCase is one hostile input of AddBreakGlassPerson.

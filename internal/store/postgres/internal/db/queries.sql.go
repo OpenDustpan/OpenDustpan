@@ -2548,7 +2548,10 @@ WHERE p.break_glass
     SELECT 1 FROM grants g
     WHERE g.object_kind = $3::text
       AND g.namespace = $1::text
-      AND g.role IN ('site-administrator', 'account-administrator')
+      AND (
+        (g.object_kind = 'installation' AND g.role IN ('site-administrator', 'account-administrator'))
+        OR (g.object_kind = 'namespace' AND g.role = 'admin')
+      )
       AND g.revoked_at_ms IS NULL
       AND g.condition IS NULL
       AND g.created_at_ms <= $2::bigint

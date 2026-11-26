@@ -533,6 +533,10 @@ func checkBreakGlassDisplayName(s string) error {
 	case len(s) > maxBreakGlassDisplayNameBytes:
 		return fmt.Errorf("%w: display name longer than %d bytes", principal.ErrInvalid, maxBreakGlassDisplayNameBytes)
 	case !utf8.ValidString(s):
+		// Defense in depth: JSON decoding yields valid UTF-8, and the
+		// allowlist at the end of this function refuses U+FFFD, which a range
+		// loop makes of an invalid byte. This check stays so that a caller
+		// that holds raw bytes cannot reach the allowlist.
 		return fmt.Errorf("%w: display name is not UTF-8", principal.ErrInvalid)
 	case strings.TrimSpace(s) != s:
 		return fmt.Errorf("%w: display name starts or ends with white space", principal.ErrInvalid)

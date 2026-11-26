@@ -229,7 +229,7 @@ func createTestNamespace(t *testing.T, svc breakGlassService, name namespace.Nam
 }
 
 // storeNamespaceWorkingBreakGlass stores an enabled local break-glass person of
-// the namespace name, with a passkey and a site-administrator grant on that
+// the namespace name, with a passkey and an admin grant on that
 // namespace, so that the count of the namespace includes it.
 func storeNamespaceWorkingBreakGlass(t *testing.T, svc breakGlassService, name namespace.Name, id string) {
 	t.Helper()
@@ -267,7 +267,7 @@ func storeNamespaceWorkingBreakGlass(t *testing.T, svc breakGlassService, name n
 
 	grant := access.Grant{
 		CreatedAt: at, Condition: nil, Object: identity.NamespaceObject(name), ID: "grt-" + id,
-		Role: access.RoleSiteAdministrator, CreatedBy: "test",
+		Role: access.RoleAdmin, CreatedBy: "test",
 		Subject: access.Subject{Kind: access.SubjectPrincipal, ID: id},
 	}
 

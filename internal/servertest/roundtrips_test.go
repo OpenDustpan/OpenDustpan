@@ -1071,8 +1071,7 @@ func requestFlows() []requestFlow {
 		}},
 		// The list reads the break-glass accounts, their passkeys and grants,
 		// and the working count. The budget of 5 is counted from the queries
-		// of the route. The operator, not this change, ran the PostgreSQL
-		// measurement.
+		// of the route; no PostgreSQL run has measured it.
 		{"break-glass list", 5, func(h *rtHarness) {
 			h.measure(func() {
 				h.call(http.MethodGet, "/api/dustpan/v1/break-glass/accounts", "", http.StatusOK)
