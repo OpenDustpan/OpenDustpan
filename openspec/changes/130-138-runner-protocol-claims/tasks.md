@@ -13,7 +13,7 @@
 - [x] 2.4 SECURITY. Add the constructor `New` with its checks in pkg/runner/client/loop.go. Check: `go build ./pkg/runner/client` passes and no code holds an expiry that the server did not send.
 - [x] 2.5 SECURITY. Add the hostile test `TestNewRejectsHostileConfig` in pkg/runner/client/loop_test.go that calls `New` with an empty key, a lease below `runner.MinLease` and a URL with another scheme. Check: the test passes and each call returns an error.
 - [x] 2.6 SECURITY. Add the hostile test `TestRunnerOfAnotherPoolGetsNoWork` in NEW internal/servertest/runner_claims_test.go. A runner of pool B polls while work waits in pool A. Check: the runner token of pool B (its runner key) polls `POST /runner/v1/poll` and the answer is 204 and the work stays queued.
-- [ ] 2.7 SECURITY. Add the hostile test `TestSingleRequestsRefuseRetiredAndLostClaim` in internal/servertest/runner_claims_test.go with a retired key and a lost claim against the existing routes. Check: the runner token (the runner key) polls `POST /runner/v1/poll` and renews `POST /runner/v1/claims/{operation}/renew`; the retired key gets `retired` (403), the renew after expiry gets `claim-lost` (409), and neither gets work.
+- [x] 2.7 SECURITY. Add the hostile test `TestSingleRequestsRefuseRetiredAndLostClaim` in internal/servertest/runner_claims_test.go with a retired key and a lost claim against the existing routes. Check: the runner token (the runner key) polls `POST /runner/v1/poll` and renews `POST /runner/v1/claims/{operation}/renew`; the retired key gets `retired` (403), the renew after expiry gets `claim-lost` (409), and neither gets work.
 
 ## 3. Side effects (computed from main)
 
