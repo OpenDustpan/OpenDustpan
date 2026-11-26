@@ -42,7 +42,7 @@ func requireAgeJob(t *testing.T, h Harness) {
 }
 
 // testKeyInsideRetentionReplays proves that a job inside the retention age
-// still answers the start with its key. The store reads the wall clock, and
+// still answers the start with its key. The store reads the database clock, and
 // the clock moves between the age and the start, so the case uses an age with
 // a margin. The exact end of the retention is a case of Retention.Expired.
 func testKeyInsideRetentionReplays(t *testing.T, h Harness) {

@@ -140,9 +140,13 @@ func TestCreateKeyRetentionClearIsAudited(t *testing.T) {
 			got.Action, got.JobID, got.Subject, got.Reason, jobstore.KeyExpiredAction, old.ID, start.Subject)
 	}
 
-	if got.Object != unit.String() || got.ObjectID != unit.UnitID() {
-		t.Errorf("clear entry names object %q with ID %q, want the unit of the old job %q with ID %q",
-			got.Object, got.ObjectID, unit.String(), unit.UnitID())
+	if got.Object != unit.String() || got.ObjectID != "" {
+		t.Errorf("clear entry names object %q with ID %q, want the unit of the old job %q with no object ID",
+			got.Object, got.ObjectID, unit.String())
+	}
+
+	if got.RequestID != "" {
+		t.Errorf("clear entry copies request %q, want none", got.RequestID)
 	}
 
 	checkClearEntryActor(t, *got, start)
@@ -157,21 +161,144 @@ func TestCreateKeyRetentionClearIsAudited(t *testing.T) {
 func checkClearEntryActor(t *testing.T, got, start audit.Entry) {
 	t.Helper()
 
+	if got.Origin != nil || got.ObjectID != "" || got.RequestID != "" {
+		t.Errorf("clear entry copies the start: origin %v, object ID %q, request %q",
+			got.Origin, got.ObjectID, got.RequestID)
+	}
+
 	for _, f := range []struct {
 		name, got, want string
 	}{
 		{"namespace", string(got.Namespace), string(start.Namespace)},
+		{"subject", got.Subject, start.Subject},
 		{"IDP subject", got.IDPSubject, start.IDPSubject},
 		{"token", got.TokenID, start.TokenID},
 		{"source IP", got.SourceIP, start.SourceIP},
 		{"user agent", got.UserAgent, start.UserAgent},
 		{"channel", string(got.Channel), string(start.Channel)},
-		{"request", got.RequestID, start.RequestID},
 		{"principal kind", got.PrincipalKind, start.PrincipalKind},
 	} {
 		if f.got != f.want {
 			t.Errorf("clear entry %s = %q, want the actor of the start %q", f.name, f.got, f.want)
 		}
+	}
+}
+
+// TestCreateKeyRetentionBreakGlassClearEntry proves that the clear of an
+// expired key writes its own entry with the actor of the start and none of the
+// other data of a break-glass start.
+func TestCreateKeyRetentionBreakGlassClearEntry(t *testing.T) {
+	t.Parallel()
+
+	clock := time.UnixMilli(testClockMs).UTC()
+	unit := testUnit(t)
+	tx := newFakeTx(clock)
+	s := jobstore.New(fakeRunner{tx: tx}, idempotency.JobStartRetention())
+
+	old := testJob(unit, clock)
+	old.ID = "job-old"
+	old.IdempotencyKey = "start-1"
+	old.CreatedAt = clock.Add(-idempotency.MinRetention - time.Millisecond)
+	tx.put(t, &old)
+
+	nextUnit, err := identity.UnitObject("opentofu", testNamespace, "other")
+	if err != nil {
+		t.Fatalf("unit object: %v", err)
+	}
+
+	nextUnit = nextUnit.WithUnitID("unt-2")
+
+	j := testJob(nextUnit, clock)
+	j.ID = "job-new"
+	j.IdempotencyKey = "start-1"
+
+	origin, err := audit.NewOrigin(audit.OriginArgs{
+		Run: "run-1", Session: "", Tool: "", ArgsDigest: "", BreakGlass: true, SecretStage: "", DelegationID: "",
+	})
+	if err != nil {
+		t.Fatalf("origin: %v", err)
+	}
+
+	start := startEntry(nextUnit, clock)
+	start.Subject = "break-glass-person"
+	start.IDPSubject, start.TokenID = "idp-1", "tok-1"
+	start.PrincipalKind = audit.PrincipalKindPerson
+	start.SourceIP, start.UserAgent, start.Channel = "192.0.2.1", "test-agent", audit.ChannelConsole
+	start.RequestID, start.ObjectID = "req-1", "unt-2"
+	start.Kind, start.Origin = audit.KindOverride, origin
+
+	if _, _, err := s.Create(t.Context(), j, nil, testFence(), []audit.Entry{start}); err != nil {
+		t.Fatalf("Create past the retention: %v", err)
+	}
+
+	var cleared []audit.Entry
+
+	for i := range tx.audits {
+		if tx.audits[i].Action == jobstore.KeyExpiredAction {
+			cleared = append(cleared, tx.audits[i])
+		}
+	}
+
+	if len(cleared) != 1 {
+		t.Fatalf("Create wrote %d job:key-expired entries, want 1", len(cleared))
+	}
+
+	got := cleared[0]
+	if got.Kind != audit.KindChange || got.Outcome != audit.OutcomeSuccess {
+		t.Errorf("clear entry kind %q and outcome %q, want %q and %q",
+			got.Kind, got.Outcome, audit.KindChange, audit.OutcomeSuccess)
+	}
+
+	checkClearEntryActor(t, got, start)
+
+	if err := got.Validate(); err != nil {
+		t.Errorf("clear entry is not valid: %v", err)
+	}
+}
+
+// TestCreateKeyRetentionClearValidatesEntry proves that an entry of the clear
+// that fails validation refuses the start before the key is cleared.
+func TestCreateKeyRetentionClearValidatesEntry(t *testing.T) {
+	t.Parallel()
+
+	clock := time.UnixMilli(testClockMs).UTC()
+	unit := testUnit(t)
+	tx := newFakeTx(clock)
+	s := jobstore.New(fakeRunner{tx: tx}, idempotency.JobStartRetention())
+
+	// The reason of the clear holds the ID of the old job, so a hidden
+	// character in that ID makes the entry of the clear invalid. A row that
+	// another version of the server wrote can hold it.
+	old := testJob(unit, clock)
+	old.ID = "job-old\u200b1"
+	old.IdempotencyKey = "start-1"
+	old.CreatedAt = clock.Add(-idempotency.MinRetention - time.Millisecond)
+	tx.put(t, &old)
+
+	j := testJob(unit, clock)
+	j.ID = "job-new"
+	j.IdempotencyKey = "start-1"
+
+	_, _, err := s.Create(t.Context(), j, nil, testFence(), []audit.Entry{startEntry(unit, clock)})
+	if !errors.Is(err, audit.ErrInvalidEntry) {
+		t.Fatalf("Create with an invalid clear entry = %v, want ErrInvalidEntry", err)
+	}
+
+	row, ok, getErr := tx.Job(t.Context(), old.ID)
+	if getErr != nil || !ok {
+		t.Fatalf("get the old job: ok %t, error %v", ok, getErr)
+	}
+
+	if row.Key != old.IdempotencyKey {
+		t.Errorf("the old job key = %q, want %q", row.Key, old.IdempotencyKey)
+	}
+
+	if len(tx.audits) != 0 {
+		t.Errorf("Create appended %d audit entries, want 0", len(tx.audits))
+	}
+
+	if _, ok, getErr := tx.Job(t.Context(), j.ID); getErr != nil || ok {
+		t.Fatalf("Create stored job %s: ok %t, error %v; want no job", j.ID, ok, getErr)
 	}
 }
 

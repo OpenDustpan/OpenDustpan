@@ -614,6 +614,15 @@ func clearExpiredKey(ctx context.Context, tx Tx, old *job.Job, now time.Time, e 
 		)
 	}
 
+	entries := keyExpiredEntries(e, old, now)
+
+	// Defense in depth: AppendAudit validates the entry too; this check stays
+	// so that the key is not cleared when an adapter appends the entry
+	// without its own check.
+	if err := entries[0].Validate(); err != nil {
+		return fmt.Errorf("validate the audit entry of the clear of the key of job %s: %w", old.ID, err)
+	}
+
 	prev := old.Version
 	old.IdempotencyKey, old.Version = "", prev+1
 	old.UpdatedAt = nextUpdateAt(now, old.UpdatedAt)
@@ -626,7 +635,7 @@ func clearExpiredKey(ctx context.Context, tx Tx, old *job.Job, now time.Time, e 
 		return err
 	}
 
-	return tx.AppendAudit(ctx, keyExpiredEntries(e, old, now))
+	return tx.AppendAudit(ctx, entries)
 }
 
 // keyExpiredEntries returns the audit entry of the clear of the key of the
@@ -654,8 +663,8 @@ func keyExpiredEntries(e []audit.Entry, old *job.Job, now time.Time) []audit.Ent
 		Channel:       start.Channel,
 		Kind:          audit.KindChange,
 		Outcome:       audit.OutcomeSuccess,
-		RequestID:     start.RequestID,
-		ObjectID:      unit.UnitID(),
+		RequestID:     "",
+		ObjectID:      "",
 		PrevHash:      "",
 		Hash:          "",
 		Sequence:      0,
@@ -663,7 +672,7 @@ func keyExpiredEntries(e []audit.Entry, old *job.Job, now time.Time) []audit.Ent
 		PrincipalKind: start.PrincipalKind,
 		JobID:         string(old.ID),
 		Reason:        fmt.Sprintf("the idempotency key of job %s is older than the key retention", old.ID),
-		Origin:        start.Origin,
+		Origin:        nil,
 	}
 
 	return []audit.Entry{entry}
