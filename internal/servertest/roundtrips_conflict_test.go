@@ -24,14 +24,24 @@ import (
 // forgeStripClassTrips more. Each attempt takes the advisory lock of the
 // server audit scope first, so it adds serverAuditLockTrips more. The check of
 // the working break-glass accounts reads the clock and counts the live data
-// before the swap fails, which adds breakGlassFloorRetryTrips.
-const swapRetryTrips = 47 + forgeStripClassTrips + serverAuditLockTrips + breakGlassFloorRetryTrips
+// before the swap fails, which adds breakGlassFloorRetryTrips. It also lists
+// the namespaces that hold a break-glass account before the swap, which adds
+// breakGlassScopeListRetryTrips.
+const swapRetryTrips = 47 + forgeStripClassTrips + serverAuditLockTrips +
+	breakGlassFloorRetryTrips + breakGlassScopeListRetryTrips
 
 // breakGlassFloorRetryTrips is the number of round trips of the check of the
 // working break-glass accounts in a failed attempt of the swap step: the read
 // of the clock and the count before the swap. The count after the swap does
 // not run.
 const breakGlassFloorRetryTrips = 2
+
+// breakGlassScopeListRetryTrips is the number of round trips of the list of
+// the namespaces that hold a break-glass account before the swap in a failed
+// attempt of the swap step: ListBreakGlassNamespaceScopes. The data of this
+// test holds no break-glass account in a namespace, so the list adds no count
+// of a namespace. The list after the swap does not run.
+const breakGlassScopeListRetryTrips = 1
 
 // sqlstateDeadlock is the SQLSTATE of a transaction that PostgreSQL ended to
 // break a deadlock.

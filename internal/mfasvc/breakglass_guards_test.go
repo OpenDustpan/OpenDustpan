@@ -165,6 +165,10 @@ func TestBreakGlassAddRefusesOtherPerson(t *testing.T) {
 		f.wantRefusal(t, "add to "+id, err, mfa.ErrNotFound, mfasvc.ActionAddRefused)
 
 		refusals := f.entries(t, mfasvc.ActionAddRefused)
+		if len(refusals) == 0 {
+			t.Fatalf("add to %s: no refusal entry", id)
+		}
+
 		if cause := refusals[0].Changes; len(cause) != 1 || cause[0].New != notBreakGlassCause {
 			t.Fatalf("add to %s: refusal changes = %+v, want the cause %q", id, cause, notBreakGlassCause)
 		}

@@ -232,6 +232,10 @@ func (e *passkeySignInEnv) signIn(
 func want(t *testing.T, what string, rec *httptest.ResponseRecorder, status int, code string) {
 	t.Helper()
 
+	if rec == nil {
+		t.Fatalf("%s: no response", what)
+	}
+
 	if rec.Code != status {
 		t.Fatalf("%s: status %d, body %s, want %d", what, rec.Code, rec.Body, status)
 	}

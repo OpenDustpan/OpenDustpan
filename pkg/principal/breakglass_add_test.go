@@ -14,6 +14,12 @@ import (
 	"opendustpan.org/opendustpan/pkg/store/storetest"
 )
 
+// breakGlassTestTime gives the fixed time of the break-glass records of the
+// tests in this file. Each record is stored an hour before it is read.
+func breakGlassTestTime() time.Time {
+	return time.Date(2026, time.November, 5, 9, 0, 0, 0, time.UTC)
+}
+
 // TestBreakGlassAddAndReport proves that the service adds a break-glass
 // account at zero working accounts, that it refuses a kind that is not a
 // person, and that the report reads the live count and the floor.
@@ -128,7 +134,7 @@ func storeWorkingBreakGlass(t *testing.T, svc breakGlassService, id string) {
 
 	ctx := t.Context()
 	storeBreakGlass(t, svc.store, id, id+"@example.com")
-	at := time.Now().Add(-time.Hour)
+	at := breakGlassTestTime().Add(-time.Hour)
 
 	key := mfa.Passkey{
 		CreatedAt: at, LastUsedAt: time.Time{}, SuspendedAt: time.Time{},
@@ -229,7 +235,7 @@ func storeNamespaceWorkingBreakGlass(t *testing.T, svc breakGlassService, name n
 	t.Helper()
 
 	ctx := t.Context()
-	at := time.Now().Add(-time.Hour)
+	at := breakGlassTestTime().Add(-time.Hour)
 	fence := namespace.Fence{Namespace: name, FailoverVersion: 1}
 
 	p := principal.Principal{
@@ -290,7 +296,7 @@ func checkBreakGlassReportDisabled(t *testing.T) {
 		t.Fatalf("working count before the disable = %d, %v; want 2", before, err)
 	}
 
-	entry := storetest.ServerChange(time.Now(), principal.Ref("prn-bg1"))
+	entry := storetest.ServerChange(breakGlassTestTime(), principal.Ref("prn-bg1"))
 	if disableErr := svc.store.DisablePrincipal(ctx, "prn-bg1", entry); disableErr != nil {
 		t.Fatalf("disable prn-bg1: %v", disableErr)
 	}

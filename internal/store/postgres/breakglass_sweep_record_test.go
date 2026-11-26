@@ -14,8 +14,8 @@ import (
 )
 
 // postgresSweepFixture holds the services over one PostgreSQL store. Its clock
-// starts the inactivity period and one hour before the real time, so a record
-// that it creates is in the past of the database clock of the sweep.
+// starts the inactivity period and one hour before a fixed date in the past, so
+// a record that it creates is in the past of the database clock of the sweep.
 type postgresSweepFixture struct {
 	principals *principal.Service
 	store      *postgres.Store
@@ -32,7 +32,7 @@ func newPostgresSweepFixture(t *testing.T) postgresSweepFixture {
 	}
 
 	store := open(t, base)
-	at := time.Now().UTC().Truncate(time.Millisecond).Add(-accesstoken.DefaultInactivity - time.Hour)
+	at := time.Date(2026, time.November, 5, 9, 0, 0, 0, time.UTC).Add(-accesstoken.DefaultInactivity - time.Hour)
 	now := func() time.Time { return at }
 
 	principals, err := principal.NewService(principal.Config{

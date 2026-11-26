@@ -24,13 +24,14 @@ func newBreakGlassFixture(t *testing.T) *fixture {
 	t.Helper()
 
 	f := newFixture(t)
+	now := f.clock.now()
 	p := principal.Principal{
-		CreatedAt: time.Now(), UpdatedAt: time.Now(), DisabledAt: time.Time{}, ID: glass, Subject: glass,
+		CreatedAt: now, UpdatedAt: now, DisabledAt: time.Time{}, ID: glass, Subject: glass,
 		DisplayName: glass, Kind: principal.KindPerson, Source: principal.SourceLocal, Namespace: "",
 		GroupCount: 0, BreakGlass: true,
 	}
 
-	if err := f.store.CreatePrincipal(t.Context(), p, base(time.Now(), principal.Ref(glass))); err != nil {
+	if err := f.store.CreatePrincipal(t.Context(), p, base(now, principal.Ref(glass))); err != nil {
 		t.Fatalf("create principal %s: %v", glass, err)
 	}
 

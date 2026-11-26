@@ -127,7 +127,7 @@ func runBreakGlassNamespaceRestoreRefusal(t *testing.T) {
 	// The live count of each namespace still holds its own two accounts: a
 	// refused restore changed no count, and the count of one namespace never
 	// held the accounts of the other.
-	at := time.Now()
+	at := breakGlassNow().Add(time.Hour)
 	for _, ns := range []namespace.Name{nsLow, nsHigh} {
 		n, err := dest.store.CountWorkingBreakGlassInNamespace(t.Context(), ns, at)
 		if err != nil || n != 2 {
@@ -136,12 +136,19 @@ func runBreakGlassNamespaceRestoreRefusal(t *testing.T) {
 	}
 }
 
+// breakGlassNow gives the fixed time of the records that the tests of this file
+// store. The tests query the counts an hour later, so that a record is created
+// before each query.
+func breakGlassNow() time.Time {
+	return time.Date(2026, time.November, 5, 9, 0, 0, 0, time.UTC)
+}
+
 // seedBreakGlassNamespace stores the namespace ns with the failover version 1.
 func seedBreakGlassNamespace(t *testing.T, st *sqlite.Store, ns namespace.Name) {
 	t.Helper()
 
 	err := st.CreateNamespace(t.Context(), namespace.Namespace{
-		ID: namespace.NewID(), CreatedAt: time.Now().UTC(), Name: ns, PrimaryInstallation: "",
+		ID: namespace.NewID(), CreatedAt: breakGlassNow(), Name: ns, PrimaryInstallation: "",
 		Overrides: namespace.Overrides{Forced: false, Unlocked: false}, FailoverVersion: 1,
 	})
 	if err != nil {
@@ -156,7 +163,7 @@ func seedNamespaceWorkingBreakGlass(t *testing.T, st *sqlite.Store, ns namespace
 	t.Helper()
 
 	ctx := t.Context()
-	at := time.Now().UTC().Truncate(time.Millisecond)
+	at := breakGlassNow()
 
 	p := principal.Principal{
 		CreatedAt: at, UpdatedAt: at, DisabledAt: time.Time{},
@@ -268,7 +275,7 @@ func runBreakGlassDisableRace(t *testing.T) {
 
 	for i, id := range ids {
 		wg.Go(func() {
-			results[i] = st.DisablePrincipal(t.Context(), id, storetest.ServerChange(time.Now(), "principal:"+id))
+			results[i] = st.DisablePrincipal(t.Context(), id, storetest.ServerChange(breakGlassNow(), "principal:"+id))
 		})
 	}
 
@@ -290,7 +297,7 @@ func runBreakGlassDisableRace(t *testing.T) {
 		t.Fatalf("%d of 2 disables were refused, want 1", refused)
 	}
 
-	working, err := st.CountWorkingBreakGlass(t.Context(), time.Now())
+	working, err := st.CountWorkingBreakGlass(t.Context(), breakGlassNow().Add(time.Hour))
 	if err != nil {
 		t.Fatalf("count the working break-glass accounts: %v", err)
 	}
@@ -384,7 +391,7 @@ func seedWorkingBreakGlass(t *testing.T, st *sqlite.Store, id string) {
 	t.Helper()
 
 	ctx := t.Context()
-	at := time.Now().UTC().Truncate(time.Millisecond)
+	at := breakGlassNow()
 
 	p := principal.Principal{
 		CreatedAt: at, UpdatedAt: at, DisabledAt: time.Time{},
