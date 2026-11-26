@@ -240,6 +240,66 @@ func TestBreakGlassNoFactorNamesEnrollmentPath(t *testing.T) {
 	}
 }
 
+// TestBreakGlassStaleCallerWithPasskeyGetsNoEnrollmentPath proves that a
+// stale caller who holds a passkey gets the plain fresh-step refusal. The
+// enrollment path is only for a person with no factor; without the check of
+// the passkeys, the answer would send this caller to enroll a second factor.
+func TestBreakGlassStaleCallerWithPasskeyGetsNoEnrollmentPath(t *testing.T) {
+	t.Parallel()
+
+	const enrollPath = "/api/dustpan/v1/me/passkeys/register/begin"
+
+	f := newAccessFixture(t)
+	f.seedSessionAdmin(t, "admin")
+
+	at := f.sessions.Now().Add(-72 * time.Hour)
+	key := mfa.Passkey{
+		CreatedAt: at, LastUsedAt: time.Time{}, SuspendedAt: time.Time{},
+		ID: "pky-admin", PersonID: "prn-admin", Name: "admin-key",
+		CredentialID: []byte{9, 8, 7}, PublicKey: []byte("cose-key-admin"),
+		Transports: []string{mfa.TransportUSB}, AAGUID: [16]byte{}, SignCount: 0, BackupEligible: false,
+	}
+	entry := audit.Entry{
+		At: at, Namespace: audit.ServerScope, Subject: "admin", IDPSubject: "", TokenID: "",
+		Action: "caller:manage-sign-in", Object: "passkey:pky-admin", Version: "", ValuePath: "",
+		ValueCount: nil, Changes: nil, SourceIP: "192.0.2.1", UserAgent: "test", Channel: audit.ChannelAPI,
+		Kind: audit.KindChange, Outcome: audit.OutcomeSuccess, RequestID: "", ObjectID: "", PrevHash: "",
+		Hash: "", Sequence: 0, FenceVersion: 0, Reason: "", PrincipalKind: "", JobID: "", Origin: nil,
+	}
+
+	if err := f.store.AddPasskey(t.Context(), key, entry); err != nil {
+		t.Fatalf("add the passkey of the caller: %v", err)
+	}
+
+	stale := f.passkeyClientOf(t, "admin", f.sessions.Now().Add(-48*time.Hour))
+
+	cases := []struct {
+		name   string
+		method string
+		path   string
+		body   []byte
+	}{
+		{"add", http.MethodPost, breakGlassPath, []byte(breakGlassAddBody)},
+		{
+			"rotate", http.MethodPost, breakGlassPath + "/prn-none/rotate",
+			breakGlassBody(t, map[string]any{"oldPasskey": "pky-none", "name": "next-key"}),
+		},
+	}
+
+	for _, c := range cases {
+		rec := stale.do(c.method, c.path, c.body)
+
+		got := decodeErrorBody(t, rec)
+		if rec.Code != http.StatusForbidden || got.ErrorCode != freshErrorCode {
+			t.Fatalf("%s = %d %s, want 403 with errorCode %s", c.name, rec.Code, rec.Body.String(), freshErrorCode)
+		}
+
+		if strings.Contains(got.Message, enrollPath) {
+			t.Fatalf("%s message = %q, want no enrollment path for a caller with a passkey", c.name, got.Message)
+		}
+	}
+}
+
 // breakGlassBody returns the JSON body of an add or a rotation with the
 // passkey fields. A rotation sets oldPasskey, an add sets subject.
 func breakGlassBody(t *testing.T, fields map[string]any) []byte {

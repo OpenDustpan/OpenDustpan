@@ -69,6 +69,25 @@ func wantGlassUnchanged(t *testing.T, f *fixture, old mfa.Passkey, actions ...st
 	}
 }
 
+// wantCauses proves that the refusal entries of action are exactly one entry
+// for each cause, in order, and that the refusal entry of each cause names that
+// cause. Each entry is checked, so a second refusal cannot hide behind the first.
+func wantCauses(t *testing.T, f *fixture, action string, causes ...string) {
+	t.Helper()
+
+	refusals := f.entries(t, action)
+	if len(refusals) != len(causes) {
+		t.Fatalf("%s entries = %d, want %d", action, len(refusals), len(causes))
+	}
+
+	for i, cause := range causes {
+		changes := refusals[i].Changes
+		if len(changes) != 1 || changes[0].New != cause {
+			t.Fatalf("%s entry %d changes = %+v, want the cause %q", action, i, changes, cause)
+		}
+	}
+}
+
 // TestBreakGlassRotateGuards proves that RotatePasskey refuses a new passkey
 // that is not valid, with each other check removed from the path: the old
 // passkey stays, the store takes no write, and no success entry exists.
@@ -78,22 +97,19 @@ func TestBreakGlassRotateGuards(t *testing.T) {
 	t.Run("new passkey not valid", func(t *testing.T) {
 		t.Parallel()
 
-		f := newBreakGlassFixture(t)
-		old := storedPasskey(t, f, storedPasskeyInput{
-			personID: glass, id: "pky-old", body: "old-material", name: "old-key",
-		})
-
+		// Each case has its own fixture, so the refusal entries of the case are exact.
 		for _, tc := range invalidPasskeys() {
+			f := newBreakGlassFixture(t)
+			old := storedPasskey(t, f, storedPasskeyInput{
+				personID: glass, id: "pky-old", body: "old-material", name: "old-key",
+			})
+
 			next := newPasskey("new")
 			tc.mutate(&next)
 
 			err := f.svc.RotatePasskey(t.Context(), actor(glass, "ses-glass"), glass, old.ID, next)
 			f.wantRefusal(t, "rotate with "+tc.name, err, mfa.ErrInvalid, mfasvc.ActionRotateRefused)
-
-			refusals := f.entries(t, mfasvc.ActionRotateRefused)
-			if cause := refusals[0].Changes; len(cause) != 1 || cause[0].New != "the new passkey is not valid" {
-				t.Fatalf("rotate with %s: refusal changes = %+v, want the cause of the passkey check", tc.name, cause)
-			}
+			wantCauses(t, f, mfasvc.ActionRotateRefused, "the new passkey is not valid")
 
 			wantGlassUnchanged(t, f, old, mfasvc.ActionPasskeyRotated)
 		}
@@ -205,11 +221,7 @@ func TestBreakGlassFailClosed(t *testing.T) {
 		err := svc.RotatePasskey(t.Context(), actor(glass, "ses-glass"), glass, old.ID, newPasskey("new"))
 		f.wantRefusal(t, "rotate with a store that cannot read principals", err, mfa.ErrUnavailable,
 			mfasvc.ActionRotateRefused)
-
-		refusals := f.entries(t, mfasvc.ActionRotateRefused)
-		if cause := refusals[0].Changes; len(cause) != 1 || cause[0].New != "the store cannot read the principal" {
-			t.Fatalf("refusal changes = %+v, want the cause of the reader check", cause)
-		}
+		wantCauses(t, f, mfasvc.ActionRotateRefused, "the store cannot read the principal")
 
 		wantGlassUnchanged(t, f, old, mfasvc.ActionPasskeyRotated)
 	})
@@ -227,19 +239,15 @@ func TestBreakGlassFailClosed(t *testing.T) {
 		err := svc.RotatePasskey(t.Context(), actor(glass, "ses-glass"), glass, old.ID, newPasskey("new"))
 		f.wantRefusal(t, "rotate with a failing principal read", err, mfa.ErrUnavailable,
 			mfasvc.ActionRotateRefused)
-
-		refusals := f.entries(t, mfasvc.ActionRotateRefused)
-		if cause := refusals[0].Changes; len(cause) != 1 || cause[0].New != "the principal cannot be read" {
-			t.Fatalf("refusal changes = %+v, want the cause of the read check", cause)
-		}
+		wantCauses(t, f, mfasvc.ActionRotateRefused, "the principal cannot be read")
 
 		wantGlassUnchanged(t, f, old, mfasvc.ActionPasskeyRotated)
 	})
 }
 
 // TestBreakGlassAddPersonRefusesKind proves that AddBreakGlassPerson refuses
-// an input of another kind before it touches the store: one denial entry,
-// and no person, no passkey and no success entry.
+// an input of another kind before it touches the store: one denial entry for
+// each refused kind, and no person, no passkey and no success entry.
 func TestBreakGlassAddPersonRefusesKind(t *testing.T) {
 	t.Parallel()
 
@@ -252,17 +260,18 @@ func TestBreakGlassAddPersonRefusesKind(t *testing.T) {
 		t.Fatalf("list the persons: %v", err)
 	}
 
+	causes := make([]string, 0, 2)
+
 	for _, kind := range []principal.Kind{principal.KindService, principal.KindWorkload} {
 		in := principal.Input{Subject: "break-glass-two", DisplayName: "Break glass two", Kind: kind}
 
 		_, _, addErr := f.svc.AddBreakGlassPerson(t.Context(), actor(glass, "ses-glass"), in, newPasskey("new"))
 		f.wantRefusal(t, "add of a "+string(kind), addErr, principal.ErrBreakGlassKind, mfasvc.ActionAddRefused)
 
-		refusals := f.entries(t, mfasvc.ActionAddRefused)
-		if cause := refusals[0].Changes; len(cause) != 1 || cause[0].New != "a break-glass account is a person" {
-			t.Fatalf("add of a %s: refusal changes = %+v, want the cause of the kind check", kind, cause)
-		}
+		causes = append(causes, "a break-glass account is a person")
 	}
+
+	wantCauses(t, f, mfasvc.ActionAddRefused, causes...)
 
 	_, keyErr := f.store.PasskeyByCredentialID(t.Context(), []byte("credential-new"))
 	if !errors.Is(keyErr, mfa.ErrNotFound) {
@@ -307,14 +316,7 @@ func listPersons(t *testing.T, f *fixture) []principal.Principal {
 func wantOneAddRefusal(t *testing.T, f *fixture, before int, cause string) {
 	t.Helper()
 
-	refusals := f.entries(t, mfasvc.ActionAddRefused)
-	if len(refusals) != 1 {
-		t.Fatalf("refusal entries = %d, want 1", len(refusals))
-	}
-
-	if changes := refusals[0].Changes; len(changes) != 1 || changes[0].New != cause {
-		t.Fatalf("refusal changes = %+v, want the cause %q", changes, cause)
-	}
+	wantCauses(t, f, mfasvc.ActionAddRefused, cause)
 
 	if after := listPersons(t, f); len(after) != before {
 		t.Fatalf("persons = %d, want %d: the refused add stored a person", len(after), before)

@@ -62,7 +62,8 @@ type Auditor interface {
 }
 
 // Config holds the dependencies of a Service. Every field but Now, Guard,
-// Authorizer and Log is required.
+// Authorizer, FreshWindow and Log is required. A nil FreshWindow is
+// accepted and fails closed.
 type Config struct {
 	Store mfa.PasskeyStore
 	RP    mfa.RelyingParty

@@ -172,12 +172,18 @@ func checkRotateInvalidID(t *testing.T) {
 		{name: "passkey too long", personID: glass, oldID: "pky-" + strings.Repeat("a", mfa.MaxIDLength)},
 	}
 
-	for _, tc := range cases {
+	for i, tc := range cases {
 		err := f.svc.RotatePasskey(t.Context(), actor(glass, "ses-glass"), tc.personID, tc.oldID, newPasskey("new"))
 		f.wantRefusal(t, "rotate with "+tc.name, err, mfa.ErrNotFound, mfasvc.ActionRotateRefused)
 
+		// One entry for each case so far: the newest one must be this case.
 		refusals := f.entries(t, mfasvc.ActionRotateRefused)
-		if cause := refusals[0].Changes; len(cause) != 1 || cause[0].New != "ID not valid" {
+		if len(refusals) != i+1 {
+			t.Fatalf("rotate with %s: refusal entries = %d, want %d", tc.name, len(refusals), i+1)
+		}
+
+		newest := refusals[len(refusals)-1]
+		if cause := newest.Changes; len(cause) != 1 || cause[0].New != "ID not valid" {
 			t.Fatalf("rotate with %s: refusal changes = %+v, want the cause of the ID check", tc.name, cause)
 		}
 	}
