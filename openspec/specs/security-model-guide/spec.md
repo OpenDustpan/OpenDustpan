@@ -1,7 +1,7 @@
 # security-model-guide Specification
 
 ## Purpose
-TBD - created by archiving change keep-two-working-break-glass. Update Purpose after archive.
+The guide for break-glass accounts tells a site administrator the floor of working accounts and the guard.
 
 ## Requirements
 

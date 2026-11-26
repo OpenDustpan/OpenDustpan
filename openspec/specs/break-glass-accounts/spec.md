@@ -1,7 +1,7 @@
 # break-glass-accounts Specification
 
 ## Purpose
-TBD - created by archiving change keep-two-working-break-glass. Update Purpose after archive.
+A site administrator can recover an installation when the identity provider fails, because the installation keeps two working break-glass accounts and a guard.
 
 ## Requirements
 
