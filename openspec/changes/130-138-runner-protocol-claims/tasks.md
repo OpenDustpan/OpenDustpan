@@ -21,6 +21,6 @@
 
 ## 4. Definition of done
 
-- [ ] 4.1 Add the e2e step in NEW e2e/130_138_runner_protocol_claims_test.go: a test runner built on `pkg/runner/client` joins, polls, renews and heartbeats until the work ends. Check: the step passes against the e2e test server with the runner token (the runner key) on `POST /runner/v1/poll`, `POST /runner/v1/heartbeat` and `POST /runner/v1/claims/{operation}/renew`.
+- [x] 4.1 Add the e2e step in NEW e2e/130_138_runner_protocol_claims_test.go: a test runner built on `pkg/runner/client` joins, polls, renews and heartbeats until the work ends. Check: the step passes against the e2e test server with the runner token (the runner key) on `POST /runner/v1/poll`, `POST /runner/v1/heartbeat` and `POST /runner/v1/claims/{operation}/renew`.
 - [x] 4.2 Run the usability check of the loop library. Check: a Go program of fewer than 40 lines polls, renews and heartbeats through `client.New` and `Run`. Record the program and its output in the pull request body.
 - [ ] 4.3 Run full checks. Check: `make check` reports zero findings. Confirmed by: CI (the agent runs the fast checks only).
