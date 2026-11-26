@@ -1,6 +1,6 @@
 ## Context
 
-Cross-tool output reads run on runners through the existing tool APIs. The job token carries the job unit. The producer namespace holds each sharing rule keyed by stable IDs, managed by add-output-sharing-setting-new.
+Cross-tool output reads run on runners through the existing tool APIs. The job token carries the job unit. The producer namespace holds each sharing rule keyed by stable IDs, stored by add-output-sharing-setting-new and managed by add-output-sharing-rules-api.
 
 ## Decisions
 
