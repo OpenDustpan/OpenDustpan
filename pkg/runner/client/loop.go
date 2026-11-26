@@ -198,7 +198,9 @@ type Config struct {
 	// Random returns a number from 0 to n-1, for the random part of a
 	// backoff. Nil takes crypto/rand.
 	Random func(n int64) int64
-	// Logger receives one record for each event of the loop. Nil discards.
+	// Logger receives one record for each event of the loop, and each refused
+	// answer of the server. Nil uses slog.Default, so that no refusal is dropped
+	// without a caller choice.
 	Logger *slog.Logger
 }
 
@@ -237,7 +239,7 @@ func New(cfg Config) (*Loop, error) {
 
 	log := cfg.Logger
 	if log == nil {
-		log = slog.New(slog.DiscardHandler)
+		log = slog.Default()
 	}
 
 	if cfg.Random == nil {

@@ -287,3 +287,19 @@ func TestLoopStopsOnRetiredAndLostClaim(t *testing.T) {
 	wantProtocolError(h, "renew after the expiry of the lease", runnerPost(h, client, live, path, nil),
 		http.StatusConflict, protocol.ErrorClaimLost)
 }
+
+// TestPoolShowsTheEffectiveLease checks that a pool that sets no lease shows
+// the default lease of 90 s in the API, so that the value a runner works with
+// is visible to the user.
+func TestPoolShowsTheEffectiveLease(t *testing.T) {
+	t.Parallel()
+
+	h := newRoundTripHarness(t, traceOff, dustpan.WithPublicURL(publicURL))
+
+	body := h.call(http.MethodPost, "/api/dustpan/v1/namespaces/acme/runner-pools",
+		`{"name":"no-lease","purpose":"jobs"}`, http.StatusCreated)
+
+	if !strings.Contains(body, `"lease":90000`) {
+		t.Fatalf("pool without a lease = %s, want the effective lease 90000 ms", body)
+	}
+}
