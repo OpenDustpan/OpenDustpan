@@ -148,7 +148,8 @@ func SetSettingRow(ctx context.Context, s *Store, key, value string) error {
 	const stmt = `INSERT INTO settings (scope_id, key, value, updated_at_ms) VALUES (?, ?, ?, ?)
 ON CONFLICT (scope_id, key) DO UPDATE SET value = excluded.value, updated_at_ms = excluded.updated_at_ms`
 
-	if _, err := s.conn.ExecContext(ctx, stmt, serverScopeID, key, value, time.Date(2026, time.January, 1, 0, 0, 0, 0, time.UTC).UnixMilli()); err != nil {
+	updatedAt := time.Date(2026, time.January, 1, 0, 0, 0, 0, time.UTC).UnixMilli()
+	if _, err := s.conn.ExecContext(ctx, stmt, serverScopeID, key, value, updatedAt); err != nil {
 		return fmt.Errorf("write setting %s: %w", key, err)
 	}
 
