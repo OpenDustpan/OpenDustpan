@@ -16,10 +16,10 @@ The change is one pull request, from the managed Droid computer `dustpan`, becau
 
 ## 3. Side effects (computed from main)
 
-- [ ] 3.1 No route, no setting, no schema and no API change. Check: `git diff origin/main --stat -- internal/api pkg docs/reference internal/clientgen` is empty, and `make clients-check` and `make pin-frozen` pass.
+- [x] 3.1 No route, no setting, no schema and no API change. Check: `git diff origin/main --stat -- internal/api pkg docs/reference internal/clientgen` is empty, and `make clients-check` and `make pin-frozen` pass.
 - [x] 3.2 The only caller of the upload script is the workflow of this change, and the tests. Check: `rg -n "release-upload" --glob '!openspec/**' .` prints the script, its tests, the install page, the workflow and nothing else.
 - [x] 3.3 The tag workflow runs only on a tag push. Check: `git diff origin/main -- .github/workflows/release.yml | rg -n "^[+-].*(workflow_dispatch|pull_request|schedule)"` prints nothing, and no job of the change calls `git tag`, `gh release publish` or `gh release edit` (`rg -n "git tag|--draft=false|release edit" .github/workflows/release.yml` prints nothing).
-- [ ] 3.4 Nothing in the change pushes a tag or makes a release. Check: the body of the pull request says that no tag was pushed and no release was made, and `git ls-remote --tags origin` shows no new tag from the work.
+- [x] 3.4 Nothing in the change pushes a tag or makes a release. Check: the body of the pull request says that no tag was pushed and no release was made, and `git ls-remote --tags origin` shows no new tag from the work.
 
 ## 4. Definition of done
 
