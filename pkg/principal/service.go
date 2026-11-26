@@ -259,6 +259,10 @@ func (s *Service) UpdatePrincipal(
 		return Principal{}, fmt.Errorf("update principal %q: %w", id, err)
 	}
 
+	// Defense in depth: the HTTP handler of the principal routes refuses a
+	// principal of a namespace with the setting false too; this check stays so
+	// that a caller that skips the handler cannot change the principal through
+	// this method. It fails closed when the read of the setting fails.
 	if p.Namespace != "" && !caller.Admin {
 		reaches, reachErr := s.grantsReachNamespaces(ctx)
 		if reachErr != nil || !reaches {
@@ -1076,7 +1080,11 @@ func (s *Service) loadGuardedPrincipal(
 		return Principal{}, fmt.Errorf("%s %q: %w", op, id, err)
 	}
 
-	// The setting does not limit the bootstrap administrator token.
+	// Defense in depth: the HTTP handler of the principal routes refuses a
+	// principal of a namespace with the setting false too; this check stays so
+	// that a caller that skips the handler cannot reach the principal through
+	// this method. It fails closed when the read of the setting fails. The
+	// setting does not limit the bootstrap administrator token.
 	if p.Namespace != "" && !caller.Admin {
 		reaches, reachErr := s.grantsReachNamespaces(ctx)
 		if reachErr != nil || !reaches {

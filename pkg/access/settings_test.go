@@ -381,6 +381,7 @@ func TestInstallationReachReadOncePerRequest(t *testing.T) {
 
 	first := access.WithRequestCache(t.Context())
 	second := access.WithRequestCache(t.Context())
+	none := t.Context()
 
 	// Each step runs after the one before it. The value of the port changes
 	// before the step "the same request after a change".
@@ -399,12 +400,21 @@ func TestInstallationReachReadOncePerRequest(t *testing.T) {
 		{name: "no request cache again", request: "none", set: "true", want: true, reads: 4},
 	}
 
-	contexts := map[string]context.Context{"first": first, "second": second, "none": t.Context()}
-
 	for _, step := range steps {
 		port.value = step.set
 
-		got, err := access.InstallationGrantsReachNamespaces(contexts[step.request], port)
+		var ctx context.Context
+
+		switch step.request {
+		case "first":
+			ctx = first
+		case "second":
+			ctx = second
+		default:
+			ctx = none
+		}
+
+		got, err := access.InstallationGrantsReachNamespaces(ctx, port)
 		if err != nil || got != step.want || port.reads != step.reads {
 			t.Fatalf("%s: reach = %t, %v, %d reads, want %t and %d reads",
 				step.name, got, err, port.reads, step.want, step.reads)

@@ -25,11 +25,22 @@ import (
 // server audit scope first, so it adds serverAuditLockTrips more. The check of
 // the working break-glass accounts reads the clock and counts the live data
 // before the swap fails, which adds breakGlassFloorRetryTrips. The swap
-// decision reads the restore access setting twice (readAccessSetting and the
-// static reader, each ListSettings then GetSettingsState through
-// pkg/setting/service.go Effective/Get), so each attempt adds
-// 2*reachSettingReadTrips.
-const swapRetryTrips = 47 + forgeStripClassTrips + serverAuditLockTrips + breakGlassFloorRetryTrips + 2*reachSettingReadTrips
+// decision reads the restore access setting at the start of each attempt, so
+// each attempt adds swapAccessSettingReadTrips.
+const swapRetryTrips = 47 + forgeStripClassTrips + serverAuditLockTrips + breakGlassFloorRetryTrips + swapAccessSettingReadTrips
+
+// swapAccessSettingReadTrips is the number of round trips of the reads of the
+// restore access setting in the swap decision of one attempt: readAccessSetting
+// and the static reader (pkg/backup/restore_access_setting.go:139 and :158)
+// each make one read of a setting through pkg/setting/service.go, which is
+// ListSettings (Effective) then GetSettingsState (Get), two statements. The
+// step runs the decision before the first statement of ApplyRestoreArea, the
+// read of swapStartSQL, so the decision of the next attempt falls in the
+// round trips that withoutSwapRetries drops with the failed attempt. The test
+// server wires a settings service, so these readers are not nil. These reads
+// are not reads of the reach setting: the request cache is a value of the
+// context, so each authorizer of one request shares the reach value.
+const swapAccessSettingReadTrips = 2 * settingReadTrips
 
 // breakGlassFloorRetryTrips is the number of round trips of the check of the
 // working break-glass accounts in a failed attempt of the swap step: the read

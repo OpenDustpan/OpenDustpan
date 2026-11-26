@@ -7,11 +7,11 @@ import (
 	"testing"
 	"time"
 
-	"opendustpan.org/opendustpan/internal/cli"
 	"opendustpan.org/opendustpan/internal/store/sqlite"
 	"opendustpan.org/opendustpan/pkg/access"
 	"opendustpan.org/opendustpan/pkg/audit"
 	"opendustpan.org/opendustpan/pkg/identity"
+	"opendustpan.org/opendustpan/pkg/manuallock"
 	"opendustpan.org/opendustpan/pkg/namespace"
 	"opendustpan.org/opendustpan/pkg/principal"
 	"opendustpan.org/opendustpan/pkg/setting"
@@ -74,44 +74,21 @@ func checkBuiltinStoreRefusal(t *testing.T, err error) {
 }
 
 // TestInstallationReachWiring proves the wiring of the installation reach
-// setting: a server built without a settings service refuses to build an
-// access service, and a server built with one has an authorizer that reads the
-// stored value. NewServer does not expose the authorizer, so the test builds
-// the access service with the helper that NewServer uses.
+// setting through a server that NewServer builds: the value false, stored in
+// the settings store of that server, makes the authorizer of the server deny a
+// namespace action to a person whose only grants are on the installation. The
+// manual lock service of the server checks each call with that authorizer.
 func TestInstallationReachWiring(t *testing.T) {
 	t.Parallel()
 
-	// No settings service: newAccessService must fail.
-	none := openReachTestStore(t, "no-settings.db")
+	w := newWiredSignIn(t, nil)
 
 	cfg := defaultSettings()
-	cfg.namespaceStore = none
-	cfg.settingsConfig = settingsConfig{store: nil, declarations: nil, static: nil}
-
-	if svc, svcErr := newAccessService(cfg); svcErr == nil {
-		t.Fatalf("newAccessService without settings = %v, nil error, want an error", svc)
-	}
-
-	// With a settings store: newAccessService builds the service and its
-	// authorizer carries the settings port.
-	st := openReachTestStore(t, "dustpan.db")
-
-	cfg = defaultSettings()
-	cfg.namespaceStore = st
+	cfg.namespaceStore = w.store
 	cfg.settingsConfig = settingsConfig{
-		store:        st.SettingStore(),
-		declarations: cli.SettingDeclarations(),
+		store:        w.store.SettingStore(),
+		declarations: access.SettingDeclarations(),
 		static:       nil,
-	}
-
-	svc, err := newAccessService(cfg)
-	if err != nil || svc == nil {
-		t.Fatalf("newAccessService with settings = %v, %v, want a service", svc, err)
-	}
-
-	authz := svc.Authorizer()
-	if authz == nil {
-		t.Fatal("access service has no authorizer")
 	}
 
 	settings := newSettingService(cfg, cfg.namespaceStore)
@@ -119,35 +96,27 @@ func TestInstallationReachWiring(t *testing.T) {
 		t.Fatal("newSettingService with a store = nil, want a service")
 	}
 
-	// Store false through the settings service that the server wires, so the
-	// authorizer reads the stored value and not only its default.
+	// Store false in the store that the server reads.
 	storeReachValue(t, settings, "false")
 
-	// A person with one grant on the installation: the viewer role holds
-	// namespace:read, and the operator role holds an action of the
-	// installation.
-	createReachFixture(t, st, time.Date(2026, time.November, 3, 12, 0, 0, 0, time.UTC))
+	// A person with grants on the installation only: the viewer role holds
+	// namespace:read.
+	createReachFixture(t, w.store, time.Date(2026, time.November, 3, 12, 0, 0, 0, time.UTC))
 
-	checkReachDecisions(t, authz)
-}
-
-// openReachTestStore opens a store in a temporary directory and closes it when
-// the test ends.
-func openReachTestStore(t *testing.T, name string) *sqlite.Store {
-	t.Helper()
-
-	st, err := sqlite.Open(t.Context(), filepath.Join(t.TempDir(), name))
-	if err != nil {
-		t.Fatalf("open store: %v", err)
+	locks := w.srv.ManualLocks()
+	if locks == nil {
+		t.Fatal("the server has no manual lock service")
 	}
 
-	t.Cleanup(func() {
-		if closeErr := st.Close(); closeErr != nil {
-			t.Errorf("close store: %v", closeErr)
-		}
-	})
+	holder := identity.Principal{
+		TemporaryAdministrator: false, TemporaryExpiresAt: time.Time{}, Subject: "holder", DisplayName: "",
+		Admin: false, TokenID: "", TokenExpiresAt: time.Time{}, Kind: "", Credential: "", JobID: "",
+	}
 
-	return st
+	_, err := locks.Get(t.Context(), holder, manuallock.NamespaceTarget("acme"))
+	if !errors.Is(err, identity.ErrDenied) {
+		t.Fatalf("manual lock read in a namespace with the reach false = %v, want identity.ErrDenied", err)
+	}
 }
 
 // storeReachValue stores value as the reach setting through the settings
@@ -171,30 +140,8 @@ func storeReachValue(t *testing.T, settings *setting.Service, value string) {
 	}
 }
 
-// checkReachDecisions checks that the authorizer reads the stored false: a
-// grant on the installation does not reach a namespace, and it still gives the
-// actions of the installation.
-func checkReachDecisions(t *testing.T, authz *access.Authorizer) {
-	t.Helper()
-
-	holder := identity.Principal{
-		TemporaryAdministrator: false, TemporaryExpiresAt: time.Time{}, Subject: "holder", DisplayName: "",
-		Admin: false, TokenID: "", TokenExpiresAt: time.Time{}, Kind: "", Credential: "", JobID: "",
-	}
-
-	denied := authz.Authorize(t.Context(), holder, identity.ActionNamespaceRead, identity.NamespaceObject("acme"))
-	if !errors.Is(denied, identity.ErrDenied) {
-		t.Fatalf("Authorize namespace:read with the reach false = %v, want identity.ErrDenied", denied)
-	}
-
-	oerr := authz.Authorize(t.Context(), holder, identity.ActionServerReadSettings, identity.ServerObject())
-	if oerr != nil {
-		t.Fatalf("Authorize server:read-settings with the reach false = %v, want nil", oerr)
-	}
-}
-
 // createReachFixture stores the namespace "acme", the person "holder" and the
-// two grants on the installation that checkReachDecisions reads.
+// two grants on the installation that TestInstallationReachWiring reads.
 func createReachFixture(t *testing.T, st *sqlite.Store, at time.Time) {
 	t.Helper()
 

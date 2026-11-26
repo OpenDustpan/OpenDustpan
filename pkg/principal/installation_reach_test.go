@@ -185,6 +185,14 @@ func namespaceUpdateOp() func(t *testing.T, svc principal.Service, pid string) e
 	}
 }
 
+func namespaceDeleteOp() func(t *testing.T, svc principal.Service, pid string) error {
+	return func(t *testing.T, svc principal.Service, pid string) error {
+		t.Helper()
+
+		return svc.DeleteNamespacePrincipal(t.Context(), testEntry(), nonAdminCaller(), "acme", pid)
+	}
+}
+
 func reachCases() []reachOp {
 	return []reachOp{
 		{name: "no port uses true", reach: nil, id: "p1", wantDenied: false, disabled: false, run: updateOp()},
@@ -223,6 +231,10 @@ func reachCases() []reachOp {
 		{
 			name: "namespace principal update still works", reach: falseReach{}, id: "p8",
 			wantDenied: false, disabled: false, run: namespaceUpdateOp(),
+		},
+		{
+			name: "namespace principal delete still works", reach: falseReach{}, id: "p13",
+			wantDenied: false, disabled: false, run: namespaceDeleteOp(),
 		},
 	}
 }
