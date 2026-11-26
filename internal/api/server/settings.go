@@ -567,15 +567,15 @@ func (h *Handler) applySettings(
 // no authentication step to ask for, so the change needs none. Otherwise a
 // request with an access token answers 403 with mfa.fresh-step-required, and
 // a console session whose sign-in is too old answers the same 403 with the
-// path of a new sign-in.
+// path of a new sign-in. With the setting freshAuthEnabled off, the change
+// needs no step. The change of freshAuthEnabled from on to off happens while
+// the setting is on, so it always needs the step.
 func (h *Handler) requireFreshStep(r *http.Request) error {
 	if h.signIn == nil {
 		return nil
 	}
 
-	ctx := context.WithValue(r.Context(), freshnessKey{}, h.checkTokenFreshness)
-
-	return requireFresh(r.WithContext(ctx))
+	return requireFresh(r.WithContext(h.withFreshness(r.Context())))
 }
 
 // settingsEntry returns the audit entry of the caller p for a change of the

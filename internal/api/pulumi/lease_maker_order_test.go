@@ -11,7 +11,6 @@ import (
 	"opendustpan.org/opendustpan/pkg/access"
 	"opendustpan.org/opendustpan/pkg/accesstoken"
 	"opendustpan.org/opendustpan/pkg/audit"
-	"opendustpan.org/opendustpan/pkg/freshstep"
 )
 
 // makerHarness is an update that a service token started, on the real token
@@ -37,8 +36,9 @@ func newMakerHarness(t *testing.T) makerHarness {
 		Makers:     makers,
 		TempAdmins: nil,
 		Store:      st,
+		Audit:      st,
 		Principals: st,
-		Freshness:  nil,
+		Guard:      noFreshStepGuard(t),
 		Authorizer: nil,
 		Reach: access.ReachConfig{
 			Grants:      nil,
@@ -51,7 +51,6 @@ func newMakerHarness(t *testing.T) makerHarness {
 		Logger: nil,
 		Now:    makerAt,
 		NewID:  nil,
-		Guard:  freshstep.Guard{},
 	})
 	if err != nil {
 		t.Fatalf("token service: %v", err)

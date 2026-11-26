@@ -101,7 +101,7 @@ func newTrustRuleService(
 		InstallationURLs: []string{cfg.publicURL}, OwnIssuer: own,
 		CheckURL: func(raw string) error { return rules.CheckURL(raw, egress.HTTPSOnly) },
 		Now:      cfg.now,
-	})
+	}, trustrulesvc.WithFreshPolicy(freshPolicyOf(cfg)))
 	if err != nil {
 		return nil, fmt.Errorf("trust rule service: %w", err)
 	}

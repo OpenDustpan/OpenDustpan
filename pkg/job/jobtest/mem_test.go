@@ -54,6 +54,9 @@ func TestMemConformance(t *testing.T) {
 // database makes fail.
 var errAuditAppend = errors.New("forced audit append failure")
 
+// errPrincipalExists is the error of a principal with a subject that is taken.
+var errPrincipalExists = errors.New("the principal exists")
+
 // errNotInInventory is the error for a unit that the inventory does not hold.
 var errNotInInventory = errors.New("the unit is not in the inventory")
 
@@ -91,26 +94,44 @@ type memDB struct {
 	failAudit bool
 	// units maps a unit ID to the unit in the inventory, under its current name.
 	units map[string]collection.UnitRef
+	// principals maps the subject of a principal to its kind. The check of a
+	// destroy approval reads the kind of the approver here.
+	principals map[string]identity.Kind
 }
 
 func newMemDB() *memDB {
 	return &memDB{
-		mu:        sync.Mutex{},
-		durable:   durabletest.NewMem().Store(),
-		fences:    map[namespace.Name]int64{},
-		itemKeys:  nil,
-		nsIDs:     map[namespace.Name]namespace.ID{},
-		records:   newMemRecords(),
-		jobs:      map[job.ID]*job.Job{},
-		order:     nil,
-		keys:      map[string]job.ID{},
-		damaged:   map[job.ID]string{},
-		freezes:   map[string]*job.Freeze{},
-		audit:     map[namespace.Name][]audit.Entry{},
-		locks:     map[string]manuallock.Lock{},
-		units:     map[string]collection.UnitRef{},
-		failAudit: false,
+		mu:         sync.Mutex{},
+		durable:    durabletest.NewMem().Store(),
+		fences:     map[namespace.Name]int64{},
+		itemKeys:   nil,
+		nsIDs:      map[namespace.Name]namespace.ID{},
+		records:    newMemRecords(),
+		jobs:       map[job.ID]*job.Job{},
+		order:      nil,
+		keys:       map[string]job.ID{},
+		damaged:    map[job.ID]string{},
+		freezes:    map[string]*job.Freeze{},
+		audit:      map[namespace.Name][]audit.Entry{},
+		locks:      map[string]manuallock.Lock{},
+		units:      map[string]collection.UnitRef{},
+		principals: map[string]identity.Kind{},
+		failAudit:  false,
 	}
+}
+
+// CreatePrincipal implements jobtest.Domain.
+func (m *memDB) CreatePrincipal(_ context.Context, subject string, kind identity.Kind) error {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+
+	if _, ok := m.principals[subject]; ok {
+		return fmt.Errorf("%w: %q", errPrincipalExists, subject)
+	}
+
+	m.principals[subject] = kind
+
+	return nil
 }
 
 // CreateNamespace implements jobtest.Domain.
@@ -799,7 +820,7 @@ func (m *memDB) admit(j *job.Job, d *durable.StartRequest, fence namespace.Fence
 		return job.ErrInvalid
 	}
 
-	return nil
+	return m.checkCreateNoneKind(j)
 }
 
 // byKey returns the job that the idempotency key of j already names, as
@@ -977,7 +998,14 @@ func (m *memDB) followUp(ctx context.Context, id job.ID, k durable.Kind) error {
 // change makes the fields of c on next, and checks the rules of its event.
 // It keeps nothing on an error.
 func (m *memDB) change(ctx context.Context, next *job.Job, c *job.Change, now time.Time) error {
-	if err := checkDestroyProof(next, c.Approval, now); err != nil {
+	// The kind of the approver comes from its principal row. A missing row gives
+	// the zero kind, which is no kind of a principal, so the check refuses it.
+	var kind identity.Kind
+	if c.Approval != nil {
+		kind = m.principals[c.Approval.Subject]
+	}
+
+	if err := checkDestroyProof(next, c.Approval, kind, now); err != nil {
 		return err
 	}
 
@@ -1000,15 +1028,62 @@ func (m *memDB) change(ctx context.Context, next *job.Job, c *job.Change, now ti
 	return nil
 }
 
-func checkDestroyProof(j *job.Job, ap *job.Approval, now time.Time) error {
+// checkDestroyProof checks the approval of a destroy. kind is the kind of the
+// approver, or the zero kind when its principal row is missing.
+func checkDestroyProof(j *job.Job, ap *job.Approval, kind identity.Kind, now time.Time) error {
 	if j.Spec.Operation != job.OperationDestroy || ap == nil || ap.Verdict == job.VerdictReject {
 		return nil
+	}
+
+	if ap.Auth == job.ConfirmAuthNone {
+		return checkNoneProof(ap, kind)
 	}
 
 	// Defense in depth: the handler and service check the verdict too.
 	// Keep this check so that a direct store caller cannot skip it.
 	if ap.Verdict != job.VerdictApprove || ap.Agent != "" || ap.Auth != job.ConfirmAuthMFA || ap.AuthAt.IsZero() ||
 		ap.AuthAt.After(ap.At) || ap.At.After(now) || now.Sub(ap.AuthAt) > job.ConfirmFreshness {
+		return job.ErrAuthStale
+	}
+
+	return nil
+}
+
+// checkCreateNoneKind refuses an approval of a destroy with the authentication
+// none unless the approver is a person. A subject with no principal row has
+// the zero kind, so it is refused too.
+//
+// Defense in depth: the handler and the service check the kind too. This
+// check stays so that a direct caller of Create cannot store the approval.
+func (m *memDB) checkCreateNoneKind(j *job.Job) error {
+	if j.Spec.Operation != job.OperationDestroy {
+		return nil
+	}
+
+	for i := range j.Phases {
+		for k := range j.Phases[i].Approvals {
+			ap := &j.Phases[i].Approvals[k]
+			if ap.Auth == job.ConfirmAuthNone && m.principals[ap.Subject] != identity.KindPerson {
+				return job.ErrAuthStale
+			}
+		}
+	}
+
+	return nil
+}
+
+// checkNoneProof checks an approval of a destroy with the authentication none.
+// The setting is off, so the approval carries no proof: only a person may
+// give it, and no agent and no proof time may come with it.
+//
+// This fake models the setting freshAuthEnabled off only: it reads no setting,
+// so it accepts the authentication none where the real store refuses it with
+// the setting on. The suite runs no case with auth none and the setting on.
+// The tests of internal/store/jobstore cover the store with the setting on.
+func checkNoneProof(ap *job.Approval, kind identity.Kind) error {
+	// Defense in depth: the handler and the service check the kind too; this
+	// check stays so that a direct store caller cannot skip it.
+	if kind != identity.KindPerson || ap.Verdict != job.VerdictApprove || ap.Agent != "" || !ap.AuthAt.IsZero() {
 		return job.ErrAuthStale
 	}
 

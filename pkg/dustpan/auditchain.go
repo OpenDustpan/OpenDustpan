@@ -14,10 +14,10 @@ import (
 
 	serverapi "opendustpan.org/opendustpan/internal/api/server"
 	"opendustpan.org/opendustpan/internal/metrics"
-	"opendustpan.org/opendustpan/pkg/accesstoken"
 	"opendustpan.org/opendustpan/pkg/audit"
 	"opendustpan.org/opendustpan/pkg/backup"
 	"opendustpan.org/opendustpan/pkg/durable"
+	"opendustpan.org/opendustpan/pkg/freshstep"
 	"opendustpan.org/opendustpan/pkg/identity"
 	"opendustpan.org/opendustpan/pkg/maintenance"
 	"opendustpan.org/opendustpan/pkg/namespace"
@@ -120,7 +120,9 @@ type auditChain struct {
 	// MFA does not exist yet.
 	maint          *maintenance.Service
 	restoreRunning func(ctx context.Context) (bool, error)
-	freshness      accesstoken.Freshness
+	freshness      freshnessCheck
+	// freshPolicy says if the freshness check runs. Nil requires the step.
+	freshPolicy freshstep.Policy
 	// durableOps starts the migration operation of an approval. The runner
 	// of every instance claims it.
 	durableOps durable.Store
@@ -177,6 +179,13 @@ type chainApprovalStore interface {
 	) (durable.Operation, error)
 }
 
+// freshnessCheck asks for a recent MFA step of subject before the approval of
+// a change of the chain. It returns an error when the step is missing or too
+// old. The chain calls it only through a freshstep.Guard.
+type freshnessCheck interface {
+	RequireFresh(ctx context.Context, subject string) error
+}
+
 // principalReader answers the principal with a subject. It returns
 // principal.ErrNotFound when no principal has the subject.
 type principalReader interface {
@@ -227,6 +236,7 @@ func newAuditChain(cfg *settings, observed *metrics.ServerMetrics) (*auditChain,
 		maint:             nil,
 		restoreRunning:    nil,
 		freshness:         nil,
+		freshPolicy:       freshPolicyOf(cfg),
 		durableOps:        nil,
 		runner:            nil,
 		migrationsRunning: atomic.Bool{},
@@ -551,11 +561,28 @@ func (c *auditChain) checkApprovalGate(ctx context.Context, caller audit.Entry) 
 		return err
 	}
 
+	// Production sets no freshness port (see newAuditChain). The early return
+	// below ends the check there, so production does not require a fresh MFA
+	// step for an approval of this change. The guard runs only when a test sets
+	// the port.
 	if c.freshness == nil {
 		return nil
 	}
 
-	if err := c.freshness.RequireFresh(ctx, caller.Subject); err != nil {
+	// Defense in depth: the handler asks the same policy too. This guard stays
+	// so that a new caller of the chain cannot skip it, and it does not rely
+	// on the handler or on the store. A nil policy requires the step.
+	policy := c.freshPolicy
+	if policy == nil {
+		policy = freshstep.PolicyFunc(nil)
+	}
+
+	guard, err := freshstep.NewGuard(policy, c.freshness.RequireFresh)
+	if err != nil {
+		return fmt.Errorf("%w: %w", audit.ErrChainStepRequired, err)
+	}
+
+	if err = guard.Require(ctx, caller.Subject); err != nil {
 		return fmt.Errorf("%w: %w", audit.ErrChainStepRequired, err)
 	}
 

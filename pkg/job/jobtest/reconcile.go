@@ -10,6 +10,7 @@ import (
 	"time"
 
 	"opendustpan.org/opendustpan/pkg/durable"
+	"opendustpan.org/opendustpan/pkg/freshstep"
 	"opendustpan.org/opendustpan/pkg/gate"
 	"opendustpan.org/opendustpan/pkg/history"
 	"opendustpan.org/opendustpan/pkg/job"
@@ -32,6 +33,8 @@ func reconcileCases() []suiteCase {
 		{"the reconcile dispatches a queued job when the unit is free again", testReconcileUnitBusy},
 		{"the reconcile moves a queued job with a closed gate to awaiting-approval", testReconcileGate},
 		{"the reconcile dispatches a queued job whose gate has its approval", testReconcileApprovedGate},
+		{"the reconcile dispatches a job with a none confirmation, with the setting off", testReconcileConfirmationOff},
+		{"the reconcile keeps a job whose confirmation records none, with the setting on", testReconcileConfirmationOn},
 		{
 			"the reconcile keeps a job with two gates and two people waiting",
 			func(t *testing.T, h Harness) {
@@ -69,6 +72,15 @@ func reconciler(t *testing.T, h Harness, ahead time.Duration) *job.Reconciler {
 func reconcilerOver(t *testing.T, h Harness, jobs job.Store, ahead time.Duration) *job.Reconciler {
 	t.Helper()
 
+	return reconcilerWithGuard(t, h, jobs, ahead, freshstep.Guard{})
+}
+
+// reconcilerWithGuard is reconcilerOver with the fresh guard g of the gates.
+func reconcilerWithGuard(
+	t *testing.T, h Harness, jobs job.Store, ahead time.Duration, g freshstep.Guard,
+) *job.Reconciler {
+	t.Helper()
+
 	r, err := job.NewReconciler(job.ReconcilerConfig{
 		Store:           jobs,
 		Namespaces:      h.Namespaces,
@@ -77,6 +89,7 @@ func reconcilerOver(t *testing.T, h Harness, jobs job.Store, ahead time.Duration
 		StateTimeout:    0,
 		MaxPlanAge:      0,
 		Approvers:       gate.ApproverPolicy{Production: false, IsDev: nil},
+		FreshGuard:      g,
 		Batch:           0,
 		Now:             func() time.Time { return time.Now().Add(ahead) },
 		Log:             nil,
@@ -314,6 +327,80 @@ func testReconcileApprovedGate(t *testing.T, h Harness) {
 	}
 
 	assertState(t, h, queued.ID, job.StateDispatched)
+}
+
+// testReconcileConfirmationOff and testReconcileConfirmationOn prove that the
+// reconcile dispatches a queued job whose only confirmation records auth none
+// only while the setting is off. Each one stores its own job.
+func testReconcileConfirmationOff(t *testing.T, h Harness) {
+	t.Helper()
+
+	res := confirmationNoneRun(t, h, freshstep.PolicyFunc(func(context.Context) bool { return false }))
+	if res.Dispatched != 1 || res.Gated != 0 {
+		t.Fatalf("reconcile with the setting off = %+v; want one dispatch", res)
+	}
+}
+
+func testReconcileConfirmationOn(t *testing.T, h Harness) {
+	t.Helper()
+
+	res := confirmationNoneRun(t, h, freshstep.PolicyFunc(func(context.Context) bool { return true }))
+	if res.Dispatched != 0 || res.Gated != 1 {
+		t.Fatalf("reconcile with the setting on = %+v; want one gated job", res)
+	}
+}
+
+// confirmationNoneRun stores a queued job whose only gate is a confirmation by
+// its starter with auth none, and runs one reconcile with the guard of p.
+func confirmationNoneRun(t *testing.T, h Harness, p freshstep.Policy) job.ReconcileResult {
+	t.Helper()
+
+	guard, err := job.NewFreshGuard(p)
+	if err != nil {
+		t.Fatalf("NewFreshGuard = %v", err)
+	}
+
+	f := setUp(t, h)
+	j := newJob(f.unit, job.OperationRefresh, "")
+	j.Phases[0].Gates = []job.Gate{{
+		Type: job.GateConfirmation, Name: "", Approvals: 1, Groups: nil, GroupIDs: nil, AllowSelf: false, Timeout: 0,
+		BindPlan:   false,
+		Users:      nil,
+		UserIDs:    nil,
+		UnitOwners: false,
+		Scope:      gate.Scope{},
+	}}
+	j.Phases[0].Approvals = []job.Approval{{
+		Gate:    job.GateConfirmation,
+		For:     []string{""},
+		Subject: j.StartedBy,
+		Agent:   "",
+		Verdict: job.VerdictApprove,
+		Comment: "",
+		Plan:    nil,
+		At:      time.Now().UTC(),
+		Auth:    job.ConfirmAuthNone,
+		AuthAt:  time.Time{},
+	}}
+	queued := create(t, h, f, j, nil)
+
+	res, err := reconcilerWithGuard(t, h, h.Jobs, 0, guard).Reconcile(t.Context())
+	if err != nil {
+		t.Fatalf("Reconcile = %v", err)
+	}
+
+	assertState(t, h, queued.ID, stateOf(res))
+
+	return res
+}
+
+// stateOf returns the state that a queued job reaches after the reconcile res.
+func stateOf(res job.ReconcileResult) job.State {
+	if res.Dispatched == 1 {
+		return job.StateDispatched
+	}
+
+	return job.StateAwaitingApproval
 }
 
 // allApprovers is the number of people that fill the three places of the two

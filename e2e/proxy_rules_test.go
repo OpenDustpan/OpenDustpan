@@ -74,6 +74,11 @@ func runProxyRulesOnStore(t *testing.T, cli e2e.Install, store e2e.Store) {
 
 	checkReady(ctx, t, env)
 
+	// The steps expect the fresh step of a rule write with an access token,
+	// so freshAuthEnabled goes on. With the default off, the token writes.
+	restoreFreshAuth := env.EnableFreshAuth(ctx, t)
+	defer restoreFreshAuth()
+
 	checkApprovalCreateNamespace(ctx, t, approvalEnv{env: env, person: ""})
 
 	ae := approvalAdmin(ctx, t, env)

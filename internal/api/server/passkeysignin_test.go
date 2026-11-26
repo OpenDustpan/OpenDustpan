@@ -118,7 +118,8 @@ func (e *passkeySignInEnv) register(t *testing.T, id string) *webauthntest.Crede
 		PrevHash: "", Hash: "", Sequence: 0, FenceVersion: 0, Reason: "", PrincipalKind: "", JobID: "",
 		Origin: nil,
 	}
-	actor := mfasvc.Actor{Entry: entry, PrincipalID: id, SessionID: "ses-" + id}
+	// The helper stands for the person who completed a fresh step, so Fresh is true.
+	actor := mfasvc.Actor{Entry: entry, PrincipalID: id, SessionID: "ses-" + id, Fresh: true}
 	person := mfa.Person{ID: id, Name: id, DisplayName: id}
 
 	options, err := e.svc.BeginRegistration(t.Context(), actor, person)

@@ -31,9 +31,13 @@ A token of one kind cannot be used on a route for the other kind. The answer is
 
 ## Make a personal token
 
-A person makes a personal token for itself. The create needs a fresh sign-in
-in the console. A token cannot make another token. The answer is `403` with the
-code `mfa.fresh-step-required`.
+A person makes a personal token for itself. With the installation setting
+`freshAuthEnabled` on, the create needs a fresh sign-in in the console. A token
+cannot make another token. The answer is `403` with the code
+`mfa.fresh-step-required`. The setting is off by default. With it off, the
+server asks for no fresh sign-in, and an access token that holds the grant may
+approve a `destroy` and make a setting weaker (see "The setting freshAuthEnabled"
+in [approval rules](approval-rules.md)).
 
 Make the token in the console. A stored access token gets `403` with `mfa.fresh-step-required`. The body of the create is:
 

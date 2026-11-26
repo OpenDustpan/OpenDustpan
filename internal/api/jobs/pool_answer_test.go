@@ -68,6 +68,7 @@ func newPoolHandler(
 		DenialLimiter:  nil,
 		Sessions:       nil,
 		Logger:         logger,
+		FreshPolicy:    nil,
 	})
 	if err != nil {
 		t.Fatalf("handler: %v", err)

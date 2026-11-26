@@ -211,6 +211,7 @@ func (h *Handler) beginPasskeySignIn(w http.ResponseWriter, r *http.Request, _ i
 		Entry:       signInEntry(r, signInWebauthnAuditActor, session.ActionSignIn),
 		PrincipalID: "",
 		SessionID:   "",
+		Fresh:       false,
 	}
 
 	options, err := h.signIn.passkeySignIn.BeginAssertion(ctx, actor, mfa.CeremonySignIn, mfasvc.Binding{
@@ -256,7 +257,7 @@ func (h *Handler) finishPasskeySignIn(w http.ResponseWriter, r *http.Request, _ 
 	entry := signInEntry(r, signInWebauthnAuditActor, session.ActionSignIn)
 
 	signed, err := h.signIn.passkeySignIn.FinishSignIn(
-		ctx, mfasvc.Actor{Entry: entry, PrincipalID: "", SessionID: ""}, req.Response,
+		ctx, mfasvc.Actor{Entry: entry, PrincipalID: "", SessionID: "", Fresh: false}, req.Response,
 	)
 	if err != nil {
 		if !errors.Is(err, mfa.ErrUnavailable) {

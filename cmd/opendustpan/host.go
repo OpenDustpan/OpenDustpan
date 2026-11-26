@@ -42,7 +42,6 @@ import (
 	"opendustpan.org/opendustpan/pkg/accesstoken"
 	"opendustpan.org/opendustpan/pkg/audit"
 	"opendustpan.org/opendustpan/pkg/dustpan"
-	"opendustpan.org/opendustpan/pkg/freshstep"
 	"opendustpan.org/opendustpan/pkg/principal"
 	"opendustpan.org/opendustpan/pkg/tempadmin"
 )
@@ -92,6 +91,42 @@ const (
 // when the sweep of ended temporary administrators does not end every record.
 const hostSweepNote = "some ended temporary administrators did not expire: " +
 	"run the command again, then check the server log"
+
+// hostTokenService returns the access token service of the host command. Its
+// fresh step guard is the guard of the server, so the setting freshAuthEnabled
+// decides the step for a token change of the host command too.
+func hostTokenService(st store) (*accesstoken.Service, error) {
+	fresh, err := dustpan.FreshGuard(st.builtin())
+	if err != nil {
+		return nil, fmt.Errorf("fresh step guard: %w", err)
+	}
+
+	tokens, err := accesstoken.NewService(accesstoken.Config{
+		Makers: nil,
+		Reach: access.ReachConfig{
+			Grants:      nil,
+			Roles:       nil,
+			Callers:     nil,
+			Principals:  nil,
+			Collections: nil,
+			Units:       nil,
+		},
+		Store:      st,
+		Principals: st,
+		Audit:      st,
+		TempAdmins: st,
+		Guard:      fresh,
+		Authorizer: nil,
+		Logger:     nil,
+		Now:        nil,
+		NewID:      nil,
+	})
+	if err != nil {
+		return nil, fmt.Errorf("access token service: %w", err)
+	}
+
+	return tokens, nil
+}
 
 // hostReviewNote is the line that the host command writes to standard error
 // after a create: no store keeps break-glass reviews yet, so no review opens
@@ -420,28 +455,9 @@ func createTempAdmin(ctx context.Context, st store, in hostInput, stderr io.Writ
 		return hostMade{}, fmt.Errorf("read principal %q: %w", in.person, readErr)
 	}
 
-	tokens, err := accesstoken.NewService(accesstoken.Config{
-		Makers: nil,
-		Reach: access.ReachConfig{
-			Grants:      nil,
-			Roles:       nil,
-			Callers:     nil,
-			Principals:  nil,
-			Collections: nil,
-			Units:       nil,
-		},
-		Store:      st,
-		Principals: st,
-		TempAdmins: st,
-		Freshness:  nil,
-		Authorizer: nil,
-		Logger:     nil,
-		Now:        nil,
-		NewID:      nil,
-		Guard:      freshstep.Guard{},
-	})
+	tokens, err := hostTokenService(st)
 	if err != nil {
-		return hostMade{}, fmt.Errorf("access token service: %w", err)
+		return hostMade{}, err
 	}
 
 	issuer, err := accesstoken.NewHostIssuer(tokens, st)

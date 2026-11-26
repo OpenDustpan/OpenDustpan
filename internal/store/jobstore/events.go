@@ -7,15 +7,31 @@ import (
 	"time"
 
 	"opendustpan.org/opendustpan/pkg/durable"
+	"opendustpan.org/opendustpan/pkg/identity"
 	"opendustpan.org/opendustpan/pkg/job"
 )
 
+// writeRules holds what a change checks besides its own fields: the database
+// clock of the transaction, whether the installation requires a fresh step,
+// and the principal of the approval subject. The principal is read in the
+// transaction, and only for an approval with the authentication none.
+type writeRules struct {
+	now           time.Time
+	freshRequired bool
+	approverFound bool
+	approverKind  identity.Kind
+}
+
 // change makes the fields of c on next, and checks the rules of its event.
 // It keeps nothing on an error.
-func change(ctx context.Context, tx Tx, next *job.Job, c *job.Change, now time.Time) error {
-	// Defense in depth: the service checks the session proof before this
-	// write. Check its age again on the database clock in this transaction.
-	if err := checkDestroyProof(next, c.Approval, now); err != nil {
+func change(ctx context.Context, tx Tx, next *job.Job, c *job.Change, rules writeRules) error {
+	now := rules.now
+
+	// Defense in depth: the service and the HTTP handler check the session
+	// proof before this write, with the same policy. Check its age again on
+	// the database clock in this transaction, so that a new caller cannot
+	// skip it.
+	if err := checkDestroyProof(next, c.Approval, rules); err != nil {
 		return err
 	}
 
@@ -42,15 +58,63 @@ func change(ctx context.Context, tx Tx, next *job.Job, c *job.Change, now time.T
 }
 
 // checkDestroyProof refuses an approval whose proof expired before the
-// signature write. A rejection needs no fresh step.
-func checkDestroyProof(j *job.Job, ap *job.Approval, now time.Time) error {
-	if j.Spec.Operation != job.OperationDestroy || ap == nil || ap.Verdict == job.VerdictReject {
+// signature write. A rejection needs no fresh step. When the installation
+// requires no fresh step (the setting freshAuthEnabled is off), an approval
+// of a person that records the authentication none needs no proof. An agent
+// is refused in each case. The authentication none is refused for any change
+// that is not an approval of a destroy, and for a principal that is not a
+// person.
+func checkDestroyProof(j *job.Job, ap *job.Approval, rules writeRules) error {
+	if ap == nil {
 		return nil
 	}
 
+	if err := checkNoneAuth(j, ap, rules); err != nil {
+		return err
+	}
+
+	if j.Spec.Operation != job.OperationDestroy || ap.Verdict == job.VerdictReject {
+		return nil
+	}
+
+	if ap.Verdict != job.VerdictApprove || ap.Agent != "" {
+		return job.ErrAuthStale
+	}
+
+	if !rules.freshRequired && ap.Auth == job.ConfirmAuthNone && ap.AuthAt.IsZero() {
+		return nil
+	}
+
+	return checkProofAge(ap, rules.now)
+}
+
+// checkNoneAuth refuses the authentication none for a change that is not an
+// approval of a destroy, and for a principal that is not a person. It checks
+// any approval with the authentication none, so the kind of the approver is
+// read for each of them, in the transaction of the write.
+//
+// Defense in depth: the service records the authentication none only for an
+// approval of a destroy by a person, and the handler and the service check the
+// kind too. This check stays so that a new caller of the store cannot record it
+// for another operation, or for a principal that is not a person.
+func checkNoneAuth(j *job.Job, ap *job.Approval, rules writeRules) error {
+	if ap.Auth != job.ConfirmAuthNone {
+		return nil
+	}
+
+	if j.Spec.Operation != job.OperationDestroy || !rules.approverFound || rules.approverKind != identity.KindPerson {
+		return job.ErrAuthStale
+	}
+
+	return nil
+}
+
+// checkProofAge refuses an approval with no MFA proof, or with a proof that
+// expired before the signature write at now.
+func checkProofAge(ap *job.Approval, now time.Time) error {
 	// The database clock has millisecond precision, as the stored times do.
 	at, proof, current := ap.At.UnixMilli(), ap.AuthAt.UnixMilli(), now.UnixMilli()
-	if ap.Verdict != job.VerdictApprove || ap.Agent != "" || ap.Auth != job.ConfirmAuthMFA ||
+	if ap.Auth != job.ConfirmAuthMFA ||
 		ap.AuthAt.IsZero() || proof > at || proof > current || at > current ||
 		current-proof > job.ConfirmFreshness.Milliseconds() {
 		return job.ErrAuthStale

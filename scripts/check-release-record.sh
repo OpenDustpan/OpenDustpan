@@ -50,12 +50,12 @@ for dialect in sqlite postgres; do
   got="$(awk -v v="$version" -v d="$dialect" '$1 == v && $2 == d {print $3, $4}' "$record" | sort)"
 
   if [[ -z "$got" ]]; then
-    echo "check-release-record: internal/releaserecord/shipped.txt has no $dialect line for $version; add the lines of the tag as the file says" >&2
+    echo "check-release-record: internal/releaserecord/shipped.txt has no $dialect line for $version; add the lines of the tag as the file says; run make release-record-check VERSION=$version" >&2
     exit 1
   fi
 
   if [[ "$got" != "$want" ]]; then
-    echo "check-release-record: the $dialect lines of $version in internal/releaserecord/shipped.txt differ from internal/store/$dialect/migrations:" >&2
+    echo "check-release-record: the $dialect lines of $version in internal/releaserecord/shipped.txt differ from internal/store/$dialect/migrations; run make release-record-check VERSION=$version" >&2
     diff <(printf '%s\n' "$got") <(printf '%s\n' "$want") >&2 || true
     exit 1
   fi

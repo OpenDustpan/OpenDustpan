@@ -602,7 +602,9 @@ func failPhase(ctx context.Context, tx Tx, j *job.Job, pc *job.PhaseClaim, why e
 		},
 	}
 
-	if _, err := applyIn(ctx, tx, &c, pc.Fence.Namespace); err != nil {
+	// The change holds no approval, so it needs no fresh step. alwaysFresh
+	// fails closed all the same.
+	if _, err := applyIn(ctx, tx, &c, pc.Fence.Namespace, alwaysFresh); err != nil {
 		return fmt.Errorf("fail the phase of a stale plan: %w", err)
 	}
 

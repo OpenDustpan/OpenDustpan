@@ -322,6 +322,12 @@ one.
 
 ## Tokens from a console session
 
+The rules of this section apply when the installation setting
+`freshAuthEnabled` is on. Its default is `false`: the server then asks for no
+fresh sign-in, and an access token that holds the grant may approve a `destroy`
+and make a setting weaker. See "The setting freshAuthEnabled" in
+[approval rules](approval-rules.md).
+
 A signed-in person can create and rotate access tokens from the console,
 on the same routes as with a token. An access token never creates or
 rotates a token: the request answers 403 with the error code
