@@ -13,7 +13,7 @@ The user path this change must make work:
 1. **API.** Create a pool of the namespace with the sweep purpose, join a runner, and poll for sweep work under /runner/v1.
 2. **API.** Open a job session for the sweep claim, then upload the sweep report with `PUT /runner/v1/session/sweep-report`. The upload ends the sweep.
 3. **Docs page.** Read the sweep entries in docs/reference/runner-api.md.
-4. **E2e.** Drive a real runner poll and report upload against the TLS server.
+4. **Flow test.** Drive a real runner poll, release and report upload through the built-in server's HTTP handlers, with the sweep seeded in the store. The e2e step with the real runner binary waits for the routes that start and read a sweep.
 
 Errors the person may hit, and the one command that helps:
 
