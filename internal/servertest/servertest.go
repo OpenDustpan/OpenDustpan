@@ -37,6 +37,7 @@ import (
 	"github.com/jackc/pgx/v5"
 
 	"opendustpan.org/opendustpan/internal/store/postgres"
+	"opendustpan.org/opendustpan/pkg/access"
 	"opendustpan.org/opendustpan/pkg/blob/fs"
 	"opendustpan.org/opendustpan/pkg/durable"
 	"opendustpan.org/opendustpan/pkg/dustpan"
@@ -837,6 +838,6 @@ func explicitStoreOptions(store *postgres.Store, logger *slog.Logger) []dustpan.
 		dustpan.WithIssuerStore(store.Issuer()),
 		dustpan.WithInstallationKindStore(store),
 		dustpan.WithInstanceStore(store),
-		dustpan.WithSettings(store.SettingStore(), postgres.SettingDeclarations(), nil),
+		dustpan.WithSettings(store.SettingStore(), append(postgres.SettingDeclarations(), access.SettingDeclarations()...), nil),
 	}
 }
