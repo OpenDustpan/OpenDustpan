@@ -327,8 +327,10 @@ def selftest():
     assert names == ["golangci-lint", "golangci-lint of the journal build", "nilaway", "go test"], names
 
     # A partial lint run does not fail on a nolintlint finding of an unused directive.
-    unused = {"FromLinter": "nolintlint", "Text": "directive `//nolint:contextcheck // x` is unused for linter \"contextcheck\""}
-    other = {"FromLinter": "nolintlint", "Text": "directive `//nolint` should mention specific linter"}
+    # The marker is split, so that nolint-check does not read the text as a marker.
+    MARK = "//" + "nolint"
+    unused = {"FromLinter": "nolintlint", "Text": "directive `" + MARK + ":contextcheck // x` is unused for linter \"contextcheck\""}
+    other = {"FromLinter": "nolintlint", "Text": "directive `" + MARK + "` should mention specific linter"}
     vet = {"FromLinter": "govet", "Text": "bad"}
     for issues, want in [
         ([unused], True),
