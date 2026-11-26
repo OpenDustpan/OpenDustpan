@@ -13,8 +13,12 @@ When a runner job registers a claim that names a resource instance of an accepte
 - **THEN** the server does not refuse claim C for overlap
 
 #### Scenario: Idempotent retry of refusal
-- **WHEN** job C retries the registration with the same job ID and claim ID after a refusal or a 503
-- **THEN** the server answers the same 409 with the same blocking claim ID and stores no duplicate claim
+- **WHEN** job C retries the registration with the same job ID and claim ID after a 503 that came before the commit
+- **THEN** the server answers the 409 with the same blocking claim ID and stores no duplicate claim
+
+#### Scenario: Retry after the block
+- **WHEN** job C retries the registration with its job token after the refusal is committed
+- **THEN** the server answers 401 because the token of a blocked job is not live, and the job read shows the state blocked, the blocking claim ID and the overlapping resource address
 
 ### Requirement: Name blocking claim
 

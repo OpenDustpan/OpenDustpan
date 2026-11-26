@@ -53,19 +53,40 @@ func awaitingApproval(t *testing.T, h Harness, f fixture) job.Job {
 func awaitingApprovalFor(t *testing.T, h Harness, f fixture, op job.Operation) job.Job {
 	t.Helper()
 
-	return awaitingApprovalWith(t, h, f, op, []job.Gate{{
+	return awaitingApprovalWith(t, h, f, approvalSpec{op: op, key: "", gates: standardApprovalGates()})
+}
+
+// awaitingApprovalKeyed is awaitingApprovalFor with the idempotency key key.
+func awaitingApprovalKeyed(t *testing.T, h Harness, f fixture, op job.Operation, key string) job.Job {
+	t.Helper()
+
+	return awaitingApprovalWith(t, h, f, approvalSpec{op: op, key: key, gates: standardApprovalGates()})
+}
+
+// standardApprovalGates returns the gate of the cases: one approval gate of
+// two approvals that binds the plan.
+func standardApprovalGates() []job.Gate {
+	return []job.Gate{{
 		Type: job.GateApproval, Name: "", Approvals: needApprovals, Groups: nil, GroupIDs: nil, AllowSelf: false,
 		Timeout: 0, BindPlan: true,
 		Users:      nil,
 		UserIDs:    nil,
 		UnitOwners: false,
 		Scope:      gate.Scope{},
-	}})
+	}}
 }
 
-// awaitingApprovalWith is awaitingApprovalFor with the gates of the apply
-// phase.
-func awaitingApprovalWith(t *testing.T, h Harness, f fixture, op job.Operation, gates []job.Gate) job.Job {
+// approvalSpec holds the operation, the idempotency key and the gates of a
+// job that waits for approval.
+type approvalSpec struct {
+	op    job.Operation
+	key   string
+	gates []job.Gate
+}
+
+// awaitingApprovalWith stores a job of spec that waits for approval, with the
+// plan of its plan phase.
+func awaitingApprovalWith(t *testing.T, h Harness, f fixture, s approvalSpec) job.Job {
 	t.Helper()
 
 	// A harness without a state writer has no state version to bind.
@@ -76,7 +97,7 @@ func awaitingApprovalWith(t *testing.T, h Harness, f fixture, op job.Operation, 
 
 	made := time.Now()
 
-	j := newJob(f.unit, op, "")
+	j := newJob(f.unit, s.op, s.key)
 	j.Current = 1
 	j.Phases[0].StateVersion = version
 	j.Phases[0].Plan = &job.PlanRef{
@@ -87,7 +108,7 @@ func awaitingApprovalWith(t *testing.T, h Harness, f fixture, op job.Operation, 
 		},
 		CreatedAt: made, ExpiresAt: history.ExpiresAt(made, history.DefaultRetention), RedactedAt: time.Time{},
 	}
-	j.Phases[1].Gates = gates
+	j.Phases[1].Gates = s.gates
 
 	stored := create(t, h, f, j, nil)
 
@@ -274,7 +295,7 @@ func testApprovalSeveralGates(t *testing.T, h Harness) {
 	t.Helper()
 
 	f := setUp(t, h)
-	j := awaitingApprovalWith(t, h, f, job.OperationApply, severalGates())
+	j := awaitingApprovalWith(t, h, f, approvalSpec{op: job.OperationApply, key: "", gates: severalGates()})
 
 	if got := j.Phases[1].Gates; len(got) != 2 || got[0].Name != "default/namespace/acme" || got[1].Name != "default" ||
 		got[0].Approvals != 2 || got[1].Approvals != 1 {
