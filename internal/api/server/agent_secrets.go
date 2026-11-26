@@ -269,7 +269,7 @@ func classifyAgent(err error) (failure, bool) {
 			errcode.AgentConnectionSecretInUse), true
 	case errors.Is(err, agent.ErrDisabled):
 		return failCoded(http.StatusNotFound,
-			"No model is connected: write a connection document first, as docs/guides/agent-connection.md shows.",
+			"No model is connected: the route that writes a connection document is not available in this version.",
 			errcode.AgentConnectionNotConnected), true
 	}
 

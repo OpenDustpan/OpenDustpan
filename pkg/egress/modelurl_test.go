@@ -271,6 +271,50 @@ func TestCheckModelAddrs_HostOutsideAllowlist(t *testing.T) {
 	}
 }
 
+// TestCheckModelAddrs_IPLiteral sends a public address for a URL whose host is
+// an IP literal. The connect-time check needs a CIDR entry for the port, and
+// the http flag of the entry for plain http, as CheckModelURL does.
+func TestCheckModelAddrs_IPLiteral(t *testing.T) {
+	t.Parallel()
+
+	public := netip.MustParseAddr("93.184.216.34")
+	prefix := netip.PrefixFrom(public, public.BitLen())
+	entry := func(port int, plainHTTP bool) egress.Allowlist {
+		return egress.Allowlist{
+			Hosts: nil, CIDRs: []egress.CIDRRule{{CIDR: prefix, Port: port, HTTP: plainHTTP}},
+		}
+	}
+
+	tests := []struct {
+		name  string
+		url   string
+		allow egress.Allowlist
+		want  bool
+	}{
+		{"https with no entry", "https://93.184.216.34/", egress.Allowlist{Hosts: nil, CIDRs: nil}, false},
+		{"http with no entry", "http://93.184.216.34/", egress.Allowlist{Hosts: nil, CIDRs: nil}, false},
+		{"https with an entry for another port", "https://93.184.216.34/", entry(8443, false), false},
+		{"http with an entry that lacks http", "http://93.184.216.34:80/", entry(80, false), false},
+		{"https with an entry", "https://93.184.216.34/", entry(443, false), true},
+		{"http with an entry that has http", "http://93.184.216.34:80/", entry(80, true), true},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			t.Parallel()
+
+			err := egress.CheckModelAddrs(tt.url, []netip.Addr{public}, tt.allow, false)
+			if tt.want && err != nil {
+				t.Fatalf("CheckModelAddrs(%q) = %v, want nil", tt.url, err)
+			}
+
+			if !tt.want && !errors.Is(err, egress.ErrRefused) {
+				t.Fatalf("CheckModelAddrs(%q) = %v, want ErrRefused", tt.url, err)
+			}
+		})
+	}
+}
+
 // runDeniedAddr checks the denied address bad alone, after public and before
 // public, with and without the flag --egress-public-only.
 func runDeniedAddr(t *testing.T, text string, bad, public netip.Addr) {

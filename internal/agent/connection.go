@@ -8,6 +8,7 @@ import (
 	"fmt"
 	"io"
 	"maps"
+	"net/netip"
 	"net/url"
 	"slices"
 	"strings"
@@ -554,7 +555,19 @@ func checkBaseURL(raw, format string) error {
 // checkBaseURLShape refuses a URL with a scheme other than https or http,
 // user information, a query string or a fragment.
 func checkBaseURLShape(u *url.URL) error {
-	if u.Scheme != "https" && u.Scheme != "http" {
+	switch u.Scheme {
+	case "https":
+	case "http":
+		// Plain http is for an IP literal only, and the allowlist entry of
+		// that address must allow it. A host name needs https.
+		if _, err := netip.ParseAddr(u.Hostname()); err != nil {
+			return fmt.Errorf(
+				"%w: baseURL uses http with the host name %q: use https, or an IP address that an allowlist entry with http allows",
+				ErrConnectionInvalid,
+				u.Hostname(),
+			)
+		}
+	default:
 		return fmt.Errorf("%w: baseURL has the scheme %q: use https", ErrConnectionInvalid, u.Scheme)
 	}
 
@@ -1131,7 +1144,7 @@ func parseOutputTokens(raw json.RawMessage) (outputTokensSpec, error) {
 		Max   int64  `json:"max"`
 	}
 
-	if err := json.Unmarshal(raw, &formed); err != nil {
+	if err := decodeEntry(raw, &formed); err != nil {
 		return ot, fmt.Errorf("%w: outputTokens does not parse: %w", ErrConnectionInvalid, err)
 	}
 
@@ -1161,7 +1174,7 @@ func parseTools(raw json.RawMessage) (toolsSpec, error) {
 		Parallel string `json:"parallel"`
 	}
 
-	if err := json.Unmarshal(raw, &formed); err != nil {
+	if err := decodeEntry(raw, &formed); err != nil {
 		return t, fmt.Errorf("%w: tools does not parse: %w", ErrConnectionInvalid, err)
 	}
 
@@ -1194,7 +1207,7 @@ func parseReasoning(raw json.RawMessage) (reasoningSpec, error) {
 		Keep []string `json:"keep"`
 	}
 
-	if err := json.Unmarshal(raw, &formed); err != nil {
+	if err := decodeEntry(raw, &formed); err != nil {
 		return r, fmt.Errorf("%w: reasoning does not parse: %w", ErrConnectionInvalid, err)
 	}
 
@@ -1223,7 +1236,7 @@ func parseCache(raw json.RawMessage) (cacheSpec, error) {
 		TTL  string `json:"ttl"`
 	}
 
-	if err := json.Unmarshal(raw, &formed); err != nil {
+	if err := decodeEntry(raw, &formed); err != nil {
 		return c, fmt.Errorf("%w: cache does not parse: %w", ErrConnectionInvalid, err)
 	}
 
@@ -1307,7 +1320,7 @@ func parseConversationKey(raw json.RawMessage) (conversationKeySpec, error) {
 		Prefix    string   `json:"prefix"`
 	}
 
-	if err := json.Unmarshal(raw, &formed); err != nil {
+	if err := decodeEntry(raw, &formed); err != nil {
 		return ck, fmt.Errorf("%w: conversationKey does not parse: %w", ErrConnectionInvalid, err)
 	}
 
@@ -1377,7 +1390,7 @@ func parseErrors(raw json.RawMessage) (errorsSpec, error) {
 		ContextTooLong []string `json:"contextTooLong"`
 	}
 
-	if err := json.Unmarshal(raw, &formed); err != nil {
+	if err := decodeEntry(raw, &formed); err != nil {
 		return es, fmt.Errorf("%w: errors does not parse: %w", ErrConnectionInvalid, err)
 	}
 
@@ -1418,7 +1431,7 @@ func parseRateLimit(raw json.RawMessage) (rateLimitSpec, error) {
 		WaitHeaders []string `json:"waitHeaders"`
 	}
 
-	if err := json.Unmarshal(raw, &formed); err != nil {
+	if err := decodeEntry(raw, &formed); err != nil {
 		return rl, fmt.Errorf("%w: rateLimit does not parse: %w", ErrConnectionInvalid, err)
 	}
 
@@ -1681,9 +1694,9 @@ func checkUserAgent(v string) error {
 	return nil
 }
 
-// isControlRune reports whether r is an ASCII control character.
+// isControlRune reports whether r is a control character: C0, DEL or C1.
 func isControlRune(r rune) bool {
-	return r < firstPrintableRune
+	return r < firstPrintableRune || (r >= 0x7f && r <= 0x9f)
 }
 
 func checkStringControl(s, field string) error {

@@ -88,6 +88,16 @@ func egressAllowlistInvalid(err error) error {
 // readEgressAllowlistInput converts the request to the domain type. It
 // returns the coded error of a rule whose CIDR is not valid.
 func readEgressAllowlistInput(in egressAllowlistRequest) (egress.Allowlist, error) {
+	// Defense in depth: writeEgressAllowlist refuses a body that lacks
+	// "hosts" or "cidrs" too; this check stays so that a new caller cannot
+	// skip it and dereference a nil pointer.
+	if in.Hosts == nil || in.CIDRs == nil {
+		return egress.Allowlist{Hosts: nil, CIDRs: nil}, &codedError{
+			status: http.StatusBadRequest, code: errcode.AgentConnectionAllowlistInvalid, args: nil,
+			message: "The egress allowlist needs both hosts and cidrs: send both lists, empty when none.",
+		}
+	}
+
 	a := egress.Allowlist{
 		Hosts: make([]string, 0, len(*in.Hosts)),
 		CIDRs: make([]egress.CIDRRule, 0, len(*in.CIDRs)),

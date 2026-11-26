@@ -588,8 +588,19 @@ func checkResolvedHost(u *url.URL, a Allowlist) error {
 	return hostURLAllowed(u, host, a)
 }
 
-// resolvedAddrAllowed checks one address of a host name.
+// resolvedAddrAllowed checks one address of the host of u. A host that is an
+// IP literal gets the same checks as in CheckModelURL: a CIDR entry for the
+// port, and the http flag of that entry for plain http. A public address
+// opens only for a host name.
 func resolvedAddrAllowed(u *url.URL, addr netip.Addr, a Allowlist, publicOnly PublicOnly) error {
+	// Defense in depth: CheckModelURL checks the IP literal too; this check
+	// stays so that the connect-time check alone is as strict as the URL
+	// check.
+	host := strings.TrimSuffix(strings.ToLower(u.Hostname()), ".")
+	if _, err := netip.ParseAddr(host); err == nil {
+		return ipURLAllowed(u, addr, a, publicOnly)
+	}
+
 	if alwaysDenied(addr) {
 		return fmt.Errorf("%w: %s is in the always-denied list", ErrRefused, addr)
 	}

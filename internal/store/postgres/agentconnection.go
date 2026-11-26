@@ -166,8 +166,11 @@ func (k AgentSecretItems) Get(ctx context.Context, ref agent.SecretRef) (agent.S
 func (k AgentSecretItems) Replace(
 	ctx context.Context, ref agent.SecretRef, value []byte, e audit.Entry,
 ) (agent.SecretItem, error) {
-	if len(value) == 0 {
-		return agent.SecretItem{}, fmt.Errorf("%w: the value of a secret item is empty", agent.ErrInvalid)
+	// Defense in depth: the service and the handler check the value too;
+	// this check stays so that a new caller cannot store a value that they
+	// would refuse.
+	if err := agent.CheckSecretValue(value); err != nil {
+		return agent.SecretItem{}, err
 	}
 
 	if err := checkServerEntry(e); err != nil {

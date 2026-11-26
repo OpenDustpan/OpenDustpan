@@ -22,7 +22,8 @@ func agentDocumentSchema() apidesc.Declaration {
 // agentOperationLabels names the model connection routes in the description:
 // the secret items, the current document, the formats and the egress
 // allowlist of the installation. The paths stay outside the prefix of the
-// tool-neutral REST API, as the accepted decision fixes them.
+// tool-neutral REST API: the API description keeps these paths, and clients
+// depend on them.
 func agentOperationLabels() map[string]apidesc.Label {
 	return map[string]apidesc.Label{
 		apidesc.Pattern(http.MethodPost, agentItemsPath): apidesc.Name("createAgentSecret", tagAgent).

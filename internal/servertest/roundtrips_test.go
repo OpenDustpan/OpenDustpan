@@ -1614,6 +1614,14 @@ const attemptClaimTrips = 23
 // marks in the run, so the restore makes 2 round trips fewer for it than the
 // model gives a table.
 //
+// The fixed part takes the trips of the seven tables of the agent connection
+// off: the six constants for the tables of Tables that the dev strip never
+// counts (agentSecretItemsTrips, agentConnectionCurrentTrips,
+// agentSecretRefsTrips, agentEgressAllowlistTrips,
+// agentEgressAllowlistHostsTrips and agentEgressAllowlistRulesTrips) hold 2
+// fewer than perTable gives for each, and agentConnectionPendingTrips holds
+// 1 fewer than perOther gives for the emptied agent_connection_pending.
+//
 // The fixed part also holds attemptClaimTrips, and perTable holds the
 // claimReadTrips of the claim read for the table file of each table: the
 // backup that the restore holds reads the claim before each put under
@@ -1626,7 +1634,10 @@ func restoreModel() costModel {
 			breakGlassFloorTrips + breakGlassPasswordTrips + serverAuditLockTrips + checkpointSupersedesTrips +
 			droppedRunnerCredentialTrips + proxyRuleSetTrips + poolProxySettingsTrips + sharingRuleTrips + trustBundleTrips +
 			updateLeaseExpireTrips + swappedSettingTrips + settingChangeEntryTrips - eventReceiptTrips - profileOpenSessionTrips +
-			firstAdministratorTrips + claimTableTrips,
+			firstAdministratorTrips + claimTableTrips +
+			agentSecretItemsTrips + agentConnectionCurrentTrips + agentSecretRefsTrips +
+			agentEgressAllowlistTrips + agentEgressAllowlistHostsTrips + agentEgressAllowlistRulesTrips +
+			agentConnectionPendingTrips,
 		perTable:     7 + claimReadTrips,
 		perOther:     2,
 		perMigration: 2,
@@ -1798,6 +1809,61 @@ const sharingRuleTrips = -2
 // counts. The run makes 5 round trips for it, 2 fewer than perTable gives, as
 // for group_mappings.
 const poolProxySettingsTrips = -2
+
+// agentSecretItemsTrips is the change in the fixed part for the table
+// agent_secret_items, a table of Tables that the dev strip never counts: the
+// strip counts only the rows of its classes, and no class holds the agent
+// rows, and no staged check reads the table either. The run makes 5 round
+// trips for it, 2 fewer than perTable gives, as for group_mappings.
+//
+// The measured runs of the restore with the seven tables of the agent
+// connection hold 13 round trips fewer than the model gave, at both sizes, so
+// the count does not grow with the units: the restore made 1722 round trips
+// at 3 stacks and 3 workspaces, where the model gave 1735, and 1857 at 30
+// stacks and 30 workspaces, where the model gave 1870. A backup matched the
+// model at 932 round trips, so the tables cost the usual perTable and claim
+// read there. The six tables of Tables hold 2 fewer each and the emptied
+// table holds 1 fewer, and 6 times 2 plus 1 is the 13 of the measured runs.
+const agentSecretItemsTrips = -2
+
+// agentConnectionCurrentTrips is the change in the fixed part for the table
+// agent_connection_current, a table of Tables that the dev strip never
+// counts. The run makes 5 round trips for it, 2 fewer than perTable gives, as
+// for agent_secret_items.
+const agentConnectionCurrentTrips = -2
+
+// agentSecretRefsTrips is the change in the fixed part for the table
+// agent_secret_refs, a table of Tables that the dev strip never counts. The
+// run makes 5 round trips for it, 2 fewer than perTable gives, as for
+// agent_secret_items.
+const agentSecretRefsTrips = -2
+
+// agentEgressAllowlistTrips is the change in the fixed part for the table
+// agent_egress_allowlist, a table of Tables that the dev strip never counts.
+// The run makes 5 round trips for it, 2 fewer than perTable gives, as for
+// agent_secret_items.
+const agentEgressAllowlistTrips = -2
+
+// agentEgressAllowlistHostsTrips is the change in the fixed part for the
+// table agent_egress_allowlist_hosts, a table of Tables that the dev strip
+// never counts. The run makes 5 round trips for it, 2 fewer than perTable
+// gives, as for agent_secret_items.
+const agentEgressAllowlistHostsTrips = -2
+
+// agentEgressAllowlistRulesTrips is the change in the fixed part for the
+// table agent_egress_allowlist_rules, a table of Tables that the dev strip
+// never counts. The run makes 5 round trips for it, 2 fewer than perTable
+// gives, as for agent_secret_items.
+const agentEgressAllowlistRulesTrips = -2
+
+// agentConnectionPendingTrips is the change in the fixed part for the table
+// agent_connection_pending, an emptied table that a backup holds no rows of.
+// The restore reads it only for its column check, 1 round trip, 1 fewer than
+// the 2 that perOther gives, as for passkey_challenges: the swap deletes no
+// row of it, because the swap rewrites only the control tables. Its 1 round
+// trip is part of the 13 of the measured runs, which agentSecretItemsTrips
+// quotes.
+const agentConnectionPendingTrips = -1
 
 // removalAlertTrips is the change in the fixed part for the table
 // member_removal_alerts. Like member_removals, it costs 2 round trips fewer

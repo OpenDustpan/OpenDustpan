@@ -1,6 +1,7 @@
 package dustpan
 
 import (
+	"errors"
 	"fmt"
 
 	"opendustpan.org/opendustpan/internal/agent"
@@ -12,12 +13,11 @@ import (
 )
 
 // newAgentService builds the service of the model connection from the
-// namespace store. The second result is false when the store is none of the
-// built-in SQL adapters or the server has no key wrapper or authorizer.
-// Without the service, the agent routes stay unmounted.
-func newAgentService(cfg *settings, authz identity.Authorizer) (*agentsvc.Service, bool, error) {
+// namespace store. It returns errAgentUnavailable when the store is none of
+// the built-in SQL adapters or the server has no key wrapper or authorizer.
+func newAgentService(cfg *settings, authz identity.Authorizer) (*agentsvc.Service, error) {
 	if cfg.secretWrapper == nil || authz == nil {
-		return nil, false, nil
+		return nil, fmt.Errorf("%w: the server has no secret key wrapper or no authorizer", errAgentUnavailable)
 	}
 
 	// The two adapters return their own store structs, which share no Go
@@ -43,9 +43,13 @@ func newAgentService(cfg *settings, authz identity.Authorizer) (*agentsvc.Servic
 			allowlist:  func() agent.EgressAllowlistStore { return store.AgentEgressAllowlist() },
 		})
 	default:
-		return nil, false, nil
+		return nil, fmt.Errorf("%w: the store is not a built-in SQL adapter", errAgentUnavailable)
 	}
 }
+
+// errAgentUnavailable means that the server cannot offer the model connection.
+// The agent routes stay unmounted.
+var errAgentUnavailable = errors.New("the model connection is not available")
 
 // agentPortSet is the ports of one built-in SQL adapter for the model
 // connection.
@@ -60,12 +64,12 @@ type agentPortSet struct {
 // installation keys and builds the service of the model connection.
 func buildAgentService(
 	cfg *settings, authz identity.Authorizer, ports agentPortSet,
-) (*agentsvc.Service, bool, error) {
+) (*agentsvc.Service, error) {
 	sealer, err := secret.NewInstallationSecrets(secret.InstallationConfig{
 		Keys: ports.keys, Wrapper: cfg.secretWrapper, Now: cfg.now,
 	})
 	if err != nil {
-		return nil, false, fmt.Errorf("installation secrets: %w", err)
+		return nil, fmt.Errorf("installation secrets: %w", err)
 	}
 
 	svc, err := agentsvc.New(agentsvc.Config{
@@ -76,8 +80,8 @@ func buildAgentService(
 		Now:        cfg.now,
 	})
 	if err != nil {
-		return nil, false, fmt.Errorf("agent service: %w", err)
+		return nil, fmt.Errorf("agent service: %w", err)
 	}
 
-	return svc, true, nil
+	return svc, nil
 }

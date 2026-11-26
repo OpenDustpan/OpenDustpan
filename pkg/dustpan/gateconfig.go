@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"log/slog"
 	"strings"
 
 	"opendustpan.org/opendustpan/internal/agentsvc"
@@ -198,7 +199,15 @@ func newInstallationServices(
 		return none, err
 	}
 
-	agentSvc, _, err := newAgentService(cfg, cfg.authorizer)
+	agentSvc, err := newAgentService(cfg, cfg.authorizer)
+	if errors.Is(err, errAgentUnavailable) {
+		// The service is nil: the agent routes stay unmounted. The log line
+		// gives the reason.
+		cfg.logger.Warn("the model connection routes are not mounted", slog.String("reason", err.Error()))
+
+		err = nil
+	}
+
 	if err != nil {
 		return none, err
 	}

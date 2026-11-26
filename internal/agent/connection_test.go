@@ -149,6 +149,76 @@ func TestParseConnectionSpec_Hostile(t *testing.T) {
 			want: agent.ErrConnectionInvalid,
 		},
 		{
+			name: "cache with an unknown field",
+			raw: strings.Replace(
+				validDocument(),
+				`"outputTokens"`,
+				`"cache": { "ttl": "5m", "modes": "x" }, "outputTokens"`,
+				1,
+			),
+			want: agent.ErrConnectionInvalid,
+		},
+		{
+			name: "outputTokens with an unknown field",
+			raw:  strings.Replace(validDocument(), `"max": 8192`, `"max": 8192, "maxx": 1`, 1),
+			want: agent.ErrConnectionInvalid,
+		},
+		{
+			name: "tools with an unknown field",
+			raw:  strings.Replace(validDocument(), `"parallel": "on"`, `"parallel": "on", "extra": 1`, 1),
+			want: agent.ErrConnectionInvalid,
+		},
+		{
+			name: "reasoning with an unknown field",
+			raw: strings.Replace(
+				validDocument(),
+				`"outputTokens"`,
+				`"reasoning": { "keep": [], "extra": 1 }, "outputTokens"`,
+				1,
+			),
+			want: agent.ErrConnectionInvalid,
+		},
+		{
+			name: "conversationKey with an unknown field",
+			raw: strings.Replace(
+				validDocument(),
+				`"outputTokens"`,
+				`"conversationKey": { "prefix": "a", "extra": 1 }, "outputTokens"`,
+				1,
+			),
+			want: agent.ErrConnectionInvalid,
+		},
+		{
+			name: "errors with an unknown field",
+			raw: strings.Replace(
+				validDocument(),
+				`"outputTokens"`,
+				`"errors": { "quota": ["a"], "extra": 1 }, "outputTokens"`,
+				1,
+			),
+			want: agent.ErrConnectionInvalid,
+		},
+		{
+			name: "rateLimit with an unknown field",
+			raw: strings.Replace(
+				validDocument(),
+				`"outputTokens"`,
+				`"rateLimit": { "waitHeaders": ["retry-after"], "extra": 1 }, "outputTokens"`,
+				1,
+			),
+			want: agent.ErrConnectionInvalid,
+		},
+		{
+			name: "model with a DEL character",
+			raw:  strings.Replace(validDocument(), `"example-model"`, `"ex\u007fample"`, 1),
+			want: agent.ErrConnectionInvalid,
+		},
+		{
+			name: "model with a C1 control character",
+			raw:  strings.Replace(validDocument(), `"example-model"`, `"ex\u0085ample"`, 1),
+			want: agent.ErrConnectionInvalid,
+		},
+		{
 			name: "rateLimit wait header that is not a token",
 			raw: strings.Replace(
 				validDocument(),
@@ -505,6 +575,15 @@ func TestBaseURL_Hostile(t *testing.T) {
 }`,
 		},
 		{
+			name: "plain http with a host name",
+			raw: strings.Replace(
+				validDocument(),
+				`"baseURL": "https://example.local/v1"`,
+				`"baseURL": "http://models.example.com/v1"`,
+				1,
+			),
+		},
+		{
 			name: "path ends in format path",
 			raw: `{
   "version": 1,
@@ -701,6 +780,10 @@ func TestHeaders_PlainSecretByName(t *testing.T) {
 
 			if !strings.Contains(err.Error(), c.field) {
 				t.Fatalf("ParseConnectionSpec() error = %q, want it to name %s", err, c.field)
+			}
+
+			if !strings.Contains(err.Error(), "POST /api/agent/secrets") {
+				t.Fatalf("ParseConnectionSpec() error = %q, want it to name POST /api/agent/secrets", err)
 			}
 
 			if strings.Contains(err.Error(), "sk-123") {
