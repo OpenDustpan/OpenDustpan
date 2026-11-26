@@ -232,27 +232,33 @@ jobs:
           fi
 
       - name: Build once and push to the forge container registry
-        if: env.MODE == 'build'
         env:
           TAG: ${{ github.ref_name }}
         run: |
+          if [ "$MODE" != "build" ]; then
+            exit 0
+          fi
           docker buildx build --platform linux/amd64,linux/arm64 --build-arg VERSION="${TAG}" --tag "${FORGE_IMAGE}:${TAG}" --push .
 
       - name: Push the same digest to Docker Hub
-        if: env.MODE == 'build' || env.MODE == 'complete-hub'
         env:
           TAG: ${{ github.ref_name }}
         run: |
+          if [ "$MODE" != "build" ] && [ "$MODE" != "complete-hub" ]; then
+            exit 0
+          fi
           if ! docker buildx imagetools create --tag "${HUB_IMAGE}:${TAG}" "${FORGE_IMAGE}:${TAG}"; then
             echo "::error::Docker Hub push failed with authentication denied. Rotate the token with: gh secret set DOCKERHUB_TOKEN --repo OpenDustpan/OpenDustpan"
             exit 1
           fi
 
       - name: Push the same digest to the forge container registry
-        if: env.MODE == 'complete-forge'
         env:
           TAG: ${{ github.ref_name }}
         run: |
+          if [ "$MODE" != "complete-forge" ]; then
+            exit 0
+          fi
           if ! docker buildx imagetools create --tag "${FORGE_IMAGE}:${TAG}" "${HUB_IMAGE}:${TAG}"; then
             echo "::error::Forge registry push failed. Check the run log and re-run the tag."
             exit 1

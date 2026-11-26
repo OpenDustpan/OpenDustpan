@@ -155,6 +155,7 @@ type workflowJob struct {
 	If          string            `yaml:"if"`
 	Needs       any               `yaml:"needs"`
 	Permissions map[string]string `yaml:"permissions"`
+	Env         map[string]any    `yaml:"env"`
 	Steps       []workflowStep    `yaml:"steps"`
 }
 
@@ -162,6 +163,7 @@ type workflowJob struct {
 type workflowFile struct {
 	On          map[string]any         `yaml:"on"`
 	Permissions map[string]string      `yaml:"permissions"`
+	Env         map[string]any         `yaml:"env"`
 	Jobs        map[string]workflowJob `yaml:"jobs"`
 }
 
@@ -342,6 +344,117 @@ func checkWorkflowFilePermissions(path string, doc *yaml.Node) []string {
 	}
 }
 
+// allowedWorkflowJobKeys answers the allowlist of the keys of a job.
+func allowedWorkflowJobKeys() []string {
+	return []string{"env", "if", "needs", "permissions", "runs-on", "steps"}
+}
+
+// allowedWorkflowStepKeys answers the allowlist of the keys of a step. In
+// particular, "if" and "continue-on-error" are not allowed on a step.
+func allowedWorkflowStepKeys() []string {
+	return []string{"env", "name", "run", "uses", "with"}
+}
+
+// yamlMappingField returns the value of key in a mapping node.
+func yamlMappingField(node *yaml.Node, key string) (*yaml.Node, bool) {
+	if node == nil || node.Kind != yaml.MappingNode {
+		return nil, false
+	}
+
+	for i := 0; i+1 < len(node.Content); i += 2 {
+		if node.Content[i].Value == key {
+			return node.Content[i+1], true
+		}
+	}
+
+	return nil, false
+}
+
+// checkJobKeys answers a finding for each key of one job outside the allowlist.
+func checkJobKeys(name string, job *yaml.Node) []string {
+	var out []string
+
+	for j := 0; j+1 < len(job.Content); j += 2 {
+		key := job.Content[j].Value
+		if !slices.Contains(allowedWorkflowJobKeys(), key) {
+			out = append(out, "job "+name+": job keys: the job holds the key "+key+
+				", which the allowlist refuses")
+		}
+	}
+
+	return out
+}
+
+// checkOneStepKeys answers a finding for each key of one step outside the allowlist.
+func checkOneStepKeys(name, label string, step *yaml.Node) []string {
+	var out []string
+
+	for k := 0; k+1 < len(step.Content); k += 2 {
+		key := step.Content[k].Value
+		if !slices.Contains(allowedWorkflowStepKeys(), key) {
+			out = append(out, "job "+name+": step keys: the "+label+" holds the key "+key+
+				", which the allowlist refuses")
+		}
+	}
+
+	return out
+}
+
+// checkStepsKeys answers a finding for each step key of one job outside the allowlist.
+func checkStepsKeys(name string, job *yaml.Node) []string {
+	var out []string
+
+	steps, ok := yamlMappingField(job, "steps")
+	if !ok || steps.Kind != yaml.SequenceNode {
+		return nil
+	}
+
+	for idx, step := range steps.Content {
+		if step.Kind != yaml.MappingNode {
+			continue
+		}
+
+		label := fmt.Sprintf("step %d", idx+1)
+		if n, ok := yamlMappingField(step, "name"); ok && n.Kind == yaml.ScalarNode {
+			label = "step " + n.Value
+		}
+
+		out = append(out, checkOneStepKeys(name, label, step)...)
+	}
+
+	return out
+}
+
+// checkWorkflowKeyAllowlist checks that each job and each step holds only an
+// allowed key. It reads the YAML node, not a decoded struct, because a decoded
+// struct drops an unknown key such as a step "if" or "continue-on-error".
+func checkWorkflowKeyAllowlist(doc *yaml.Node) []string {
+	var out []string
+
+	top := doc
+	if top.Kind == yaml.DocumentNode && len(top.Content) > 0 {
+		top = top.Content[0]
+	}
+
+	jobs, ok := yamlMappingField(top, "jobs")
+	if !ok || jobs.Kind != yaml.MappingNode {
+		return nil
+	}
+
+	for i := 0; i+1 < len(jobs.Content); i += 2 {
+		name := jobs.Content[i].Value
+		job := jobs.Content[i+1]
+		if job.Kind != yaml.MappingNode {
+			continue
+		}
+
+		out = append(out, checkJobKeys(name, job)...)
+		out = append(out, checkStepsKeys(name, job)...)
+	}
+
+	return out
+}
+
 // checkWorkflowJobPresence checks that the four jobs exist and that no other
 // job exists: a job name outside the allowlist of four is refused.
 func checkWorkflowJobPresence(wf workflowFile) []string {
@@ -501,16 +614,25 @@ func checkWorkflowPins(raw string) []string {
 	return out
 }
 
+// envReadsSecrets answers whether an env map reads a secret.
+func envReadsSecrets(env map[string]any) bool {
+	for _, v := range env {
+		if s, ok := v.(string); ok && strings.Contains(s, "secrets.") {
+			return true
+		}
+	}
+
+	return false
+}
+
 // stepReadsSecrets answers whether a step reads a secret.
 func stepReadsSecrets(step workflowStep) bool {
 	if strings.Contains(step.Run, "secrets.") {
 		return true
 	}
 
-	for _, v := range step.Env {
-		if s, ok := v.(string); ok && strings.Contains(s, "secrets.") {
-			return true
-		}
+	if envReadsSecrets(step.Env) {
+		return true
 	}
 
 	for _, v := range step.With {
@@ -563,6 +685,36 @@ func checkWorkflowRuns(wf workflowFile) []string {
 			if name != "publish" && name != "release-draft" && stepReadsSecrets(step) {
 				out = append(out, "job "+name+": permissions: the job reads secrets.")
 			}
+		}
+	}
+
+	return out
+}
+
+// checkWorkflowEnvSecrets checks the file env and the job env of every job
+// that must not read a secret. The step env is part of checkWorkflowRuns.
+// An archive job reads no secret at the file, the job or the step level.
+func checkWorkflowEnvSecrets(path string, wf workflowFile) []string {
+	var out []string
+
+	if envReadsSecrets(wf.Env) {
+		out = append(out, "workflow "+path+": permissions: the file env reads secrets.")
+	}
+
+	names := make([]string, 0, len(wf.Jobs))
+	for name := range wf.Jobs {
+		names = append(names, name)
+	}
+
+	slices.Sort(names)
+
+	for _, name := range names {
+		if name == "publish" || name == "release-draft" {
+			continue
+		}
+
+		if envReadsSecrets(wf.Jobs[name].Env) {
+			out = append(out, "job "+name+": permissions: the job env reads secrets.")
 		}
 	}
 
@@ -648,22 +800,112 @@ const (
 	tagStepName      = "Check that the tag is a final version tag"
 	actorCompareText = `[ "$PERMISSION" != "admin" ] && [ "$PERMISSION" != "maintain" ]`
 	checksumText     = "sha256sum --check --strict SHA256SUMS"
+
+	actorRunText = `PERMISSION="$(gh api "repos/$REPO/collaborators/$ACTOR/permission" --jq .permission)" || {
+  echo "::error::Release permission check failed for the actor. An actor with release permission must start the tag."
+  exit 1
+}
+if ` + actorCompareText + `; then
+  echo "::error::The actor has repository permission $PERMISSION, not release permission. An actor with release permission must start the tag."
+  exit 1
+fi
+`
 )
 
+// expectedActorStep returns the exact actor step of publish and release-draft.
+func expectedActorStep() workflowStep {
+	env := map[string]any{
+		"ACTOR": "${{ github.actor }}",
+		"REPO":  "${{ github.repository }}",
+	}
+	env["GH_"+"TOKEN"] = "${{ secrets.GITHUB_TOKEN }}"
+
+	return workflowStep{
+		Name: actorStepName,
+		Uses: "",
+		With: nil,
+		Env:  env,
+		Run:  actorRunText,
+	}
+}
+
+// expectedTagMessage answers the message of the exact tag-format step of one job.
+func expectedTagMessage(name string) string {
+	switch name {
+	case "archives-build":
+		return "This run builds no archive."
+	case "publish":
+		return "This run publishes no image."
+	case "release-draft":
+		return "This run creates no release."
+	default:
+		return ""
+	}
+}
+
+// expectedTagStep returns the exact tag-format step of one job.
+func expectedTagStep(name string) workflowStep {
+	message := expectedTagMessage(name)
+
+	return workflowStep{
+		Name: tagStepName,
+		Uses: "",
+		With: nil,
+		Env:  map[string]any{"TAG": "${{ github.ref_name }}"},
+		Run: `if ! echo "$TAG" | grep -Eq '^v[0-9]+\.[0-9]+\.[0-9]+$'; then
+  echo "::error::Not a final version tag (vX.Y.Z with no suffix). ` + message + `"
+  exit 1
+fi
+`,
+	}
+}
+
+// sameEnv answers whether two env maps hold the same keys and values.
+func sameEnv(a, b map[string]any) bool {
+	if len(a) != len(b) {
+		return false
+	}
+
+	for k, v := range b {
+		if got, ok := a[k]; !ok || got != v {
+			return false
+		}
+	}
+
+	return true
+}
+
+// stepMatches answers whether the name, the env map and the run text of two
+// steps are equal.
+func stepMatches(got, want workflowStep) bool {
+	return got.Name == want.Name && sameEnv(got.Env, want.Env) && got.Run == want.Run
+}
+
 // checkWorkflowActorComparison checks that the actor step of publish and of
-// release-draft refuses each permission except admin and maintain. A missing
-// step of release-draft is reported by checkWorkflowAuthorization.
+// release-draft is exactly the expected step and that its run text refuses
+// each permission except admin and maintain. A missing step of release-draft
+// is reported by checkWorkflowAuthorization.
 func checkWorkflowActorComparison(wf workflowFile) []string {
 	var out []string
+
+	want := expectedActorStep()
 
 	for _, name := range []string{"publish", "release-draft"} {
 		found := false
 
 		for _, step := range wf.Jobs[name].Steps {
-			if step.Name == actorStepName {
-				found = true
-				out = append(out, actorRunFindings(name, step.Run)...)
+			if step.Name != actorStepName {
+				continue
 			}
+
+			found = true
+
+			if !stepMatches(step, want) {
+				out = append(out, "job "+name+": authorization at the point of use: "+
+					"the actor step differs from the expected actor step")
+			}
+
+			out = append(out, actorRunFindings(name, step.Run)...)
 		}
 
 		if !found && name == "publish" {
@@ -674,7 +916,8 @@ func checkWorkflowActorComparison(wf workflowFile) []string {
 	return out
 }
 
-// actorRunFindings checks the run text of one actor step.
+// actorRunFindings checks the run text of one actor step. Each condition is
+// separate so that a test row can isolate it.
 func actorRunFindings(name, run string) []string {
 	var out []string
 
@@ -682,8 +925,7 @@ func actorRunFindings(name, run string) []string {
 		out = append(out, "job "+name+": authorization at the point of use: the actor step has no permission check")
 	}
 
-	if !strings.Contains(run, actorCompareText) ||
-		strings.Count(run, `"$PERMISSION" `) != 2 ||
+	if strings.Count(run, `"$PERMISSION" `) != 2 ||
 		strings.Contains(run, `"$PERMISSION" ==`) ||
 		!strings.Contains(run, "exit 1") {
 		out = append(out, "job "+name+": authorization at the point of use: "+
@@ -724,28 +966,72 @@ func releaseTagRegexp(job workflowJob) (*regexp.Regexp, bool) {
 	return nil, false
 }
 
-// checkWorkflowTagFormat checks that archives-build, publish and
-// release-draft each refuse a tag that is not vX.Y.Z.
-func checkWorkflowTagFormat(wf workflowFile) []string {
+// checkOneJobTagExact answers a finding when the tag-format step of one job
+// differs from the exact expected step.
+func checkOneJobTagExact(name string, job workflowJob, want workflowStep) ([]string, bool) {
 	var out []string
 
-	for _, name := range []string{"archives-build", "publish", "release-draft"} {
-		re, ok := releaseTagRegexp(wf.Jobs[name])
-		if !ok {
-			out = append(out, "job "+name+": tag format: the final version tag step is missing")
+	found := false
 
+	for _, step := range job.Steps {
+		if step.Name != tagStepName {
 			continue
 		}
 
-		if !re.MatchString("v1.2.3") {
-			out = append(out, "job "+name+": tag format: the step refuses v1.2.3")
-		}
+		found = true
 
-		for _, tag := range hostileReleaseTags() {
-			if re.MatchString(tag) {
-				out = append(out, "job "+name+": tag format: the step accepts the tag "+tag)
-			}
+		if !stepMatches(step, want) {
+			out = append(out, "job "+name+": tag format: "+
+				"the tag step differs from the expected tag step")
 		}
+	}
+
+	return out, found
+}
+
+// checkOneJobTagRegexp answers a finding when the tag pattern of one job
+// accepts a hostile tag or refuses a final version tag.
+func checkOneJobTagRegexp(name string, job workflowJob) []string {
+	var out []string
+
+	re, ok := releaseTagRegexp(job)
+	if !ok {
+		return []string{"job " + name + ": tag format: the final version tag step is missing"}
+	}
+
+	if !re.MatchString("v1.2.3") {
+		out = append(out, "job "+name+": tag format: the step refuses v1.2.3")
+	}
+
+	for _, tag := range hostileReleaseTags() {
+		if re.MatchString(tag) {
+			out = append(out, "job "+name+": tag format: the step accepts the tag "+tag)
+		}
+	}
+
+	return out
+}
+
+// checkOneJobTagFormat checks the exact tag-format step and the tag pattern of one job.
+func checkOneJobTagFormat(name string, job workflowJob) []string {
+	want := expectedTagStep(name)
+
+	exact, found := checkOneJobTagExact(name, job, want)
+	if !found {
+		return append(exact, "job "+name+": tag format: the final version tag step is missing")
+	}
+
+	return append(exact, checkOneJobTagRegexp(name, job)...)
+}
+
+// checkWorkflowTagFormat checks that archives-build, publish and
+// release-draft each hold the exact tag-format step and refuse a tag that is
+// not vX.Y.Z.
+func checkWorkflowTagFormat(wf workflowFile) []string {
+	out := make([]string, 0, 3)
+
+	for _, name := range []string{"archives-build", "publish", "release-draft"} {
+		out = append(out, checkOneJobTagFormat(name, wf.Jobs[name])...)
 	}
 
 	return out
@@ -783,6 +1069,7 @@ func releaseWorkflowFindings(path string, raw []byte) []string {
 
 	findings = append(findings, checkWorkflowTriggers(path, wf)...)
 	findings = append(findings, checkWorkflowFilePermissions(path, &doc)...)
+	findings = append(findings, checkWorkflowKeyAllowlist(&doc)...)
 	findings = append(findings, checkWorkflowJobPresence(wf)...)
 
 	names := make([]string, 0, len(wf.Jobs))
@@ -802,6 +1089,7 @@ func releaseWorkflowFindings(path string, raw []byte) []string {
 
 	findings = append(findings, checkWorkflowPins(string(raw))...)
 	findings = append(findings, checkWorkflowRuns(wf)...)
+	findings = append(findings, checkWorkflowEnvSecrets(path, wf)...)
 	findings = append(findings, checkWorkflowCheckouts(wf)...)
 	findings = append(findings, checkWorkflowAuthorization(wf)...)
 	findings = append(findings, checkWorkflowActorComparison(wf)...)
@@ -811,9 +1099,18 @@ func releaseWorkflowFindings(path string, raw []byte) []string {
 	return findings
 }
 
-// checkArchiveJobReadsNoSecret fails the test when an archive job reads a secret.
+// checkArchiveJobReadsNoSecret fails the test when an archive job reads a
+// secret at the file, the job or the step level.
 func checkArchiveJobReadsNoSecret(tb testing.TB, wf workflowFile, name string) {
 	tb.Helper()
+
+	if envReadsSecrets(wf.Env) {
+		tb.Errorf("the file env gives job %s a secret", name)
+	}
+
+	if envReadsSecrets(wf.Jobs[name].Env) {
+		tb.Errorf("job %s reads a secret in its job env", name)
+	}
 
 	for _, step := range wf.Jobs[name].Steps {
 		if stepReadsSecrets(step) {
@@ -1278,6 +1575,19 @@ func workflowPinRunMutations() []workflowMutation {
 			},
 		},
 		{
+			"a checkout with persist-credentials true",
+			"archives-build",
+			"persist-credentials",
+			func(s string) string {
+				return strings.Replace(
+					s,
+					"          persist-credentials: false",
+					"          persist-credentials: true",
+					1,
+				)
+			},
+		},
+		{
 			"a publish checkout with no persist-credentials false",
 			"publish",
 			"persist-credentials",
@@ -1323,6 +1633,7 @@ func workflowMutations() []workflowMutation {
 	out := workflowGuardTriggerMutations(guard)
 	out = append(out, workflowPermissionMutations()...)
 	out = append(out, workflowPinRunMutations()...)
+	out = append(out, securityReviewMutations()...)
 
 	return out
 }
@@ -1455,6 +1766,18 @@ func moreWorkflowMutations() []workflowMutation {
 		{"release-draft with one permission comparison", "release-draft", "authorization", func(s string) string {
 			return replaceInJob(s, "release-draft", ` && [ "$PERMISSION" != "maintain" ]`, "")
 		}},
+		{"release-draft actor step with no exit 1", "release-draft", "authorization", func(s string) string {
+			return mutateJob(s, "release-draft", func(j string) string {
+				a := strings.Index(j, "      - name: "+actorStepName)
+				b := strings.Index(j, "      - name: "+tagStepName)
+
+				if a < 0 || b < a {
+					return j
+				}
+
+				return j[:a] + strings.ReplaceAll(j[a:b], "exit 1", "exit 0") + j[b:]
+			})
+		}},
 	}...)
 
 	for _, job := range []string{"archives-build", "publish", "release-draft"} {
@@ -1470,6 +1793,108 @@ func moreWorkflowMutations() []workflowMutation {
 	}
 
 	return rows
+}
+
+// securityReviewMutations returns the hostile copies of the staged file from
+// the security review: a step "if" or "continue-on-error", an actor env value,
+// a job-level secret, a file-level secret, a step guard and an early exit.
+func securityReviewMutations() []workflowMutation {
+	return []workflowMutation{
+		{
+			"P1 continue-on-error true on the release-draft actor step",
+			"release-draft",
+			"step keys",
+			func(s string) string {
+				return replaceInJob(s, "release-draft",
+					"      - name: "+actorStepName+"\n",
+					"      - name: "+actorStepName+"\n        continue-on-error: true\n")
+			},
+		},
+		{
+			"P2 if false on the release-draft actor step",
+			"release-draft",
+			"step keys",
+			func(s string) string {
+				return replaceInJob(s, "release-draft",
+					"      - name: "+actorStepName+"\n",
+					"      - name: "+actorStepName+"\n        if: false\n")
+			},
+		},
+		{
+			"P3 if false on the publish actor step",
+			"publish",
+			"step keys",
+			func(s string) string {
+				return replaceInJob(s, "publish",
+					"      - name: "+actorStepName+"\n",
+					"      - name: "+actorStepName+"\n        if: false\n")
+			},
+		},
+		{
+			"P4 continue-on-error true on the archives-build tag step",
+			"archives-build",
+			"step keys",
+			func(s string) string {
+				return replaceInJob(s, "archives-build",
+					"      - name: "+tagStepName+"\n",
+					"      - name: "+tagStepName+"\n        continue-on-error: true\n")
+			},
+		},
+		{
+			"P5 an actor value other than github.actor",
+			"release-draft",
+			"authorization",
+			func(s string) string {
+				return replaceInJob(s, "release-draft",
+					"          ACTOR: ${{ github.actor }}",
+					"          ACTOR: some-admin")
+			},
+		},
+		{
+			"P6 a job-level secret in archives-build",
+			"archives-build",
+			"secrets",
+			func(s string) string {
+				return replaceInJob(s, "archives-build",
+					"    runs-on: ubuntu-26.04\n",
+					"    runs-on: ubuntu-26.04\n    env:\n      TOKEN: ${{ secrets.DOCKERHUB_TOKEN }}\n")
+			},
+		},
+		{
+			"P8 a file-level secret",
+			"workflow",
+			"secrets",
+			func(s string) string {
+				return strings.Replace(
+					s,
+					"  HUB_IMAGE: docker.io/opendustpan/opendustpan\n",
+					"  HUB_IMAGE: docker.io/opendustpan/opendustpan\n"+
+						"  DOCKERHUB_TOKEN: ${{ secrets.DOCKERHUB_TOKEN }}\n",
+					1,
+				)
+			},
+		},
+		{
+			"P9 if always() on the draft release step",
+			"release-draft",
+			"step keys",
+			func(s string) string {
+				return replaceInJob(s, "release-draft",
+					"      - name: Create the draft release\n",
+					"      - name: Create the draft release\n        if: always()\n")
+			},
+		},
+		{
+			"P10 exit 0 before the actor permission call",
+			"release-draft",
+			"authorization",
+			func(s string) string {
+				return replaceInJob(s, "release-draft",
+					`          PERMISSION="$(gh api`,
+					"          exit 0\n"+`          PERMISSION="$(gh api`)
+			},
+		},
+	}
 }
 
 // TestReleaseWorkflowTagFormatRefusesHostileTags runs the pattern of each
@@ -1559,6 +1984,48 @@ func TestReleaseWorkflowCheckerRefusesWeakWorkflows(t *testing.T) {
 		t.Run(tt.name, func(t *testing.T) {
 			t.Parallel()
 			checkOneMutation(t, path, good, tt)
+		})
+	}
+}
+
+// TestActorRunFindingsIsolatesSubConditions proves that each actor
+// sub-condition is load-bearing. Each row changes exactly one condition of the
+// good run, and actorRunFindings refuses it. The full-step comparison is
+// checked by TestReleaseWorkflowCheckerRefusesWeakWorkflows.
+func TestActorRunFindingsIsolatesSubConditions(t *testing.T) {
+	t.Parallel()
+
+	good := expectedActorStep().Run
+
+	cases := []struct {
+		name string
+		run  string
+	}{
+		{
+			"one permission comparison",
+			strings.Replace(good, ` && [ "$PERMISSION" != "maintain" ]`, "", 1),
+		},
+		{
+			"== comparison",
+			strings.Replace(good, `[ "$PERMISSION" != "admin" ]`, `[ "$PERMISSION" == "admin" ]`, 1),
+		},
+		{
+			"no exit 1",
+			strings.ReplaceAll(good, "exit 1", "exit 0"),
+		},
+	}
+
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			t.Parallel()
+
+			if tc.run == good {
+				t.Fatal("the row changed nothing")
+			}
+
+			if findings := actorRunFindings("release-draft", tc.run); len(findings) == 0 {
+				t.Errorf("actorRunFindings accepts the run with %s", tc.name)
+			}
 		})
 	}
 }
