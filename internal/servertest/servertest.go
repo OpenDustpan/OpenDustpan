@@ -570,7 +570,7 @@ func serverOptions(
 		)
 	}
 
-	return append(opts, explicitStoreOptions(stores.adapter, logger)...)
+	return append(opts, explicitStoreOptions(stores.adapter, wrapper, logger)...)
 }
 
 // errNotReady reports a server that did not answer ready in time.
@@ -816,9 +816,11 @@ func (c *Cluster) openBuiltin(t *testing.T, database string) *dustpan.BuiltinSto
 // a query tracer. It is the one place that wires the ports by hand: the pgx
 // query tracer can be set only when the store opens, and no exported store
 // option of dustpan.OpenStore takes it, so the store of this server comes from
-// postgres.Open and cannot become a dustpan.BuiltinStore. A change to the
-// ports of the built-in store must change this list too.
-func explicitStoreOptions(store *postgres.Store, logger *slog.Logger) []dustpan.Option {
+// postgres.Open and cannot become a dustpan.BuiltinStore. The list must give
+// every port that postgresStoreOptions of the built-in store gives, with the
+// wrapper of the server for the replay records. A change to the ports of the
+// built-in store must change this list too.
+func explicitStoreOptions(store *postgres.Store, wrapper secret.Wrapper, logger *slog.Logger) []dustpan.Option {
 	return []dustpan.Option{
 		dustpan.WithNamespaceStore(store),
 		dustpan.WithStackStore(store),
@@ -841,11 +843,17 @@ func explicitStoreOptions(store *postgres.Store, logger *slog.Logger) []dustpan.
 			return job.NewClaimer(store.Jobs(), store.DurableOperationsPort(), store, g, job.WithClaimerLogger(logger))
 		}),
 		dustpan.WithTriggerStore(store.Triggers()),
-		dustpan.WithUnitSettingsStore(store.UnitSettings()),
+		dustpan.WithSavedViewStore(store.SavedViews()),
 		dustpan.WithDriftStore(store.DriftResults()),
+		dustpan.WithGitHostStore(store.GitHost()),
+		dustpan.WithRegistry(store.Registry(), store.RegistryKeys()),
+		dustpan.WithSinkStore(store.NotificationSinks()),
+		dustpan.WithUnitSettingsStore(store.UnitSettings()),
 		dustpan.WithProfileStore(store.Profiles()),
 		dustpan.WithProfileSessions(store.ProfileSessions()),
 		dustpan.WithIssuerStore(store.Issuer()),
+		dustpan.WithIdempotencyStore(store.Idempotency(wrapper)),
+		dustpan.WithSelfServiceBlueprints(store.SelfServiceBlueprints()),
 		dustpan.WithInstallationKindStore(store),
 		dustpan.WithInstanceStore(store),
 		dustpan.WithSettings(
