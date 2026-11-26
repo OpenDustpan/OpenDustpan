@@ -6,7 +6,7 @@ The server must redact a secret from a job log, and prove it. The port `job.Arti
 
 1. **One adapter over existing ports.** `job.ArtifactStores` implements `job.ArtifactStore` over `RecordStore`, a new `job.RedactionStore`, `ArtifactBlobs`, `secret.ItemSealer` and `namespace` reads. It adds no method to `blob.Store`. Why no structure removes the need for the checks: the rules `CheckPlanRedaction` and `CheckLogRedaction` already are the one place of each rule. The adapter calls them and has no copy.
 2. **The transaction lives in the SQL store.** The mark, the key shred, the redaction record and the audit entry need one transaction, so `RedactionStore` is a port of the job store with two methods. The adapter cannot make the transaction from smaller ports, because `ShredItemKey`, `AppendRedaction` and the audit append would be three transactions.
-3. **Earlier versions live in the step record.** `StepRecord.Earlier []LogRef` holds the older versions, oldest first, and `LogRef.Replaces` holds the ID of the version that it replaced. One function, `job.LogVersionOf(step, id)`, searches `Log` and `Earlier`. `logOfRow` and `service_redact.go` both call it, so the two cannot disagree again. `job_logs` already holds one row for each version.
+3. **Earlier versions live in the step record.** `StepRecord.Earlier []LogRef` holds the older versions, oldest first, and `LogRef.Replaces` holds the ID of the version that it replaced. One function, `job.LogVersionOf(step, id)`, searches `Log` and `Earlier`. `logOfRow` and `pkg/job/service_redact.go` both call it, so the two cannot disagree again. `job_logs` already holds one row for each version.
 4. **Write order follows the recorder.** `ReplaceLog` writes the item key blob, then the sealed chunks (each at most `MaxLogChunk`), then the SQL record and the key record in one fenced transaction. A crash before the transaction leaves unnamed blobs, which the artifact sweep removes. The older version stays readable until `Redact` commits.
 5. **The key is shredded at commit.** The sealed blobs of the older version are unreadable at once. Deleting them is the shred operation of the history model, a separate change. Each shred target stays `pending`, and `Redact` answers the targets as the port documents.
 6. **The family.** `identity.ActionUnitRedact: FamilyData` goes into `families` in `pkg/access/access.go`. The authorizer denies an action without a family to every grant holder, so this one line makes the stored grant of `admin` count. Why `data`: `RoleAdmin` holds `Actions(FamilyData)` only, `account-administrator` holds administration, data and delegation, and `site-administrator` holds every family (ADR 216). Only `data` reaches `admin` and so makes the stored grant of the namespace administrator count. `administration` would not reach `admin`. The owner chose the ADR 216 reading on 2026-11-15, so `account-administrator` and `site-administrator` also hold the action, as they hold `unit:purge`. No code defines who holds the action.
@@ -40,11 +40,11 @@ type ArtifactStoreConfig struct {
 type RedactionStore interface {
 	// PutLogVersion stores next as the current log of the step and moves
 	// the current log to Earlier, in one fenced transaction with the key record.
-	// Errors: namespace.ErrFenceStale, ErrNotFound, ErrWrongState, secret.ErrItemKeyExists.
+	// Errors: namespace.ErrFenced, ErrNotFound, ErrWrongState, secret.ErrItemKeyExists.
 	PutLogVersion(ctx context.Context, p LogVersionPut) (LogRef, error)
 	// RedactItem marks the item redacted, shreds its key, appends the record
 	// and the audit entry, in one fenced transaction.
-	// Errors: namespace.ErrFenceStale, history.ErrRedacted, history.ErrInProgress,
+	// Errors: namespace.ErrFenced, history.ErrRedacted, history.ErrInProgress,
 	// history.ErrLatest, ErrNotFound.
 	RedactItem(ctx context.Context, r history.Redaction, targets []history.Target,
 		e audit.Entry, f namespace.Fence) (history.RedactionResult, error)
@@ -94,7 +94,7 @@ HTTP: no new route. The route `POST /api/dustpan/v1/namespaces/{namespace}/jobs/
 | Blob write fails in `ReplaceLog` | No record changes | The caller retries. The sweep removes unnamed blobs. |
 | Transaction fails in `PutLogVersion` | No new version | The caller retries. |
 | `RedactItem` fails after `PutLogVersion` | Next version exists, older version readable | A retry redacts only the older version. |
-| Fence moves | `namespace.ErrFenceStale`, nothing written | The caller reads the namespace again. |
+| Fence moves | `namespace.ErrFenced`, nothing written | The caller reads the namespace again. |
 
 ## Risks
 
