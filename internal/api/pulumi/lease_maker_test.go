@@ -186,6 +186,7 @@ func TestLeaseRequestsRefuseATokenWhoseMakerLostThePath(t *testing.T) {
 		Makers:     makers,
 		TempAdmins: nil,
 		Store:      st,
+		Audit:      st,
 		Principals: st,
 		Guard:      noFreshStepGuard(t),
 		Authorizer: nil,

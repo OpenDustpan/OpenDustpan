@@ -309,11 +309,19 @@ func newAccessFixtureAll(t *testing.T, parts accessFixtureParts) accessFixture {
 		Makers:     grants,
 		TempAdmins: nil,
 		Store:      hookedTokenStore{Store: st, onList: parts.tokenList},
-		Principals: st, Guard: noFreshStepGuard(t), Authorizer: authz,
+		Audit: hookedTokenStore{
+			Store:  st,
+			onList: parts.tokenList,
+		},
+		Principals: st,
+		Guard:      noFreshStepGuard(t),
+		Authorizer: authz,
 		Reach: access.ReachConfig{
 			Grants: st, Roles: st, Callers: st, Principals: st, Collections: stubCollections{}, Units: st,
 		},
-		Logger: nil, Now: nil, NewID: nil,
+		Logger: nil,
+		Now:    nil,
+		NewID:  nil,
 	})
 	if err != nil {
 		t.Fatalf("token service: %v", err)

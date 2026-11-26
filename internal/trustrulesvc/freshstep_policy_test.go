@@ -48,12 +48,30 @@ func TestFreshPolicyGatesTheWriteStep(t *testing.T) {
 		opts    []trustrulesvc.Option
 		wantErr error
 	}{
-		"off":                 {opts: []trustrulesvc.Option{trustrulesvc.WithFreshPolicy(off)}, wantErr: nil},
-		"on":                  {opts: []trustrulesvc.Option{trustrulesvc.WithFreshPolicy(on)}, wantErr: trustrulesvc.ErrFreshRequired},
-		"no policy":           {opts: nil, wantErr: trustrulesvc.ErrFreshRequired},
-		"nil policy":          {opts: []trustrulesvc.Option{trustrulesvc.WithFreshPolicy(nil)}, wantErr: trustrulesvc.ErrFreshRequired},
-		"nil option":          {opts: []trustrulesvc.Option{nil}, wantErr: trustrulesvc.ErrFreshRequired},
-		"nil option then off": {opts: []trustrulesvc.Option{nil, trustrulesvc.WithFreshPolicy(off)}, wantErr: nil},
+		"off": {
+			opts:    []trustrulesvc.Option{trustrulesvc.WithFreshPolicy(off)},
+			wantErr: nil,
+		},
+		"on": {
+			opts:    []trustrulesvc.Option{trustrulesvc.WithFreshPolicy(on)},
+			wantErr: trustrulesvc.ErrFreshRequired,
+		},
+		"no policy": {
+			opts:    nil,
+			wantErr: trustrulesvc.ErrFreshRequired,
+		},
+		"nil policy": {
+			opts:    []trustrulesvc.Option{trustrulesvc.WithFreshPolicy(nil)},
+			wantErr: trustrulesvc.ErrFreshRequired,
+		},
+		"nil option": {
+			opts:    []trustrulesvc.Option{nil},
+			wantErr: trustrulesvc.ErrFreshRequired,
+		},
+		"nil option then off": {
+			opts:    []trustrulesvc.Option{nil, trustrulesvc.WithFreshPolicy(off)},
+			wantErr: nil,
+		},
 	} {
 		t.Run(name, func(t *testing.T) {
 			t.Parallel()
@@ -61,12 +79,12 @@ func TestFreshPolicyGatesTheWriteStep(t *testing.T) {
 			bundles := &guardBundleStore{saved: 0, rotated: 0, deleted: nil, entries: nil}
 			svc := policyService(t, bundles, tc.opts...)
 
-			_, err := svc.Create(context.Background(), person(), emptyEntry(), "acme", input())
+			_, err := svc.Create(t.Context(), person(), emptyEntry(), "acme", input())
 			if !errors.Is(err, tc.wantErr) || (tc.wantErr == nil && err != nil) {
 				t.Errorf("Create with no console session = %v, want %v", err, tc.wantErr)
 			}
 
-			err = svc.DeleteBundleVersion(context.Background(), person(), emptyEntry(), "acme", 1)
+			err = svc.DeleteBundleVersion(t.Context(), person(), emptyEntry(), "acme", 1)
 			if !errors.Is(err, tc.wantErr) || (tc.wantErr == nil && err != nil) {
 				t.Errorf("DeleteBundleVersion with no console session = %v, want %v", err, tc.wantErr)
 			}
@@ -90,7 +108,7 @@ func TestFreshPolicyOffKeepsTheTokenRefusal(t *testing.T) {
 	token := person()
 	token.TokenID, token.Credential = "tok-1", identity.CredentialAccessToken
 
-	if _, err := svc.Create(context.Background(), token, emptyEntry(), "acme", input()); !errors.Is(
+	if _, err := svc.Create(t.Context(), token, emptyEntry(), "acme", input()); !errors.Is(
 		err, trustrulesvc.ErrSignInRequired,
 	) {
 		t.Fatalf("Create with an access token = %v, want ErrSignInRequired", err)

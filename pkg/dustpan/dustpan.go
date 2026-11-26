@@ -84,7 +84,6 @@ import (
 	"opendustpan.org/opendustpan/pkg/drift"
 	"opendustpan.org/opendustpan/pkg/egress"
 	"opendustpan.org/opendustpan/pkg/forgelink"
-	"opendustpan.org/opendustpan/pkg/freshstep"
 	"opendustpan.org/opendustpan/pkg/idempotency"
 	"opendustpan.org/opendustpan/pkg/identity"
 	"opendustpan.org/opendustpan/pkg/installation"
@@ -3554,6 +3553,13 @@ func newTokenService(cfg *settings, grants *access.Service) (*accesstoken.Servic
 		return nil, nil //nolint:nilnil // Tokens need principals; without them the routes answer 501.
 	}
 
+	// A refused token change is recorded in the server scope, so a store
+	// without that port cannot back the token service.
+	serverAudit, ok := cfg.namespaceStore.(audit.ServerStore)
+	if !ok {
+		return nil, errTokenAuditStore
+	}
+
 	var (
 		authz  identity.Authorizer
 		makers accesstoken.MakerChecker
@@ -3569,19 +3575,14 @@ func newTokenService(cfg *settings, grants *access.Service) (*accesstoken.Servic
 		return nil, fmt.Errorf("access token reach: %w", err)
 	}
 
-	policies, err := newSessionPolicyService(cfg)
-	if err != nil {
-		return nil, fmt.Errorf("access token freshness: %w", err)
-	}
-
-	freshness, err := freshstep.NewGuard(freshPolicyOf(cfg), tokenFreshCheck(policies, cfg.now, cfg.logger))
+	freshness, err := tokenFreshGuardOf(cfg)
 	if err != nil {
 		return nil, fmt.Errorf("access token freshness: %w", err)
 	}
 
 	svc, err := accesstoken.NewService(accesstoken.Config{
 		Makers: makers,
-		Store:  store, Principals: principals, Guard: freshness, Authorizer: authz, Reach: reach,
+		Store:  store, Principals: principals, Audit: serverAudit, Guard: freshness, Authorizer: authz, Reach: reach,
 		Logger: cfg.logger, Now: cfg.now, NewID: nil, TempAdmins: tempReaderOf(cfg.namespaceStore),
 	})
 	if err != nil {
@@ -3595,6 +3596,10 @@ func newTokenService(cfg *settings, grants *access.Service) (*accesstoken.Servic
 // service: the request has no console session with a sign-in inside the token
 // freshness window.
 var errTokenFreshStep = fmt.Errorf("%w: %s", identity.ErrDenied, sessionauth.FreshStepRequiredMessage)
+
+// errTokenAuditStore is the refusal of a store that keeps no server audit
+// entries: a refused token change has nowhere to be recorded.
+var errTokenAuditStore = errors.New("access token audit: the store has no server audit entries")
 
 // tokenFreshCheck returns the check of the fresh step guard of the access
 // token service. It returns nil only when the context carries a console

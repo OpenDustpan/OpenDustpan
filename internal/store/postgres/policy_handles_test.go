@@ -145,6 +145,7 @@ func tokenService(t *testing.T, s *postgres.Store, now func() time.Time) *access
 		TempAdmins: nil,
 		Store:      s,
 		Principals: s,
+		Audit:      s,
 		Guard:      noFreshStepGuard(t),
 		Authorizer: nil,
 		Logger:     nil,

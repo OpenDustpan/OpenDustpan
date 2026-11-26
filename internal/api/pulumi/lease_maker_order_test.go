@@ -36,6 +36,7 @@ func newMakerHarness(t *testing.T) makerHarness {
 		Makers:     makers,
 		TempAdmins: nil,
 		Store:      st,
+		Audit:      st,
 		Principals: st,
 		Guard:      noFreshStepGuard(t),
 		Authorizer: nil,

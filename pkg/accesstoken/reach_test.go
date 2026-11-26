@@ -283,8 +283,15 @@ func (f *reachFixture) newServiceWith(
 	svc, err := accesstoken.NewService(accesstoken.Config{
 		Makers:     nil,
 		TempAdmins: nil,
-		Store:      f.store, Principals: principals, Guard: noStepGuard(t), Authorizer: f.authorizerOf(t),
-		Reach: reach, Logger: nil, Now: f.clock.Now, NewID: nil,
+		Store:      f.store,
+		Principals: principals,
+		Audit:      f.store,
+		Guard:      noStepGuard(t),
+		Authorizer: f.authorizerOf(t),
+		Reach:      reach,
+		Logger:     nil,
+		Now:        f.clock.Now,
+		NewID:      nil,
 	})
 	if err != nil {
 		t.Fatalf("token service: %v", err)

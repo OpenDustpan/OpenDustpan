@@ -107,7 +107,7 @@ func wantRevokedAfterCachedRoute(t *testing.T, rf *reachFixture, path cachePath)
 
 	checked, err := accesstoken.NewService(accesstoken.Config{
 		Makers: authorizerMakers{authz: authz, principals: rf.store}, TempAdmins: nil,
-		Store: rf.store, Principals: rf.store, Guard: noStepGuard(t), Authorizer: nil, Reach: rf.reach,
+		Store: rf.store, Principals: rf.store, Audit: rf.store, Guard: noStepGuard(t), Authorizer: nil, Reach: rf.reach,
 		Logger: nil, Now: rf.clock.Now, NewID: nil,
 	})
 	if err != nil {

@@ -538,6 +538,7 @@ func seedRouteTokens(t *testing.T, st *sqlite.Store) *accesstoken.Service {
 		Makers:     nil,
 		TempAdmins: nil,
 		Store:      st,
+		Audit:      st,
 		Principals: st,
 		Guard:      noFreshStepGuard(t),
 		Authorizer: allowAll{},

@@ -261,7 +261,7 @@ func newMtlsEnv(t *testing.T) *mtlsEnv {
 		Reach: access.ReachConfig{
 			Grants: s, Roles: s, Callers: s, Principals: s, Collections: nil, Units: s,
 		},
-		Store: s, Principals: s, Guard: noFreshStepGuard(t), Authorizer: nil, TempAdmins: nil, Logger: nil,
+		Store: s, Principals: s, Audit: s, Guard: noFreshStepGuard(t), Authorizer: nil, TempAdmins: nil, Logger: nil,
 		Now: e.now, NewID: nil,
 	})
 	if err != nil {

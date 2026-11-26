@@ -1,29 +1,29 @@
 package accesstoken_test
 
 import (
-	"bytes"
 	"context"
 	"errors"
-	"log/slog"
-	"strings"
 	"testing"
 	"time"
 
+	"opendustpan.org/opendustpan/internal/store/sqlite"
 	"opendustpan.org/opendustpan/pkg/access"
 	"opendustpan.org/opendustpan/pkg/accesstoken"
+	"opendustpan.org/opendustpan/pkg/audit"
 	"opendustpan.org/opendustpan/pkg/freshstep"
+	"opendustpan.org/opendustpan/pkg/identity"
 )
 
 // policyConfig returns the config of a token service over the store of f
-// with the fresh step guard g and the logger logger.
-func policyConfig(f *fixture, g freshstep.Guard, logger *slog.Logger) accesstoken.Config {
+// with the fresh step guard g.
+func policyConfig(f *fixture, g freshstep.Guard) accesstoken.Config {
 	return accesstoken.Config{
 		Makers:     nil,
 		TempAdmins: nil,
-		Store:      f.store, Principals: f.store, Guard: g, Authorizer: nil, Reach: access.ReachConfig{
+		Store:      f.store, Principals: f.store, Audit: f.store, Guard: g, Authorizer: nil, Reach: access.ReachConfig{
 			Grants: nil, Roles: nil, Callers: nil, Principals: nil, Collections: nil, Units: nil,
 		},
-		Logger: logger, Now: f.clock.Now, NewID: nil,
+		Logger: nil, Now: f.clock.Now, NewID: nil,
 	}
 }
 
@@ -32,7 +32,7 @@ func policyConfig(f *fixture, g freshstep.Guard, logger *slog.Logger) accesstoke
 func newPolicyService(t *testing.T, f *fixture, g freshstep.Guard) *accesstoken.Service {
 	t.Helper()
 
-	svc, err := accesstoken.NewService(policyConfig(f, g, nil))
+	svc, err := accesstoken.NewService(policyConfig(f, g))
 	if err != nil {
 		t.Fatalf("token service: %v", err)
 	}
@@ -110,7 +110,7 @@ func TestNewServiceRefusesZeroFreshGuard(t *testing.T) {
 
 	f := newFixture(t, nil)
 
-	svc, err := accesstoken.NewService(policyConfig(&f, freshstep.Guard{}, nil))
+	svc, err := accesstoken.NewService(policyConfig(&f, freshstep.Guard{}))
 	if !errors.Is(err, accesstoken.ErrMissingDependency) {
 		t.Fatalf("new service: err = %v, want ErrMissingDependency", err)
 	}
@@ -120,51 +120,190 @@ func TestNewServiceRefusesZeroFreshGuard(t *testing.T) {
 	}
 }
 
-// With the step required and missing, requireFresh refuses the create and
-// the rotation, writes a denial record for each, and changes nothing.
-func TestRequireFreshRefusesWithDenialRecord(t *testing.T) {
+// NewService refuses a nil audit store: a refused change must be recorded.
+func TestNewServiceRefusesNilAudit(t *testing.T) {
 	t.Parallel()
 
 	f := newFixture(t, nil)
 
-	var logs bytes.Buffer
+	cfg := policyConfig(&f, *freshGuard(t, freshstep.PolicyFunc(nil)))
+	cfg.Audit = nil
 
-	logger := slog.New(slog.NewJSONHandler(&logs, &slog.HandlerOptions{
-		AddSource: false, Level: slog.LevelInfo, ReplaceAttr: nil,
-	}))
+	svc, err := accesstoken.NewService(cfg)
+	if !errors.Is(err, accesstoken.ErrMissingDependency) {
+		t.Fatalf("new service: err = %v, want ErrMissingDependency", err)
+	}
 
-	svc, err := accesstoken.NewService(policyConfig(&f, *freshGuard(t, freshstep.PolicyFunc(nil)), logger))
+	if svc != nil {
+		t.Fatal("new service: got a service, want nil")
+	}
+}
+
+// errAuditDown is the write error of refusingAudit.
+var errAuditDown = errors.New("audit store is down")
+
+// refusingAudit is an audit store whose appends all fail.
+type refusingAudit struct {
+	*sqlite.Store
+}
+
+// AppendServer fails every append, so the denial entry cannot be written.
+func (refusingAudit) AppendServer(context.Context, audit.Entry) (audit.Entry, error) {
+	return audit.Entry{}, errAuditDown
+}
+
+// serverEntries returns the entries of the server scope of st.
+func serverEntries(t *testing.T, st *sqlite.Store) []audit.Entry {
+	t.Helper()
+
+	listing, err := st.List(t.Context(), audit.ServerScope, audit.Page{Size: 0, Before: 0})
 	if err != nil {
-		t.Fatalf("token service: %v", err)
+		t.Fatalf("list server entries: %v", err)
 	}
 
-	tok, _ := f.create(t, f.service, "seed")
+	return listing.Entries
+}
 
-	_, _, err = svc.Create(t.Context(), admin(), caller(), accesstoken.ScopeService,
-		accesstoken.Input{ExpiresAt: time.Time{}, PrincipalID: f.service.ID, Name: "x"})
-	checkFreshErr(t, "create", err, errStale)
+// countOutcome returns the number of entries of es with the outcome o.
+func countOutcome(es []audit.Entry, o audit.Outcome) int {
+	n := 0
 
-	_, _, err = svc.Rotate(t.Context(), admin(), caller(), accesstoken.RotateInput{
-		OldEndsAt: nil, ExpiresAt: time.Time{}, ID: tok.ID, Scope: accesstoken.ScopeService,
-	})
-	checkFreshErr(t, "rotate", err, errStale)
-
-	records := strings.Count(logs.String(), `"msg":"access token change denied: a fresh step is required"`)
-	if records != 2 {
-		t.Fatalf("denial records = %d, want 2; log:\n%s", records, logs.String())
+	for i := range es {
+		if es[i].Outcome == o {
+			n++
+		}
 	}
 
-	if !strings.Contains(logs.String(), `"subject":"`+caller().Subject+`"`) ||
-		!strings.Contains(logs.String(), errStale.Error()) {
-		t.Fatalf("denial record has no subject or reason; log:\n%s", logs.String())
+	return n
+}
+
+// checkDenied fails the test when the refused operation op does not return
+// the freshness error, or when auditErr is set and the error does not wrap it.
+func checkDenied(t *testing.T, op string, err, auditErr error) {
+	t.Helper()
+
+	checkFreshErr(t, op, err, errStale)
+
+	if auditErr != nil && !errors.Is(err, auditErr) {
+		t.Fatalf("%s: err = %v, want the audit error %v", op, err, auditErr)
+	}
+}
+
+// denialWant is what checkDenials expects in the server scope: the objects of
+// the create and of the rotation, the success entries before the refusals and
+// the number of denial entries.
+type denialWant struct {
+	service   string
+	tok       string
+	successes int
+	entries   int
+}
+
+// checkDenials fails the test unless the server scope of st holds the denial
+// entries of want, and no change that committed after the seed. The entries
+// are not in the order of the changes, so they are matched by object.
+func checkDenials(t *testing.T, st *sqlite.Store, want denialWant) {
+	t.Helper()
+
+	all := serverEntries(t, st)
+	if got := countOutcome(all, audit.OutcomeSuccess); got != want.successes {
+		t.Fatalf("success entries = %d, want %d: a refused change must not commit", got, want.successes)
 	}
 
-	got, err := svc.Get(t.Context(), tok.ID)
-	if err != nil {
-		t.Fatalf("get: %v", err)
+	var denials []audit.Entry
+
+	for i := range all {
+		if all[i].Outcome == audit.OutcomeDenied {
+			denials = append(denials, all[i])
+		}
 	}
 
-	if got.ReplacedBy != "" {
-		t.Fatalf("replaced by = %q, want no rotation", got.ReplacedBy)
+	if len(denials) != want.entries {
+		t.Fatalf("denial entries = %d, want %d", len(denials), want.entries)
+	}
+
+	wantObjects := map[string]bool{want.service: true, want.tok: true}
+	for i := range denials {
+		e := denials[i]
+		if e.Kind != audit.KindChange || e.Namespace != audit.ServerScope ||
+			e.Subject != caller().Subject || e.Action != string(identity.ActionServerManageTokens) ||
+			!wantObjects[e.Object] {
+			t.Fatalf("denial entry = %+v, want a denied change of the server scope by %q", e, caller().Subject)
+		}
+
+		delete(wantObjects, e.Object)
+	}
+}
+
+// With the step required and missing, requireFresh refuses the create and
+// the rotation and writes one denial entry for each, with the subject, the
+// action and the object of the change. When the denial entry cannot be
+// written, the refusal still returns, and no token is made or rotated.
+func TestRequireFreshRefusesWithDenialRecord(t *testing.T) {
+	t.Parallel()
+
+	cases := []struct {
+		name string
+		// auditFor returns the audit store of the service over f.
+		auditFor func(f *fixture) audit.ServerStore
+		// auditErr is the error that the call must wrap, nil when the denial
+		// entry is written.
+		auditErr error
+		// wantEntries is the number of entries that the two refusals append.
+		wantEntries int
+	}{
+		{
+			name:        "denial entry is written",
+			auditFor:    func(f *fixture) audit.ServerStore { return f.store },
+			auditErr:    nil,
+			wantEntries: 2,
+		},
+		{
+			name:        "denial write fails",
+			auditFor:    func(f *fixture) audit.ServerStore { return refusingAudit{Store: f.store} },
+			auditErr:    errAuditDown,
+			wantEntries: 0,
+		},
+	}
+
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			t.Parallel()
+
+			f := newFixture(t, nil)
+
+			cfg := policyConfig(&f, *freshGuard(t, freshstep.PolicyFunc(nil)))
+			cfg.Audit = tc.auditFor(&f)
+
+			svc, err := accesstoken.NewService(cfg)
+			if err != nil {
+				t.Fatalf("token service: %v", err)
+			}
+
+			tok, _ := f.create(t, f.service, "seed")
+			successes := countOutcome(serverEntries(t, f.store), audit.OutcomeSuccess)
+
+			_, _, err = svc.Create(t.Context(), admin(), caller(), accesstoken.ScopeService,
+				accesstoken.Input{ExpiresAt: time.Time{}, PrincipalID: f.service.ID, Name: "x"})
+			checkDenied(t, "create", err, tc.auditErr)
+
+			_, _, err = svc.Rotate(t.Context(), admin(), caller(), accesstoken.RotateInput{
+				OldEndsAt: nil, ExpiresAt: time.Time{}, ID: tok.ID, Scope: accesstoken.ScopeService,
+			})
+			checkDenied(t, "rotate", err, tc.auditErr)
+
+			checkDenials(t, f.store, denialWant{
+				service: f.service.ID, tok: tok.ID, successes: successes, entries: tc.wantEntries,
+			})
+
+			got, err := svc.Get(t.Context(), tok.ID)
+			if err != nil {
+				t.Fatalf("get: %v", err)
+			}
+
+			if got.ReplacedBy != "" {
+				t.Fatalf("replaced by = %q, want no rotation", got.ReplacedBy)
+			}
+		})
 	}
 }

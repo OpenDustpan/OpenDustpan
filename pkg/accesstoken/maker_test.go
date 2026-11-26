@@ -61,11 +61,19 @@ func newMakerFixture(t *testing.T, makers accesstoken.MakerChecker) makerFixture
 	}
 
 	checked, err := accesstoken.NewService(accesstoken.Config{
-		Makers: makers, TempAdmins: nil,
-		Store: f.store, Principals: f.store, Guard: noStepGuard(t), Authorizer: nil, Reach: access.ReachConfig{
+		Makers:     makers,
+		TempAdmins: nil,
+		Store:      f.store,
+		Principals: f.store,
+		Audit:      f.store,
+		Guard:      noStepGuard(t),
+		Authorizer: nil,
+		Reach: access.ReachConfig{
 			Grants: nil, Roles: nil, Callers: nil, Principals: nil, Collections: nil, Units: nil,
 		},
-		Logger: nil, Now: f.clock.Now, NewID: nil,
+		Logger: nil,
+		Now:    f.clock.Now,
+		NewID:  nil,
 	})
 	if err != nil {
 		t.Fatalf("token service: %v", err)

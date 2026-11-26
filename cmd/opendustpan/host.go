@@ -42,7 +42,6 @@ import (
 	"opendustpan.org/opendustpan/pkg/accesstoken"
 	"opendustpan.org/opendustpan/pkg/audit"
 	"opendustpan.org/opendustpan/pkg/dustpan"
-	"opendustpan.org/opendustpan/pkg/freshstep"
 	"opendustpan.org/opendustpan/pkg/principal"
 	"opendustpan.org/opendustpan/pkg/tempadmin"
 )
@@ -93,17 +92,11 @@ const (
 const hostSweepNote = "some ended temporary administrators did not expire: " +
 	"run the command again, then check the server log"
 
-// errHostNoFreshStep is the refusal of the fresh step guard of the host
-// command: the host command has no console session, so it gives no step.
-var errHostNoFreshStep = errors.New("the host command gives no fresh step")
-
 // hostTokenService returns the access token service of the host command. Its
-// fresh step guard always requires the step and always refuses it. The host
-// issuer makes its token without a create or a rotation, so the guard does not
-// run there.
+// fresh step guard is the guard of the server, so the setting freshAuthEnabled
+// decides the step for a token change of the host command too.
 func hostTokenService(st store) (*accesstoken.Service, error) {
-	fresh, err := freshstep.NewGuard(freshstep.PolicyFunc(func(context.Context) bool { return true }),
-		func(context.Context, string) error { return errHostNoFreshStep })
+	fresh, err := dustpan.FreshGuard(st.builtin())
 	if err != nil {
 		return nil, fmt.Errorf("fresh step guard: %w", err)
 	}
@@ -120,6 +113,7 @@ func hostTokenService(st store) (*accesstoken.Service, error) {
 		},
 		Store:      st,
 		Principals: st,
+		Audit:      st,
 		TempAdmins: st,
 		Guard:      fresh,
 		Authorizer: nil,

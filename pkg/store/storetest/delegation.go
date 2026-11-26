@@ -157,10 +157,15 @@ func newDelegation(t *testing.T, st DelegationStore) *delegation {
 		t.Fatalf("principal service: %v", err)
 	}
 
+	serverAudit, ok := st.(audit.ServerStore)
+	if !ok {
+		t.Fatal("delegation store: no server audit entries")
+	}
+
 	tokens, err := accesstoken.NewService(accesstoken.Config{
 		Makers:     nil,
 		TempAdmins: nil,
-		Store:      st, Principals: st, Guard: delegationFreshGuard(t), Authorizer: authz,
+		Store:      st, Principals: st, Audit: serverAudit, Guard: delegationFreshGuard(t), Authorizer: authz,
 		Reach: access.ReachConfig{
 			Grants: st, Roles: st, Callers: st, Principals: st, Collections: nil, Units: st,
 		},

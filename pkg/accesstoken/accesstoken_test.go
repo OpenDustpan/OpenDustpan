@@ -123,7 +123,7 @@ func newFixtureAt(t *testing.T, fresh *freshstep.Guard, start time.Time) fixture
 	svc, err := accesstoken.NewService(accesstoken.Config{
 		Makers:     nil,
 		TempAdmins: nil,
-		Store:      st, Principals: st, Guard: guard, Authorizer: nil, Reach: access.ReachConfig{
+		Store:      st, Principals: st, Audit: st, Guard: guard, Authorizer: nil, Reach: access.ReachConfig{
 			Grants: nil, Roles: nil, Callers: nil, Principals: nil, Collections: nil, Units: nil,
 		},
 		Logger: nil, Now: c.Now, NewID: nil,
@@ -243,10 +243,17 @@ func TestNewServiceNeedsDependencies(t *testing.T) {
 	_, err := accesstoken.NewService(accesstoken.Config{
 		Makers:     nil,
 		TempAdmins: nil,
-		Store:      nil, Principals: nil, Guard: freshstep.Guard{}, Authorizer: nil, Reach: access.ReachConfig{
+		Store:      nil,
+		Principals: nil,
+		Audit:      nil,
+		Guard:      freshstep.Guard{},
+		Authorizer: nil,
+		Reach: access.ReachConfig{
 			Grants: nil, Roles: nil, Callers: nil, Principals: nil, Collections: nil, Units: nil,
 		},
-		Logger: nil, Now: nil, NewID: nil,
+		Logger: nil,
+		Now:    nil,
+		NewID:  nil,
 	})
 	if !errors.Is(err, accesstoken.ErrMissingDependency) {
 		t.Fatalf("err = %v, want ErrMissingDependency", err)
@@ -1095,7 +1102,7 @@ func newCheckedService(t *testing.T, f *fixture, authz identity.Authorizer) *acc
 	svc, err := accesstoken.NewService(accesstoken.Config{
 		Makers:     nil,
 		TempAdmins: nil,
-		Store:      f.store, Principals: f.store, Guard: noStepGuard(t), Authorizer: authz,
+		Store:      f.store, Principals: f.store, Audit: f.store, Guard: noStepGuard(t), Authorizer: authz,
 		Reach: access.ReachConfig{
 			Grants: f.store, Roles: f.store, Callers: f.store, Principals: f.store, Collections: nil, Units: nil,
 		},
@@ -1636,11 +1643,19 @@ func TestPolicyReadErrorFailsClosed(t *testing.T) {
 	svc, err := accesstoken.NewService(accesstoken.Config{
 		Makers:     nil,
 		TempAdmins: nil,
-		Store:      failingPolicy{f.store}, Principals: f.store, Guard: noStepGuard(t), Authorizer: nil,
+		Store: failingPolicy{
+			f.store,
+		},
+		Principals: f.store,
+		Audit:      failingPolicy{f.store},
+		Guard:      noStepGuard(t),
+		Authorizer: nil,
 		Reach: access.ReachConfig{
 			Grants: nil, Roles: nil, Callers: nil, Principals: nil, Collections: nil, Units: nil,
-		}, Logger: nil,
-		Now: f.clock.Now, NewID: nil,
+		},
+		Logger: nil,
+		Now:    f.clock.Now,
+		NewID:  nil,
 	})
 	if err != nil {
 		t.Fatalf("token service: %v", err)
@@ -1873,7 +1888,7 @@ func TestNamespacePrincipalTokens(t *testing.T) {
 	holder, err := accesstoken.NewService(accesstoken.Config{
 		Makers:     nil,
 		TempAdmins: nil,
-		Store:      f.store, Principals: reader, Guard: noStepGuard(t),
+		Store:      f.store, Principals: reader, Audit: f.store, Guard: noStepGuard(t),
 		Authorizer: &recordAuthorizer{allowed: map[string]bool{manage: true}, checked: nil, mu: sync.Mutex{}},
 		Reach: access.ReachConfig{
 			Grants: f.store, Roles: f.store, Callers: f.store, Principals: f.store, Collections: nil, Units: nil,
@@ -1888,7 +1903,7 @@ func TestNamespacePrincipalTokens(t *testing.T) {
 	denied, err := accesstoken.NewService(accesstoken.Config{
 		Makers:     nil,
 		TempAdmins: nil,
-		Store:      f.store, Principals: reader, Guard: noStepGuard(t),
+		Store:      f.store, Principals: reader, Audit: f.store, Guard: noStepGuard(t),
 		Authorizer: &recordAuthorizer{allowed: map[string]bool{}, checked: nil, mu: sync.Mutex{}},
 		Reach: access.ReachConfig{
 			Grants: f.store, Roles: f.store, Callers: f.store, Principals: f.store, Collections: nil, Units: nil,
