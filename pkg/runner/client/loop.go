@@ -73,35 +73,71 @@ type Error struct {
 	codeLength int
 }
 
-// Error returns the status, the code and the message of the answer.
+// Error returns the status, the code and the message of the answer. A code
+// that is not a code of the runner protocol is printed as "unknown", never the
+// code from the server.
 func (e *Error) Error() string {
-	return fmt.Sprintf("the server answered %d %s: %s", e.Status, logText(e.Code), e.Message)
+	code := e.Code
+	if !isProtocolCode(code) {
+		code = unknownCode
+	}
+
+	return fmt.Sprintf("the server answered %d %s: %s", e.Status, code, e.Message)
 }
 
 // Is matches the sentinel of the code of e. The code is matched as the server
 // sent it: a code with a control or format character is not a protocol code.
 func (e *Error) Is(target error) bool {
 	// A status of 500 or more is a fault of the server: the loop polls again
-	// after a backoff, whatever the code.
+	// after a backoff, whatever the code. A known terminal code under a 5xx
+	// does not end the loop.
 	if e.Status >= statusServerError {
 		return target == ErrUnavailable
 	}
 
-	switch e.Code {
-	case protocol.ErrorClaimLost:
-		return target == ErrClaimLost
-	case protocol.ErrorRetired:
-		return target == ErrRetired
-	case protocol.ErrorBadProof:
-		return target == ErrBadProof
-	case protocol.ErrorNotFound:
-		return target == ErrNotFound
-	case protocol.ErrorRateLimited:
+	// A 429 with a code that is not a code of the runner protocol waits for
+	// the delay and polls again: the loop treats it as rate-limited and the
+	// log records code=unknown, never the code from the server.
+	if e.Status == statusTooManyRequests && !isProtocolCode(e.Code) {
 		return target == ErrRateLimited || target == ErrUnavailable
+	}
+
+	if target == ErrUnavailable {
+		return e.Code == protocol.ErrorRateLimited || e.Code == protocol.ErrorUnavailable
+	}
+	if target == ErrRefused {
+		return !isProtocolCode(e.Code) || !isMappedSentinelCode(e.Code)
+	}
+
+	return sentinelForCode(e.Code) == target
+}
+
+func sentinelForCode(code string) error {
+	switch code {
+	case protocol.ErrorClaimLost:
+		return ErrClaimLost
+	case protocol.ErrorRetired:
+		return ErrRetired
+	case protocol.ErrorBadProof:
+		return ErrBadProof
+	case protocol.ErrorNotFound:
+		return ErrNotFound
+	case protocol.ErrorRateLimited:
+		return ErrRateLimited
 	case protocol.ErrorUnavailable:
-		return target == ErrUnavailable
+		return ErrUnavailable
 	default:
-		return target == ErrRefused
+		return nil
+	}
+}
+
+func isMappedSentinelCode(code string) bool {
+	switch code {
+	case protocol.ErrorClaimLost, protocol.ErrorRetired, protocol.ErrorBadProof,
+		protocol.ErrorNotFound, protocol.ErrorRateLimited, protocol.ErrorUnavailable:
+		return true
+	default:
+		return false
 	}
 }
 
@@ -619,14 +655,19 @@ func answerError(resp session.Response) error {
 		return e
 	case resp.Status == statusTooManyRequests:
 		// A proxy in front of the server answers 429 with no protocol body. A
-		// body with a code keeps its code: a code that is not a protocol code
-		// is refused.
+		// body with a code keeps its code. A 429 with an unknown or invalid
+		// code waits for the delay and polls again: Is treats it as
+		// rate-limited, and the log records code=unknown, never the value from
+		// the server.
 		if e.Code == "" {
 			e.Code = protocol.ErrorRateLimited
 		}
 
 		return e
 	case resp.Status >= statusServerError:
+		// A 5xx is a fault of the server: the loop backs off, keeps the work,
+		// and polls again, whatever the body code. The code stays as the server
+		// sent it; the log records code=unknown when it is not a protocol code.
 		if e.Code == "" {
 			e.Code = protocol.ErrorUnavailable
 		}

@@ -13,6 +13,8 @@ import (
 	"opendustpan.org/opendustpan/pkg/runner/protocol"
 )
 
+var errLeaseCheckTimeout = errors.New("lease check did not stop the work")
+
 // noRequestTransport fails the test when the loop sends a request.
 type noRequestTransport struct{ t *testing.T }
 
@@ -26,7 +28,8 @@ var errNoRequest = errors.New("no request expected")
 
 // TestRenewalsRefuseALeaseOutOfRange sends a claim with a hostile lease straight
 // to renewals, as if poll did not check it. The work must stop with ErrInvalid
-// before any ticker or request starts.
+// before any ticker or request starts. A short deadline makes the test fail by
+// assertion, not by the package timeout, when the lease check is removed.
 func TestRenewalsRefuseALeaseOutOfRange(t *testing.T) {
 	t.Parallel()
 
@@ -54,9 +57,12 @@ func TestRenewalsRefuseALeaseOutOfRange(t *testing.T) {
 				Wait: 0, Ticker: func(time.Duration) (<-chan time.Time, func()) {
 					t.Error("the loop made a ticker")
 
-					return nil, func() {}
+					c := make(chan time.Time)
+					close(c)
+
+					return c, func() {}
 				},
-				Now: nil, Random: nil, Logger: nil,
+				Now: func() time.Time { return time.Unix(0, 0) }, Random: nil, Logger: nil,
 			})
 			if err != nil {
 				t.Fatalf("New: %v", err)
@@ -66,15 +72,15 @@ func TestRenewalsRefuseALeaseOutOfRange(t *testing.T) {
 			w.Operation = "plan"
 			w.Lease = protocol.FromStd(lease)
 
-			wctx, cancel := context.WithCancelCause(t.Context())
-			defer cancel(nil)
+			wctx, cancel := context.WithTimeoutCause(t.Context(), 5*time.Second, errLeaseCheckTimeout)
+			defer cancel()
 
 			var stopCause error
 
 			l.renewals(wctx, func(error) {}, func(cause error) {
 				stopCause = cause
 
-				cancel(cause)
+				cancel()
 			}, w)
 
 			if !errors.Is(stopCause, ErrInvalid) {
