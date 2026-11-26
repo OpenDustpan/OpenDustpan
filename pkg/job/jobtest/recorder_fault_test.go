@@ -323,6 +323,7 @@ func TestRecorderPutPlanCommitError(t *testing.T) {
 			Domain:     db,
 			WriteState: nil,
 			FailAudit:  nil,
+			AgeJob:     nil,
 		},
 		Records:  commitThenFail{RecordStore: db},
 		ItemKeys: keys,

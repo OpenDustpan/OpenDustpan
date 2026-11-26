@@ -4263,12 +4263,14 @@ WHERE n.name = sqlc.arg(namespace) AND j.idempotency_key = sqlc.arg(idempotency_
 
 -- name: UpdateJob :execrows
 -- It changes no row when the stored version is not the one that the caller
--- read.
+-- read. The query never sets or changes a key: only an update that carries
+-- the clear signal clears the stored key.
 UPDATE jobs
 SET state = sqlc.arg(state), wait = sqlc.arg(wait), current_phase = sqlc.arg(current_phase),
     current_changes = sqlc.arg(current_changes), current_operation = sqlc.arg(current_operation),
     version = sqlc.arg(version), body = sqlc.arg(body), updated_at_ms = sqlc.arg(updated_at_ms),
-    state_changed_at_ms = sqlc.arg(state_changed_at_ms)
+    state_changed_at_ms = sqlc.arg(state_changed_at_ms),
+    idempotency_key = CASE WHEN CAST(sqlc.arg(clear_key) AS BOOLEAN) THEN '' ELSE idempotency_key END
 WHERE id = sqlc.arg(id) AND version = sqlc.arg(prev_version);
 
 -- name: CountOpenJobsOfUnit :one

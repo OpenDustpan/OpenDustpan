@@ -56,6 +56,10 @@ type Harness struct {
 	// until the test ends. A harness that cannot make the append fail leaves
 	// it nil, and the suite skips the case that needs it.
 	FailAudit func(t *testing.T)
+	// AgeJob moves the creation time of the stored job id back by by, as an
+	// old job row does. A harness that cannot change the stored creation time
+	// leaves it nil, and the suite skips the cases of the key retention.
+	AgeJob func(t *testing.T, id job.ID, by time.Duration)
 	// Claims is the claim store of the same database. A harness whose
 	// database keeps no claims leaves it nil, and the cases of the claims of a
 	// job do not run.
@@ -194,7 +198,8 @@ func Run(t *testing.T, newHarness Factory) {
 		{"parallel creates in several namespaces, then paging returns every job", testParallelNamespaces},
 		{"parallel creates in one namespace, then paging returns every job", testParallelCreatesOneNamespace},
 		{"freezes list, end once, and validate", testFreezes},
-	}, createRuleCases(), reconcileCases(), approveCases(), damagedCases(), claimerCases(), missingNamespaceCases(),
+	}, createRuleCases(), keyRetentionCases(), reconcileCases(), approveCases(), damagedCases(), claimerCases(),
+		missingNamespaceCases(),
 		endClaimCases(), claimBoundCases(), claimGateCases(), claimCases())
 
 	runCases(t, newHarness, cases)

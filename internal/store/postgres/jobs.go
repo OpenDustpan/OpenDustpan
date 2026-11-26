@@ -16,6 +16,7 @@ import (
 	"opendustpan.org/opendustpan/internal/store/postgres/internal/db"
 	"opendustpan.org/opendustpan/pkg/audit"
 	"opendustpan.org/opendustpan/pkg/durable"
+	"opendustpan.org/opendustpan/pkg/idempotency"
 	"opendustpan.org/opendustpan/pkg/job"
 	"opendustpan.org/opendustpan/pkg/manuallock"
 	"opendustpan.org/opendustpan/pkg/namespace"
@@ -38,7 +39,7 @@ type JobStore interface {
 //
 //nolint:ireturn // The stores of jobs and freezes are two ports over one adapter.
 func (s *Store) Jobs() JobStore {
-	return jobstore.New(jobRunner{s: s})
+	return jobstore.New(jobRunner{s: s}, idempotency.JobStartRetention())
 }
 
 // jobRunner opens the transactions of the job stores.
