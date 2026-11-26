@@ -217,10 +217,12 @@ func (h *Handler) breakGlassRefusal(
 		return
 	}
 
-	keys, keyErr := h.passkeys.Passkeys(ctx, mfasvc.Actor{
+	keys, keyErr := h.passkeys.Passkeys(ctx, &mfasvc.Actor{
 		Entry:       callerEntry(r, p, identity.ActionServerManagePrincipals),
 		PrincipalID: caller.Match.Owner.ID,
 		SessionID:   "",
+		Caller:      zeroPrincipal(),
+		SignedInAt:  time.Time{},
 	})
 	if keyErr != nil {
 		h.writeError(ctx, w, keyErr)
@@ -278,8 +280,9 @@ func (h *Handler) listBreakGlass(w http.ResponseWriter, r *http.Request, p ident
 
 	for i := range accounts {
 		account := &accounts[i]
-		keys, keyErr := h.passkeys.Passkeys(ctx, mfasvc.Actor{
+		keys, keyErr := h.passkeys.Passkeys(ctx, &mfasvc.Actor{
 			Entry: entry, PrincipalID: account.ID, SessionID: "",
+			Caller: zeroPrincipal(), SignedInAt: time.Time{},
 		})
 		if keyErr != nil {
 			h.writeError(ctx, w, keyErr)
@@ -353,7 +356,7 @@ func (h *Handler) addBreakGlass(w http.ResponseWriter, r *http.Request, p identi
 
 	// One call stores the person and its passkey in one transaction, so a
 	// failed passkey write leaves no person and needs no compensating delete.
-	account, stored, err := h.passkeys.AddBreakGlassPerson(ctx, breakGlassActor(r, entry), principal.Input{
+	account, stored, err := h.passkeys.AddBreakGlassPerson(ctx, breakGlassActor(r, entry, p), principal.Input{
 		Subject: req.Subject, DisplayName: req.DisplayName, Kind: principal.KindPerson,
 	}, key)
 	if err != nil {
@@ -400,6 +403,28 @@ func (h *Handler) rotateBreakGlass(w http.ResponseWriter, r *http.Request, p ide
 		return
 	}
 
+	account, ok := h.rotateAccount(w, r, p, id)
+	if !ok {
+		return
+	}
+
+	// Defense in depth: the passkey service runs the same reach check and does
+	// not rely on this one. This check stays so that a new caller of the route
+	// cannot skip the reach check of the account.
+	if h.refuseRotateOutsideReach(ctx, w, r, p, account) {
+		return
+	}
+
+	h.rotatePasskeyOf(w, r, p, account.ID, &req)
+}
+
+// rotateAccount reads the break-glass account of the ID of the path. It writes
+// the denial and the error, and returns false, when the account is not read.
+func (h *Handler) rotateAccount(
+	w http.ResponseWriter, r *http.Request, p identity.Principal, id string,
+) (principal.Principal, bool) {
+	ctx := r.Context()
+
 	account, err := h.breakGlassAccount(ctx, id)
 	if err != nil {
 		reason := "the ID names no break-glass account"
@@ -413,8 +438,21 @@ func (h *Handler) rotateBreakGlass(w http.ResponseWriter, r *http.Request, p ide
 		}, reason)
 		h.writeError(ctx, w, err)
 
-		return
+		var none principal.Principal
+
+		return none, false
 	}
+
+	return account, true
+}
+
+// rotatePasskeyOf replaces the passkey of the request with the new one in the
+// account accountID, and answers 204. It writes the denial and the error when
+// the passkey is not valid or the rotation is refused.
+func (h *Handler) rotatePasskeyOf(
+	w http.ResponseWriter, r *http.Request, p identity.Principal, accountID string, req *rotateBreakGlassRequest,
+) {
+	ctx := r.Context()
 
 	key, err := passkeyOf(req.passkey())
 	if err != nil {
@@ -429,7 +467,7 @@ func (h *Handler) rotateBreakGlass(w http.ResponseWriter, r *http.Request, p ide
 
 	entry := callerEntry(r, p, identity.ActionServerManagePrincipals)
 
-	err = h.passkeys.RotatePasskey(ctx, breakGlassActor(r, entry), account.ID, req.OldPasskey, key)
+	err = h.passkeys.RotatePasskey(ctx, breakGlassActor(r, entry, p), accountID, req.OldPasskey, key)
 	if err != nil {
 		if errors.Is(err, mfa.ErrNotFound) {
 			err = errBreakGlassNotFound
@@ -443,6 +481,38 @@ func (h *Handler) rotateBreakGlass(w http.ResponseWriter, r *http.Request, p ide
 	}
 
 	w.WriteHeader(http.StatusNoContent)
+}
+
+// refuseRotateOutsideReach refuses a rotation by a caller that does not hold
+// every action that the grants of the account give: the same check that the
+// disable of a principal runs. It writes the denial entry on the account and
+// the answer, and it returns true when it refused. With no access service it
+// fails closed.
+func (h *Handler) refuseRotateOutsideReach(
+	ctx context.Context, w http.ResponseWriter, r *http.Request, p identity.Principal, account principal.Principal,
+) bool {
+	if h.access == nil {
+		err := fmt.Errorf("%w: the server cannot check the rights of the caller", identity.ErrDenied)
+		h.appendServerChangeReason(r, p, serverChange{
+			at: h.now(), action: identity.ActionServerManagePrincipals, object: principal.Ref(account.ID),
+			outcome: audit.OutcomeDenied,
+		}, refusalReason(err))
+		h.writeError(ctx, w, err)
+
+		return true
+	}
+
+	if reachErr := h.access.CheckPrincipalGrants(ctx, p, account.ID); reachErr != nil {
+		h.appendServerChangeReason(r, p, serverChange{
+			at: h.now(), action: identity.ActionServerManagePrincipals, object: principal.Ref(account.ID),
+			outcome: audit.OutcomeDenied,
+		}, refusalReason(reachErr))
+		h.writeError(ctx, w, reachErr)
+
+		return true
+	}
+
+	return false
 }
 
 // rotateIDRefusal is the allowlist check at the boundary of the IDs of a
@@ -469,17 +539,26 @@ func rotateIDRefusal(id, oldPasskey string) string {
 }
 
 // breakGlassActor returns the actor of a break-glass write: the console
-// session of the caller and the audit entry of the request. The fresh check
-// has refused a request with no session before the handler runs. A request
-// that reaches this function without a session keeps an empty principal, so
-// the passkey service refuses it and writes nothing.
-func breakGlassActor(r *http.Request, e audit.Entry) mfasvc.Actor {
+// session of the caller, the caller itself, the sign-in time of the
+// session, and the audit entry of the request. The fresh check has refused
+// a request with no session before the handler runs. A request that reaches
+// this function without a session keeps an empty principal and no sign-in
+// time, so the checks of the passkey service refuse it and write nothing.
+func breakGlassActor(r *http.Request, e audit.Entry, p identity.Principal) *mfasvc.Actor {
 	caller, ok := sessionFromRequest(r)
 	if !ok {
-		return mfasvc.Actor{Entry: e, PrincipalID: "", SessionID: ""}
+		return &mfasvc.Actor{
+			Entry: e, PrincipalID: "", SessionID: "", Caller: p, SignedInAt: time.Time{},
+		}
 	}
 
-	return mfasvc.Actor{Entry: e, PrincipalID: caller.Match.Owner.ID, SessionID: caller.Match.Session.ID}
+	return &mfasvc.Actor{
+		Entry:       e,
+		PrincipalID: caller.Match.Owner.ID,
+		SessionID:   caller.Match.Session.ID,
+		Caller:      p,
+		SignedInAt:  caller.Match.Session.AuthTime,
+	}
 }
 
 // breakGlassAccount reads the principal id and refuses one that is not a
@@ -599,16 +678,32 @@ func passkeyOf(in breakGlassPasskey) (mfa.Passkey, error) {
 	}, nil
 }
 
+// maxTransportValueRunes caps the transport value that a refusal names. A
+// refusal reason is recorded in the audit log, so it must not copy a long
+// request value into the log.
+const maxTransportValueRunes = 32
+
+// shortTransport returns at most maxTransportValueRunes characters of a
+// transport value, for the text of a refusal.
+func shortTransport(transport string) string {
+	runes := []rune(transport)
+	if len(runes) > maxTransportValueRunes {
+		runes = runes[:maxTransportValueRunes]
+	}
+
+	return string(runes)
+}
+
 // checkTransports refuses a transport outside the allowlist or one that the
 // body names twice.
 func checkTransports(transports []string) error {
 	for i, transport := range transports {
 		if !mfa.ValidTransport(transport) {
-			return fmt.Errorf("%w: transport %q is not on the allowlist", mfa.ErrInvalid, transport)
+			return fmt.Errorf("%w: transport %q is not on the allowlist", mfa.ErrInvalid, shortTransport(transport))
 		}
 
 		if slices.Contains(transports[:i], transport) {
-			return fmt.Errorf("%w: transport %q is named twice", mfa.ErrInvalid, transport)
+			return fmt.Errorf("%w: transport %q is named twice", mfa.ErrInvalid, shortTransport(transport))
 		}
 	}
 

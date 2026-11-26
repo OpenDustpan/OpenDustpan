@@ -21,6 +21,7 @@ import (
 	"opendustpan.org/opendustpan/internal/store/sqlite"
 	"opendustpan.org/opendustpan/internal/webauthntest"
 	"opendustpan.org/opendustpan/pkg/audit"
+	"opendustpan.org/opendustpan/pkg/identity"
 	"opendustpan.org/opendustpan/pkg/mfa"
 	"opendustpan.org/opendustpan/pkg/mfa/gowebauthn"
 	"opendustpan.org/opendustpan/pkg/notify"
@@ -118,7 +119,14 @@ func (e *passkeySignInEnv) register(t *testing.T, id string) *webauthntest.Crede
 		PrevHash: "", Hash: "", Sequence: 0, FenceVersion: 0, Reason: "", PrincipalKind: "", JobID: "",
 		Origin: nil,
 	}
-	actor := mfasvc.Actor{Entry: entry, PrincipalID: id, SessionID: "ses-" + id}
+	actor := &mfasvc.Actor{
+		Entry: entry, PrincipalID: id, SessionID: "ses-" + id,
+		Caller: identity.Principal{
+			TemporaryAdministrator: false, TemporaryExpiresAt: time.Time{}, Subject: "", DisplayName: "",
+			Admin: false, TokenID: "", TokenExpiresAt: time.Time{}, Kind: "", Credential: "", JobID: "",
+		},
+		SignedInAt: time.Time{},
+	}
 	person := mfa.Person{ID: id, Name: id, DisplayName: id}
 
 	options, err := e.svc.BeginRegistration(t.Context(), actor, person)
@@ -693,6 +701,7 @@ func TestPasskeySignInChallengeCap(t *testing.T) {
 
 			svc, err := mfasvc.New(mfasvc.Config{
 				Store: capped, RP: rp, Audit: st, Now: nil, Log: slog.New(slog.DiscardHandler),
+				Authorizer: nil, Guard: nil,
 			})
 			if err != nil {
 				t.Fatalf("passkey service: %v", err)

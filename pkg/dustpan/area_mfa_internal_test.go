@@ -9,7 +9,9 @@ import (
 	"time"
 
 	"opendustpan.org/opendustpan/internal/store/sqlite"
+	"opendustpan.org/opendustpan/pkg/identity"
 	"opendustpan.org/opendustpan/pkg/namespace"
+	"opendustpan.org/opendustpan/pkg/principal"
 )
 
 // plainNamespaceStore is a namespace store that holds no passkeys: the
@@ -47,7 +49,8 @@ func (tc passkeyWiringCase) run(t *testing.T, st *sqlite.Store) {
 
 	log := slog.New(slog.NewTextHandler(&out, nil))
 
-	got, err := newPasskeyService(store, tc.url, st, time.Now, log)
+	got, err := newPasskeyService(store, tc.url, time.Now, log,
+		passkeyAccess{entries: st, authz: identity.AdminOnly{}, guard: principal.AdminOnlyGuard{}})
 	if err != nil {
 		t.Fatalf("newPasskeyService: %v", err)
 	}

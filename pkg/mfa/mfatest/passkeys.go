@@ -125,6 +125,10 @@ func passkeyCases() []passkeyCase {
 			name: "two rotations of one passkey at the same time: one wins and one working credential stays",
 			test: testRotateRace,
 		},
+		{
+			name: "a rotation of a suspended passkey fails with ErrSuspended and keeps the suspension",
+			test: testRotateSuspended,
+		},
 		{name: "a challenge works once", test: testChallengeOnce},
 		{
 			name: "a sign-in challenge over the cap of open ones stores no row, and the cap counts sign-ins only",
@@ -1379,6 +1383,37 @@ func testRotateOtherPerson(t *testing.T, s PasskeyStore) {
 	}
 
 	wantEntries(t, s, passkeyObject(3), 0)
+}
+
+// testRotateSuspended proves that a rotation of a suspended passkey fails with
+// ErrSuspended. The new passkey would clear the suspension, so no row changes:
+// the old passkey stays suspended, no new passkey is stored and no entry is
+// appended.
+func testRotateSuspended(t *testing.T, s PasskeyStore) {
+	t.Helper()
+
+	pid := mustBreakGlass(t, s, 1)
+	mustAdd(t, s, 5, pid)
+	mustAdd(t, s, 6, pid)
+
+	err := s.RecordUse(t.Context(), use(5, 1, 100), regressedEntry(5, 100))
+	wantErr(t, "regression", err, mfa.ErrCounterRegressed)
+
+	next := passkeyOf(7, pid)
+	next.CreatedAt = at(60)
+
+	err = s.RotatePasskey(t.Context(), pid, "pky-5", next, entry(passkeyObject(7), at(60)))
+	wantErr(t, "rotate a suspended passkey", err, mfa.ErrSuspended)
+
+	if got := byCredential(t, s, 5); !got.SuspendedAt.Equal(at(100)) {
+		t.Fatalf("suspended passkey = %+v, want suspended at %s", got, at(100))
+	}
+
+	if n := count(t, s, pid); n != 2 {
+		t.Fatalf("passkeys = %d, want 2", n)
+	}
+
+	wantEntries(t, s, passkeyObject(7), 0)
 }
 
 // testRotateRace proves that two rotations of one passkey at the same time

@@ -8,9 +8,11 @@ import (
 
 	"opendustpan.org/opendustpan/internal/authgate"
 	"opendustpan.org/opendustpan/internal/mfasvc"
+	"opendustpan.org/opendustpan/pkg/identity"
 	"opendustpan.org/opendustpan/pkg/mfa"
 	"opendustpan.org/opendustpan/pkg/mfa/gowebauthn"
 	"opendustpan.org/opendustpan/pkg/namespace"
+	"opendustpan.org/opendustpan/pkg/principal"
 )
 
 // passkeyWiring holds the service of the passkeys. The service is nil when
@@ -19,6 +21,16 @@ import (
 // mounted.
 type passkeyWiring struct {
 	service *mfasvc.Service
+}
+
+// passkeyAccess holds the audit sink of the passkey service and the checks
+// that it makes for the rotation of a break-glass passkey: the action on the
+// installation and the reach of the caller over the grants of the target
+// account.
+type passkeyAccess struct {
+	entries mfasvc.Auditor
+	authz   identity.Authorizer
+	guard   principal.Guard
 }
 
 // watchBreakGlass makes svc alert the administrators after failed assertions
@@ -49,7 +61,7 @@ func watchBreakGlass(svc *mfasvc.Service, store namespace.Store, log *slog.Logge
 // reason. A browser runs a passkey ceremony only in a secure context, so the
 // URL is https, or http on localhost.
 func newPasskeyService(
-	store namespace.Store, publicURL string, entries mfasvc.Auditor, now func() time.Time, log *slog.Logger,
+	store namespace.Store, publicURL string, now func() time.Time, log *slog.Logger, access passkeyAccess,
 ) (passkeyWiring, error) {
 	none := passkeyWiring{service: nil}
 
@@ -74,7 +86,10 @@ func newPasskeyService(
 		return none, nil
 	}
 
-	svc, err := mfasvc.New(mfasvc.Config{Store: passkeys, RP: rp, Audit: entries, Now: now, Log: log})
+	svc, err := mfasvc.New(mfasvc.Config{
+		Store: passkeys, RP: rp, Audit: access.entries, Now: now, Log: log,
+		Authorizer: access.authz, Guard: access.guard,
+	})
 	if err != nil {
 		return none, fmt.Errorf("passkeys: %w", err)
 	}

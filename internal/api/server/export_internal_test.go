@@ -250,3 +250,17 @@ func FirstAdminErrorForTest(err error) error { return firstAdminError(err) }
 func GateScopeOfForTest(r *http.Request, obj identity.Object) (gate.Scope, error) {
 	return gateScopeOf(r, obj)
 }
+
+// CheckBreakGlassDisplayNameForTest calls the display name check of the
+// break-glass routes alone. The routes decode the body as JSON, and JSON
+// decoding replaces each invalid UTF-8 byte with U+FFFD, so only this call
+// brings an invalid UTF-8 name to the UTF-8 branch of the check.
+func CheckBreakGlassDisplayNameForTest(s string) error {
+	return checkBreakGlassDisplayName(s)
+}
+
+// BreakGlassDisplayNameRuneForTest reports whether the allowlist of the
+// break-glass display name accepts r.
+func BreakGlassDisplayNameRuneForTest(r rune) bool {
+	return breakGlassDisplayNameRune(r)
+}

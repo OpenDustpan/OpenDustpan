@@ -431,7 +431,8 @@ func RemovePasskey(ctx context.Context, tx Tx, personID, id string) error {
 // next in its place. The adapter runs it in one transaction, so a failure
 // of any step keeps the old passkey. It returns mfa.ErrNotFound for an
 // unknown passkey, the passkey of another person, or a person that is not a
-// break-glass account.
+// break-glass account. It returns mfa.ErrSuspended for a suspended passkey,
+// which a rotation would otherwise clear.
 func RotatePasskey(ctx context.Context, tx Tx, personID, oldID string, next mfa.Passkey) error {
 	// Defense in depth: the service passes the person of the request. This
 	// check stays so that a new caller cannot rotate into another person.
@@ -456,8 +457,16 @@ func RotatePasskey(ctx context.Context, tx Tx, personID, oldID string, next mfa.
 		return fmt.Errorf("%w: the person is not a break-glass account", mfa.ErrNotFound)
 	}
 
-	if _, err = owned(ctx, tx, personID, oldID); err != nil {
+	old, err := owned(ctx, tx, personID, oldID)
+	if err != nil {
 		return err
+	}
+
+	// Defense in depth: the new passkey has no suspension, so a rotation of a
+	// suspended passkey would clear it. This check refuses that rotation and
+	// does not rely on the service or the handler to refuse it first.
+	if old.SuspendedAtMs != 0 {
+		return mfa.ErrSuspended
 	}
 
 	n, err := tx.DeletePasskey(ctx, oldID, personID)

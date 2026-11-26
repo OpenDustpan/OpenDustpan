@@ -33,6 +33,7 @@ import (
 	"errors"
 	"fmt"
 	"net/http"
+	"time"
 
 	"opendustpan.org/opendustpan/internal/errcode"
 	"opendustpan.org/opendustpan/internal/mfasvc"
@@ -61,9 +62,9 @@ const (
 type PasskeySignInService interface {
 	// BeginAssertion starts an assertion ceremony and returns the JSON of the
 	// request options.
-	BeginAssertion(ctx context.Context, a mfasvc.Actor, k mfa.Ceremony, b mfasvc.Binding) ([]byte, error)
+	BeginAssertion(ctx context.Context, a *mfasvc.Actor, k mfa.Ceremony, b mfasvc.Binding) ([]byte, error)
 	// FinishSignIn ends the sign-in ceremony of the response.
-	FinishSignIn(ctx context.Context, a mfasvc.Actor, response []byte) (mfasvc.SignedIn, error)
+	FinishSignIn(ctx context.Context, a *mfasvc.Actor, response []byte) (mfasvc.SignedIn, error)
 }
 
 // passkeySignInRequest is the body of the end of a passkey sign-in. Reason is
@@ -207,10 +208,12 @@ func (h *Handler) beginPasskeySignIn(w http.ResponseWriter, r *http.Request, _ i
 
 	h.signIn.passkeyBegins.Fail(ctx)
 
-	actor := mfasvc.Actor{
+	actor := &mfasvc.Actor{
 		Entry:       signInEntry(r, signInWebauthnAuditActor, session.ActionSignIn),
 		PrincipalID: "",
 		SessionID:   "",
+		Caller:      zeroPrincipal(),
+		SignedInAt:  time.Time{},
 	}
 
 	options, err := h.signIn.passkeySignIn.BeginAssertion(ctx, actor, mfa.CeremonySignIn, mfasvc.Binding{
@@ -255,8 +258,16 @@ func (h *Handler) finishPasskeySignIn(w http.ResponseWriter, r *http.Request, _ 
 
 	entry := signInEntry(r, signInWebauthnAuditActor, session.ActionSignIn)
 
+	actor := &mfasvc.Actor{
+		Entry:       entry,
+		PrincipalID: "",
+		SessionID:   "",
+		Caller:      zeroPrincipal(),
+		SignedInAt:  time.Time{},
+	}
+
 	signed, err := h.signIn.passkeySignIn.FinishSignIn(
-		ctx, mfasvc.Actor{Entry: entry, PrincipalID: "", SessionID: ""}, req.Response,
+		ctx, actor, req.Response,
 	)
 	if err != nil {
 		if !errors.Is(err, mfa.ErrUnavailable) {

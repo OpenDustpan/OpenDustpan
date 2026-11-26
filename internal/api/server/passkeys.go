@@ -74,27 +74,24 @@ const (
 type PasskeyService interface {
 	// BeginRegistration starts a register ceremony and returns the JSON of the
 	// creation options.
-	BeginRegistration(ctx context.Context, a mfasvc.Actor, p mfa.Person) ([]byte, error)
+	BeginRegistration(ctx context.Context, a *mfasvc.Actor, p mfa.Person) ([]byte, error)
 	// FinishRegistration ends the register ceremony of the response and stores
 	// the passkey under the name.
 	FinishRegistration(
-		ctx context.Context, a mfasvc.Actor, p mfa.Person, name string, response []byte,
+		ctx context.Context, a *mfasvc.Actor, p mfa.Person, name string, response []byte,
 	) (mfa.Passkey, error)
 	// Passkeys returns the passkeys of the caller.
-	Passkeys(ctx context.Context, a mfasvc.Actor) ([]mfa.Passkey, error)
+	Passkeys(ctx context.Context, a *mfasvc.Actor) ([]mfa.Passkey, error)
 	// RemovePasskey removes the passkey id of the caller.
-	RemovePasskey(ctx context.Context, a mfasvc.Actor, id string) error
-	// AddPasskey stores the passkey of a person for a caller that acts on
-	// another account, as the break-glass add does.
-	AddPasskey(ctx context.Context, a mfasvc.Actor, personID string, next mfa.Passkey) (mfa.Passkey, error)
+	RemovePasskey(ctx context.Context, a *mfasvc.Actor, id string) error
 	// AddBreakGlassPerson stores a new break-glass person and its first
 	// passkey in one transaction, and returns both.
 	AddBreakGlassPerson(
-		ctx context.Context, a mfasvc.Actor, in principal.Input, first mfa.Passkey,
+		ctx context.Context, a *mfasvc.Actor, in principal.Input, first mfa.Passkey,
 	) (principal.Principal, mfa.Passkey, error)
 	// RotatePasskey replaces the passkey oldID of the person personID with
 	// next, in one transaction.
-	RotatePasskey(ctx context.Context, a mfasvc.Actor, personID, oldID string, next mfa.Passkey) error
+	RotatePasskey(ctx context.Context, a *mfasvc.Actor, personID, oldID string, next mfa.Passkey) error
 }
 
 // finishPasskeyRequest is the body of the end of a register ceremony.
@@ -266,9 +263,19 @@ func (h *Handler) passkeyCaller(
 
 // passkeyActor returns the actor of a step of the caller: the audit entry of
 // the request, and the principal and the session of the console session.
-func passkeyActor(r *http.Request, p identity.Principal, caller sessionCaller, action identity.Action) mfasvc.Actor {
-	return mfasvc.Actor{
+func passkeyActor(r *http.Request, p identity.Principal, caller sessionCaller, action identity.Action) *mfasvc.Actor {
+	return &mfasvc.Actor{
 		Entry: callerEntry(r, p, action), PrincipalID: caller.Match.Owner.ID, SessionID: caller.Match.Session.ID,
+		Caller: zeroPrincipal(), SignedInAt: time.Time{},
+	}
+}
+
+// zeroPrincipal returns the principal record of a caller with no principal:
+// every field is zero. The passkey service reads no field of it for a sign-in.
+func zeroPrincipal() identity.Principal {
+	return identity.Principal{
+		TemporaryAdministrator: false, TemporaryExpiresAt: time.Time{}, Subject: "", DisplayName: "",
+		Admin: false, TokenID: "", TokenExpiresAt: time.Time{}, Kind: "", Credential: "", JobID: "",
 	}
 }
 

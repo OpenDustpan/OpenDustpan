@@ -250,11 +250,6 @@ func newAccessFixtureAll(t *testing.T, parts accessFixtureParts) accessFixture {
 	path := filepath.Join(t.TempDir(), "dustpan.db")
 	st := openServerTemplateStore(t, path)
 
-	passkeys := parts.passkeys
-	if passkeys == nil {
-		passkeys = newRoutePasskeys(t, st)
-	}
-
 	logger := handlerLogger(parts.logger)
 
 	namespaces, err := namespace.NewService(namespace.Config{Store: st, Now: nil, Installation: "test"})
@@ -307,6 +302,11 @@ func newAccessFixtureAll(t *testing.T, parts accessFixtureParts) accessFixture {
 	)
 	if err != nil {
 		t.Fatalf("principal service: %v", err)
+	}
+
+	passkeys := parts.passkeys
+	if passkeys == nil {
+		passkeys = newRoutePasskeysGuarded(t, st, authz, grants)
 	}
 
 	tokens, err := accesstoken.NewService(accesstoken.Config{

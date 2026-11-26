@@ -10,6 +10,43 @@ import (
 	"opendustpan.org/opendustpan/pkg/principal"
 )
 
+// hiddenValue returns "a", the code point r, and "b". The code point is
+// written as a number so that the source holds no hidden character.
+func hiddenValue(r rune) string {
+	return "a" + string(r) + "b"
+}
+
+// TestCheckBreakGlassDisplayNameRefusesHiddenCharacter sends a hidden
+// character to the check alone. The allowlist refuses each of them too, so the
+// message is the only proof that the hidden-character branch ran.
+func TestCheckBreakGlassDisplayNameRefusesHiddenCharacter(t *testing.T) {
+	t.Parallel()
+
+	cases := []struct {
+		name  string
+		value string
+	}{
+		{"right-to-left override", hiddenValue(0x202e)},
+		{"zero-width space", hiddenValue(0x200b)},
+		{"soft hyphen", hiddenValue(0x00ad)},
+	}
+
+	for _, c := range cases {
+		t.Run(c.name, func(t *testing.T) {
+			t.Parallel()
+
+			err := server.CheckBreakGlassDisplayNameForTest(c.value)
+			if !errors.Is(err, principal.ErrInvalid) {
+				t.Fatalf("check of %q = %v, want principal.ErrInvalid", c.value, err)
+			}
+
+			if !strings.Contains(err.Error(), "control, format or separator character") {
+				t.Errorf("check of %q = %v, want the hidden-character refusal", c.value, err)
+			}
+		})
+	}
+}
+
 // TestCheckBreakGlassDisplayNameRefusesInvalidUTF8 sends a value that is not
 // UTF-8 to the check alone. JSON decoding yields valid UTF-8, so no HTTP test
 // reaches this case.
