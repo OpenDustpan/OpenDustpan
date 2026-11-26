@@ -50,7 +50,8 @@ const (
 	// reach, and so act as that principal, with every grant that the
 	// principal has now or gets later.
 	RoleAccountAdministrator = "account-administrator"
-	// RoleSiteAdministrator holds the actions of every family. A
+	// RoleSiteAdministrator holds the actions of every family except the
+	// housekeeping actions, which only the housekeeping roles hold. A
 	// self-hosted installation can use it. Like RoleAccountAdministrator,
 	// it can act as any service principal.
 	RoleSiteAdministrator = "site-administrator"
@@ -115,7 +116,10 @@ var builtInDescriptions = []struct {
 		RoleAccountAdministrator,
 		"Manages principals, groups, roles, grants and namespaces, makes the tokens of each service principal whose reach fits inside its own reach, and holds every data action.",
 	},
-	{RoleSiteAdministrator, "Holds every action of the installation."},
+	{
+		RoleSiteAdministrator,
+		"Holds every action of the installation except the housekeeping actions, which only the housekeeping roles hold.",
+	},
 	{
 		RoleTokenManager,
 		"Makes, rotates and revokes the tokens of a service principal, and so acts as that principal.",

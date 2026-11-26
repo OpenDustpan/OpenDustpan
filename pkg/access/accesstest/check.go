@@ -38,6 +38,10 @@ func checkCases() []struct {
 		{name: "a grant that its check refuses changes nothing", test: testGrantCheckRefuses},
 		{name: "a role update that its check refuses changes nothing", test: testRoleCheckRefuses},
 		{name: "a revoke that its check refuses changes nothing", test: testRevokeCheckRefuses},
+		{
+			name: "a revoke check reads the source of a builtin holder in the write",
+			test: testRevokeCheckReadsBuiltinHolder,
+		},
 		{name: "a grant check reads the current grants, roles and subjects", test: testGrantCheckReads},
 		{name: "a role check reads where the role is granted", test: testRoleCheckReads},
 		{name: "a grant check reads the collection of a unit", test: testCheckReadsUnitCollection},
@@ -103,11 +107,72 @@ func testRevokeCheckRefuses(t *testing.T, s access.Store) {
 	}
 }
 
+// builtinHolderReads reads the record of a grant holder in the transaction
+// of a write. Both SQL adapters meet it.
+type builtinHolderReads interface {
+	GetPrincipal(ctx context.Context, id string) (principal.Principal, error)
+}
+
+// testRevokeCheckReadsBuiltinHolder checks that the check of a revoke reads
+// the record of a holder of the source builtin in the transaction of the
+// write: the check allows the revoke only when the read answers that source.
+func testRevokeCheckReadsBuiltinHolder(t *testing.T, s access.Store) {
+	t.Helper()
+
+	ps, ok := s.(principal.Store)
+	if !ok {
+		t.Skip("the store keeps no principals")
+	}
+
+	ctx := t.Context()
+	id := "prn-builtin-check"
+
+	err := ps.CreatePrincipal(ctx, principal.Principal{
+		CreatedAt: at(0), UpdatedAt: at(0), DisabledAt: time.Time{}, ID: id,
+		Subject: "housekeeping:check", DisplayName: "housekeeping:check", Kind: principal.KindService,
+		Source: principal.SourceBuiltin, Namespace: "", GroupCount: 0, BreakGlass: false,
+	}, entry())
+	if err != nil {
+		t.Fatalf("create builtin principal: %v", err)
+	}
+
+	g := newGrant("grt-builtin-check", principalSubject(id), access.RoleViewer, identity.ServerObject())
+
+	if err := createGrant(t, s, g, entry()); err != nil {
+		t.Fatalf("create grant: %v", err)
+	}
+
+	check := func(ctx context.Context, r access.GrantReads) error {
+		reader, ok := r.(builtinHolderReads)
+		if !ok {
+			return errCheck
+		}
+
+		p, err := reader.GetPrincipal(ctx, id)
+		if err != nil {
+			return err
+		}
+
+		if p.Source != principal.SourceBuiltin {
+			return errCheck
+		}
+
+		return nil
+	}
+
+	if err := s.RevokeGrant(ctx, g.ID, fenceOf(t, s, ""), entry(), check); err != nil {
+		t.Fatalf("revoke with a check that reads the source of the builtin holder: %v", err)
+	}
+
+	if _, err := s.GetGrant(ctx, g.ID); !errors.Is(err, access.ErrNotFound) {
+		t.Fatalf("grant after the revoke = %v, want ErrNotFound", err)
+	}
+}
+
 // testRoleCheckRefuses checks that a role update whose check fails keeps
 // the role as it was and returns the error of the check.
 func testRoleCheckRefuses(t *testing.T, s access.Store) {
 	t.Helper()
-
 	ctx := t.Context()
 	before := newRole("rol-1", "Deployer", identity.ActionUnitRead)
 	mustCreateRole(t, s, before)

@@ -129,6 +129,10 @@ func (s *Service) within(
 	w.store = st
 	w.authz = authz
 
+	if reader, ok := reads.(principalReader); ok {
+		w.holder = reader
+	}
+
 	return &w, WithoutRequestCache(ctx)
 }
 

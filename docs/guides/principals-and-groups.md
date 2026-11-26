@@ -126,8 +126,8 @@ action inside a namespace. So `housekeeping:agent-reaper` holds two roles:
 `housekeeping-agent-run-reaper` on each namespace. The access review of the namespace,
 `GET /api/server/namespaces/{namespace}/access-review?subject=principal:<id>`,
 lists it. The route `GET /api/server/principals/{principal}/grants` lists the
-grants on the principal as an object, not the grants that it holds. A
-housekeeping principal has no token and no session.
+grants on the principal as an object, not the grants that it holds. A later
+change refuses a token and a trust rule for a housekeeping principal.
 
 ## Change a principal
 

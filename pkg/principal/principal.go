@@ -46,7 +46,9 @@ var (
 	ErrInvalid = errors.New("invalid principal or group")
 	// ErrReservedSubject reports a subject that the bootstrap admin tokens
 	// use, or that can look like one: admin, or admin and a character that is
-	// not a letter (ADR 6).
+	// not a letter. It also reports a record that the server makes
+	// and keeps, such as a principal of the source builtin, which no API
+	// deletes.
 	ErrReservedSubject = errors.New("reserved subject")
 	// ErrManagedByDirectory reports a membership change through the API of
 	// a group that a directory sync keeps (ADR 55). The error names the
@@ -387,6 +389,18 @@ func refuseNamespaceServiceSubject(s string) error {
 	return nil
 }
 
+// refuseBuiltinPrincipal returns ErrReservedSubject for a principal of the
+// source builtin: the server makes these records at the install and keeps
+// them, and no API deletes them.
+func refuseBuiltinPrincipal(p Principal) error {
+	if p.Source != SourceBuiltin {
+		return nil
+	}
+
+	return fmt.Errorf("%w: %q is a principal of the source builtin, which the server makes and keeps",
+		ErrReservedSubject, p.Subject)
+}
+
 // checkSubjectForm checks the form of a subject and that no bootstrap admin
 // token can use it. It does not check the prefix of the dev sign-in.
 func checkSubjectForm(s string) error {
@@ -666,6 +680,20 @@ func validateSource(s Source) error {
 	return nil
 }
 
+// checkGroupSource returns ErrInvalid for a source that a group cannot
+// have. A group has its own allowlist: builtin is only the source of a
+// principal that the server makes at the install.
+func checkGroupSource(s Source) error {
+	switch s {
+	case SourceLocal, SourceLDAP, SourceSCIM, SourceOIDC, SourceOAuth:
+		return nil
+	case SourceBuiltin:
+		return fmt.Errorf("%w: a group cannot have the source %q", ErrInvalid, s)
+	default:
+		return fmt.Errorf("%w: unknown source %q", ErrInvalid, s)
+	}
+}
+
 // Validate reports whether g holds usable values. It does not check ID or
 // the times: the Service sets them.
 func (g Group) Validate() error {
@@ -673,7 +701,7 @@ func (g Group) Validate() error {
 		return err
 	}
 
-	if err := validateSource(g.Source); err != nil {
+	if err := checkGroupSource(g.Source); err != nil {
 		return err
 	}
 

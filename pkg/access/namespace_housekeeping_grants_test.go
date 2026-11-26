@@ -42,7 +42,7 @@ func housekeepingGrantsOn(t *testing.T, f *fixture, name namespace.Name) map[str
 	return out
 }
 
-func TestCreateNamespaceHousekeepingGrants(t *testing.T) {
+func TestServiceCreateNamespaceHousekeepingGrants(t *testing.T) {
 	t.Parallel()
 
 	f := newFixture(t)

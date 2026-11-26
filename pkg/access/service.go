@@ -121,6 +121,9 @@ type Service struct {
 	bootstrap  []string
 	settings   Settings
 	limits     LimitGroups
+	// holder reads the holder of a grant in the transaction of a write,
+	// when the Service runs in one. Nil reads the directory.
+	holder principalReader
 }
 
 // NewService returns a Service. Store, Directory, Namespaces and Authorizer
@@ -158,6 +161,7 @@ func NewService(cfg ServiceConfig) (*Service, error) {
 		bootstrap:  slices.Clone(cfg.BootstrapAdmins),
 		settings:   cfg.Settings,
 		limits:     cfg.LimitGroups,
+		holder:     nil,
 	}, nil
 }
 
@@ -1796,7 +1800,31 @@ func sameTarget(a, b identity.Object) bool {
 
 // checkGrantHeld refuses when caller does not hold every action that g
 // gives on its object: the rule of a revoke, and of a change of who holds g.
+// A grant whose holder is a principal of the source builtin needs the
+// manage-access action of its object instead, never each action of its role:
+// the roles of the housekeeping principals are in no other built-in role, so
+// a site administrator holds none of their actions. A holder of another
+// source keeps the rule of every action.
 func (s *Service) checkGrantHeld(ctx context.Context, caller identity.Principal, g Grant) error {
+	source, err := s.grantHolderSource(ctx, g)
+	if err != nil {
+		return err
+	}
+
+	if source == principal.SourceBuiltin {
+		kind, ok := KindOf(g.Object)
+		if !ok {
+			return fmt.Errorf("%w: object %q takes no grant", ErrInvalid, g.Object.String())
+		}
+
+		// Defense in depth: revokeCheck authorizes this action again in the
+		// transaction of the write, and the route of the revoke authorizes
+		// it before the call. This check stays so that a new caller of the
+		// service cannot end the grant of a built-in principal without it. It
+		// does not rely on them.
+		return s.authz.Authorize(ctx, caller, manageAccessAction(kind), g.Object)
+	}
+
 	role, err := s.GetRole(ctx, g.Role)
 	if errors.Is(err, ErrNotFound) {
 		// A deleted custom role gives nothing, so nothing is taken away.
@@ -1808,6 +1836,33 @@ func (s *Service) checkGrantHeld(ctx context.Context, caller identity.Principal,
 	}
 
 	return s.checkEscalation(ctx, caller, g.Object, role)
+}
+
+// grantHolderSource returns the source of the holder of g. A group has no
+// source of a principal. It reads the holder in the transaction of a write
+// when the Service runs in one, so the check reads no connection other than
+// its own. An unknown holder kind, an unknown principal and a failed read
+// return an error: the check denies.
+func (s *Service) grantHolderSource(ctx context.Context, g Grant) (principal.Source, error) {
+	switch g.Subject.Kind {
+	case SubjectGroup:
+		return "", nil
+	case SubjectPrincipal:
+	default:
+		return "", fmt.Errorf("%w: grant holder kind %q", ErrInvalid, g.Subject.Kind)
+	}
+
+	reader := s.holder
+	if reader == nil {
+		reader = s.directory
+	}
+
+	p, err := reader.GetPrincipal(ctx, g.Subject.ID)
+	if err != nil {
+		return "", fmt.Errorf("read grant holder %s: %w", g.Subject.String(), err)
+	}
+
+	return p.Source, nil
 }
 
 // checkPlacement refuses a role with an action outside the data family

@@ -21,12 +21,27 @@ func housekeepingCases() []struct {
 		test func(t *testing.T, s access.Store)
 		name string
 	}{
-		{name: "a created namespace has the five housekeeping grants", test: testNamespaceHousekeepingGrants},
-		{name: "a namespace without a creator has the housekeeping grants", test: testNamespaceHousekeepingGrantsAlone},
-		{name: "a grant that fails to insert leaves no namespace", test: testNamespaceHousekeepingGrantFails},
-		{name: "a taken namespace is not given the housekeeping grants again", test: testNamespaceHousekeepingTaken},
-		{name: "a grant with no ID is ErrInvalid", test: testNamespaceHousekeepingNoID},
-		{name: "only a housekeeping grant gets the housekeeping reason", test: testNamespaceHousekeepingReason},
+		{name: "namespace creation housekeeping grants: five grants", test: testNamespaceHousekeepingGrants},
+		{
+			name: "namespace creation housekeeping grants: a namespace without a creator",
+			test: testNamespaceHousekeepingGrantsAlone,
+		},
+		{
+			name: "namespace creation housekeeping grants: a failed insert leaves no namespace",
+			test: testNamespaceHousekeepingGrantFails,
+		},
+		{
+			name: "namespace creation housekeeping grants: a taken namespace",
+			test: testNamespaceHousekeepingTaken,
+		},
+		{
+			name: "namespace creation housekeeping grants: a grant with no ID",
+			test: testNamespaceHousekeepingNoID,
+		},
+		{
+			name: "namespace creation housekeeping grants: only a housekeeping grant gets the reason",
+			test: testNamespaceHousekeepingReason,
+		},
 	}
 }
 

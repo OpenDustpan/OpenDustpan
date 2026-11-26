@@ -2061,7 +2061,10 @@ INSERT INTO session_policy (id, idle_ms, max_length_ms, updated_at_ms, token_fre
 INSERT INTO audit_chain_state (id, state, changed_at_ms, changed_by, pending, entered_maintenance, log_replaced, migrating_at_ms) VALUES (1, 'on', 0, '', 0, 0, 0, 0);
 
 -- The install writes the housekeeping principals, and one grant on the
--- installation for each purpose that acts on the installation.
+-- installation for each purpose that acts on the installation. The change
+-- housekeeping-install-grants-audit replaces these grants: its install step
+-- writes them with the install time and one audit entry for each grant.
+-- Until it lands, these rows are the grants of a new installation.
 INSERT INTO principals (id, subject, display_name, kind, source, created_at_ms, updated_at_ms) VALUES
     ('prn-housekeeping-agent-reaper', 'housekeeping:agent-reaper', 'housekeeping:agent-reaper', 'service', 'builtin', 0, 0),
     ('prn-housekeeping-artifact-sweep', 'housekeeping:artifact-sweep', 'housekeeping:artifact-sweep', 'service', 'builtin', 0, 0),

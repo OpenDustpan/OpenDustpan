@@ -395,6 +395,12 @@ func (h *Handler) grantRoutes() []Route {
 		))
 	}
 
+	// Defense in depth: the service authorizes the manage-access action of
+	// the grant's object again at the point of use, in the transaction of the
+	// revoke, and it requires that action for a grant whose holder is a
+	// principal of the source builtin. This route check stays so that a
+	// caller without the action never reaches the service. It does not rely
+	// on the service check.
 	out = append(out, Route{
 		Method: http.MethodDelete, Path: serverGrantsPath + grantIDSuffix, Scope: ScopeAuthorized,
 		Actions: []identity.Action{
