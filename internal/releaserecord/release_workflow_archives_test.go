@@ -570,7 +570,12 @@ func workflowMutations() []workflowMutation {
 			"archives-build",
 			"guard",
 			func(s string) string {
-				return strings.Replace(s, "  push:\n    tags:\n      - \"v*\"", "  push:\n    tags:\n      - \"v*\"\n  pull_request:", 1)
+				return strings.Replace(
+					s,
+					"  push:\n    tags:\n      - \"v*\"",
+					"  push:\n    tags:\n      - \"v*\"\n  pull_request:",
+					1,
+				)
 			},
 		},
 		{
@@ -725,7 +730,13 @@ func checkOneMutation(t *testing.T, good string, tt workflowMutation) {
 		}
 	}
 
-	t.Errorf("the mutation %q yields no finding that names %q and %q: %q", tt.name, tt.job, tt.item, strings.Join(findings, "; "))
+	t.Errorf(
+		"the mutation %q yields no finding that names %q and %q: %q",
+		tt.name,
+		tt.job,
+		tt.item,
+		strings.Join(findings, "; "),
+	)
 }
 
 // TestReleaseWorkflowCheckerRefusesWeakWorkflows runs the checker on hostile
