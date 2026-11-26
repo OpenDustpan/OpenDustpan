@@ -1,6 +1,7 @@
 package releaserecord_test
 
 import (
+	"errors"
 	"os"
 	"regexp"
 	"slices"
@@ -10,12 +11,63 @@ import (
 	"go.yaml.in/yaml/v3"
 )
 
-// releaseWorkflowBytes returns the bytes of the patched release workflow.
-// The operator rule keeps the workflow change in .github-workflows-staging/
-// until a person moves it into .github/workflows/: the staged file is the
-// change, so the test reads it when it exists and the live file otherwise.
-// After the move the staged file is gone and the test reads the live file.
-func releaseWorkflowBytes(t *testing.T) []byte {
+const (
+	stagedWorkflowPath = ".github-workflows-staging/release.yml"
+	liveWorkflowPath   = ".github/workflows/release.yml"
+)
+
+var (
+	errBothHoldArchivesJob = errors.New(
+		"both .github-workflows-staging/release.yml and .github/workflows/release.yml hold the archives-build job: the staged copy was left behind",
+	)
+	errNeitherHoldsArchivesJob = errors.New(
+		".github-workflows-staging/release.yml does not exist and .github/workflows/release.yml does not hold the archives-build job",
+	)
+)
+
+// workflowHoldsArchivesBuild answers whether the workflow bytes hold the
+// archives-build job.
+func workflowHoldsArchivesBuild(raw []byte) bool {
+	var wf workflowFile
+
+	if err := yaml.Unmarshal(raw, &wf); err != nil {
+		return strings.Contains(string(raw), "archives-build")
+	}
+
+	_, ok := wf.Jobs["archives-build"]
+
+	return ok
+}
+
+// chooseWorkflowFile applies the guard rule for the two workflow paths: while
+// the staged copy exists, it is the file checked in full, whatever it holds,
+// so a staged copy without the archives-build job fails through its
+// missing-job finding. With no staged copy, the live file is checked when it
+// holds the job. It fails when both hold the job (a move that left the staged
+// copy behind), and when there is no staged copy and the live file has no
+// job. No path is skipped, so the guard is not fail-open.
+func chooseWorkflowFile(stagedExists bool, stagedRaw, liveRaw []byte) (string, []byte, error) {
+	liveHolds := workflowHoldsArchivesBuild(liveRaw)
+
+	switch {
+	case stagedExists && liveHolds && workflowHoldsArchivesBuild(stagedRaw):
+		return "", nil, errBothHoldArchivesJob
+	case stagedExists:
+		return stagedWorkflowPath, stagedRaw, nil
+	case liveHolds:
+		return liveWorkflowPath, liveRaw, nil
+	default:
+		return "", nil, errNeitherHoldsArchivesJob
+	}
+}
+
+// releaseWorkflowBytes returns the path and the bytes of the patched release
+// workflow. The operator rule keeps the workflow change in
+// .github-workflows-staging/ until a person moves it into .github/workflows/.
+// Before the move the live file has no archives job, so nothing of that job
+// is live yet: the staged copy is checked in full while it exists, and the
+// live file is checked in full when no staged copy exists.
+func releaseWorkflowBytes(t *testing.T) (string, []byte) {
 	t.Helper()
 
 	root, openErr := os.OpenRoot("../..")
@@ -29,16 +81,28 @@ func releaseWorkflowBytes(t *testing.T) []byte {
 		}
 	}()
 
-	if staged, readErr := root.ReadFile(".github-workflows-staging/release.yml"); readErr == nil {
-		return staged
+	var stagedRaw []byte
+
+	stagedExists := false
+
+	if staged, readErr := root.ReadFile(stagedWorkflowPath); readErr == nil {
+		stagedRaw = staged
+		stagedExists = true
 	}
 
-	live, readErr := root.ReadFile(".github/workflows/release.yml")
+	liveRaw, readErr := root.ReadFile(liveWorkflowPath)
 	if readErr != nil {
 		t.Fatal(readErr)
 	}
 
-	return live
+	path, raw, chooseErr := chooseWorkflowFile(stagedExists, stagedRaw, liveRaw)
+	if chooseErr != nil {
+		t.Fatal(chooseErr)
+	}
+
+	t.Logf("checking workflow file: %s", path)
+
+	return path, raw
 }
 
 // workflowStep is one step of a job of the release workflow.
@@ -121,20 +185,20 @@ func releaseWorkflowJobForLine(lines []string, idx int) string {
 }
 
 // checkWorkflowTriggers checks that the file runs on a tag push only.
-func checkWorkflowTriggers(wf workflowFile) []string {
+func checkWorkflowTriggers(path string, wf workflowFile) []string {
 	var out []string
 
 	if wf.On == nil {
-		return []string{"workflow guard: job archives-build: the file has no on block"}
+		return []string{"workflow " + path + ": workflow guard: the file has no on block"}
 	}
 
 	if _, ok := wf.On["push"]; !ok {
-		out = append(out, "workflow guard: job archives-build: on has no push trigger")
+		out = append(out, "workflow "+path+": workflow guard: on has no push trigger")
 	}
 
 	for _, trigger := range []string{"pull_request", "workflow_dispatch", "schedule"} {
 		if _, ok := wf.On[trigger]; ok {
-			out = append(out, "workflow guard: job archives-build: on includes "+trigger+", want a tag push only")
+			out = append(out, "workflow "+path+": workflow guard: on includes "+trigger+", want a tag push only")
 		}
 	}
 
@@ -142,11 +206,11 @@ func checkWorkflowTriggers(wf workflowFile) []string {
 }
 
 // checkWorkflowFilePermissions checks that no job inherits a permission.
-func checkWorkflowFilePermissions(wf workflowFile) []string {
+func checkWorkflowFilePermissions(path string, wf workflowFile) []string {
 	out := make([]string, 0, len(wf.Permissions))
 
 	for k, v := range wf.Permissions {
-		out = append(out, "job archives-build: permissions: the file grants "+k+": "+v+", want empty")
+		out = append(out, "workflow "+path+": permissions: the file grants "+k+": "+v+", want empty")
 	}
 
 	return out
@@ -274,6 +338,8 @@ func checkWorkflowPins(raw string) []string {
 	lines := strings.Split(raw, "\n")
 	usesPin := regexp.MustCompile(`uses:\s*(\S+)`)
 	hex40 := regexp.MustCompile(`^[0-9a-f]{40}$`)
+	// The pin comment names a release # vX.Y.Z, that is # v[0-9]+\.[0-9]+\.[0-9]+.
+	releaseComment := regexp.MustCompile(`# v\d+\.\d+\.\d+`)
 
 	for i, line := range lines {
 		m := usesPin.FindStringSubmatch(line)
@@ -300,7 +366,7 @@ func checkWorkflowPins(raw string) []string {
 			comment = line[idx:]
 		}
 
-		if !strings.Contains(comment, "# v") {
+		if !releaseComment.MatchString(comment) {
 			out = append(out, "job "+job+": pins: the pin has no release comment: "+strings.TrimSpace(line))
 		}
 	}
@@ -414,27 +480,144 @@ func checkWorkflowAuthorization(wf workflowFile) []string {
 			"the actor step comes after the download step")
 	}
 
-	if actor >= 0 && !strings.Contains(draft.Steps[actor].Run, "collaborators") {
-		out = append(out, "job release-draft: authorization at the point of use: "+
-			"the actor step has no permission check")
+	return out
+}
+
+const (
+	actorStepName    = "Check that the actor has release permission"
+	tagStepName      = "Check that the tag is a final version tag"
+	actorCompareText = `[ "$PERMISSION" != "admin" ] && [ "$PERMISSION" != "maintain" ]`
+	checksumText     = "sha256sum --check --strict SHA256SUMS"
+)
+
+// checkWorkflowActorComparison checks that the actor step of publish and of
+// release-draft refuses each permission except admin and maintain. A missing
+// step of release-draft is reported by checkWorkflowAuthorization.
+func checkWorkflowActorComparison(wf workflowFile) []string {
+	var out []string
+
+	for _, name := range []string{"publish", "release-draft"} {
+		found := false
+
+		for _, step := range wf.Jobs[name].Steps {
+			if step.Name == actorStepName {
+				found = true
+				out = append(out, actorRunFindings(name, step.Run)...)
+			}
+		}
+
+		if !found && name == "publish" {
+			out = append(out, "job publish: authorization at the point of use: the actor step is missing")
+		}
 	}
 
 	return out
 }
 
+// actorRunFindings checks the run text of one actor step.
+func actorRunFindings(name, run string) []string {
+	var out []string
+
+	if !strings.Contains(run, "collaborators") {
+		out = append(out, "job "+name+": authorization at the point of use: the actor step has no permission check")
+	}
+
+	if !strings.Contains(run, actorCompareText) ||
+		strings.Count(run, `"$PERMISSION" `) != 2 ||
+		strings.Contains(run, `"$PERMISSION" ==`) ||
+		!strings.Contains(run, "exit 1") {
+		out = append(out, "job "+name+": authorization at the point of use: "+
+			"the actor step must refuse each permission except admin and maintain")
+	}
+
+	return out
+}
+
+// hostileReleaseTags lists tags that the tag-format step must refuse.
+func hostileReleaseTags() []string {
+	return []string{"v1.2.3-rc1", "v1.2.3+build", "v1.2", "v1.2.3.4", "1.2.3", "v1.2.3 ", "vx.y.z", "xv1.2.3"}
+}
+
+// releaseTagRegexp reads the pattern of the grep call in the tag-format step
+// of a job. The bool is false when the step or the pattern is missing.
+func releaseTagRegexp(job workflowJob) (*regexp.Regexp, bool) {
+	grep := regexp.MustCompile(`grep -Eq '([^']+)'`)
+
+	for _, step := range job.Steps {
+		if step.Name != tagStepName {
+			continue
+		}
+
+		m := grep.FindStringSubmatch(step.Run)
+		if m == nil || !strings.Contains(step.Run, "exit 1") {
+			return nil, false
+		}
+
+		re, err := regexp.Compile(m[1])
+		if err != nil {
+			return nil, false
+		}
+
+		return re, true
+	}
+
+	return nil, false
+}
+
+// checkWorkflowTagFormat checks that archives-build, publish and
+// release-draft each refuse a tag that is not vX.Y.Z.
+func checkWorkflowTagFormat(wf workflowFile) []string {
+	var out []string
+
+	for _, name := range []string{"archives-build", "publish", "release-draft"} {
+		re, ok := releaseTagRegexp(wf.Jobs[name])
+		if !ok {
+			out = append(out, "job "+name+": tag format: the final version tag step is missing")
+
+			continue
+		}
+
+		if !re.MatchString("v1.2.3") {
+			out = append(out, "job "+name+": tag format: the step refuses v1.2.3")
+		}
+
+		for _, tag := range hostileReleaseTags() {
+			if re.MatchString(tag) {
+				out = append(out, "job "+name+": tag format: the step accepts the tag "+tag)
+			}
+		}
+	}
+
+	return out
+}
+
+// checkWorkflowChecksum checks that archives-verify runs sha256sum in strict
+// check mode on SHA256SUMS.
+func checkWorkflowChecksum(wf workflowFile) []string {
+	for _, step := range wf.Jobs["archives-verify"].Steps {
+		if strings.Contains(step.Run, checksumText) {
+			return nil
+		}
+	}
+
+	return []string{"job archives-verify: checksum check: the job lacks " + checksumText}
+}
+
 // releaseWorkflowFindings returns one finding for each missing guard of the
 // release workflow: the workflow guard, the job order, the permissions, the
-// pins, the version as data and the authorization at the point of use.
-func releaseWorkflowFindings(raw []byte) []string {
+// pins, the version as data and the authorization at the point of use. The
+// path names the file checked: file-level findings read "workflow <path>:",
+// job findings name the job and the item.
+func releaseWorkflowFindings(path string, raw []byte) []string {
 	var wf workflowFile
 	if err := yaml.Unmarshal(raw, &wf); err != nil {
-		return []string{"workflow: the release workflow does not parse: " + err.Error()}
+		return []string{"workflow " + path + ": the release workflow does not parse: " + err.Error()}
 	}
 
 	var findings []string
 
-	findings = append(findings, checkWorkflowTriggers(wf)...)
-	findings = append(findings, checkWorkflowFilePermissions(wf)...)
+	findings = append(findings, checkWorkflowTriggers(path, wf)...)
+	findings = append(findings, checkWorkflowFilePermissions(path, wf)...)
 	findings = append(findings, checkWorkflowJobPresence(wf)...)
 
 	publishGuard := wf.Jobs["publish"].If
@@ -454,6 +637,9 @@ func releaseWorkflowFindings(raw []byte) []string {
 	findings = append(findings, checkWorkflowRuns(wf)...)
 	findings = append(findings, checkWorkflowCheckouts(wf)...)
 	findings = append(findings, checkWorkflowAuthorization(wf)...)
+	findings = append(findings, checkWorkflowActorComparison(wf)...)
+	findings = append(findings, checkWorkflowTagFormat(wf)...)
+	findings = append(findings, checkWorkflowChecksum(wf)...)
 
 	return findings
 }
@@ -516,8 +702,8 @@ func checkActorBeforeDownload(t *testing.T, wf workflowFile) {
 func TestReleaseWorkflowArchiveJobs(t *testing.T) {
 	t.Parallel()
 
-	raw := releaseWorkflowBytes(t)
-	if findings := releaseWorkflowFindings(raw); len(findings) != 0 {
+	path, raw := releaseWorkflowBytes(t)
+	if findings := releaseWorkflowFindings(path, raw); len(findings) != 0 {
 		t.Fatalf("the release workflow has %d findings:\n%s", len(findings), strings.Join(findings, "\n"))
 	}
 
@@ -567,7 +753,7 @@ func workflowMutations() []workflowMutation {
 		},
 		{
 			"a pull_request trigger",
-			"archives-build",
+			"workflow",
 			"guard",
 			func(s string) string {
 				return strings.Replace(
@@ -612,7 +798,7 @@ func workflowMutations() []workflowMutation {
 		},
 		{
 			"contents write for the file",
-			"archives-build",
+			"workflow",
 			"permissions",
 			func(s string) string {
 				return strings.Replace(s, "permissions: {}", "permissions:\n  contents: write", 1)
@@ -663,6 +849,24 @@ func workflowMutations() []workflowMutation {
 			},
 		},
 		{
+			"a pin with comment # v1",
+			"archives-build",
+			"pins",
+			func(s string) string {
+				old := "actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1"
+				return strings.Replace(s, old, "actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v1", 1)
+			},
+		},
+		{
+			"a pin with comment # vfoo",
+			"archives-build",
+			"pins",
+			func(s string) string {
+				old := "actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1"
+				return strings.Replace(s, old, "actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # vfoo", 1)
+			},
+		},
+		{
 			"a run line with a template value",
 			"archives-build",
 			"version as data",
@@ -709,9 +913,166 @@ func workflowMutations() []workflowMutation {
 	}
 }
 
+// mutateJob applies fn to the text of one job and leaves the rest unchanged.
+// A job that is not in the file leaves the file unchanged.
+func mutateJob(s, job string, fn func(string) string) string {
+	start := strings.Index(s, "\n  "+job+":\n")
+	if start < 0 {
+		return s
+	}
+
+	start++
+
+	end := len(s)
+	if next := regexp.MustCompile(`\n {2}[A-Za-z0-9_-]+:\n`).FindStringIndex(s[start:]); next != nil {
+		end = start + next[0] + 1
+	}
+
+	return s[:start] + fn(s[start:end]) + s[end:]
+}
+
+// replaceInJob replaces the first old text inside one job.
+func replaceInJob(s, job, old, repl string) string {
+	return mutateJob(s, job, func(j string) string { return strings.Replace(j, old, repl, 1) })
+}
+
+// removeStepInJob removes the step with the given name from one job.
+func removeStepInJob(s, job, stepName string) string {
+	return mutateJob(s, job, func(j string) string {
+		idx := strings.Index(j, "      - name: "+stepName)
+		if idx < 0 {
+			return j
+		}
+
+		_, after, found := strings.Cut(j[idx:], "\n\n")
+		if !found {
+			return j[:idx]
+		}
+
+		return j[:idx] + after
+	})
+}
+
+// moreWorkflowMutations returns the hostile copies for the guard of each job,
+// the tag format, the actor comparison, the checksum check, the secret read and
+// the step order.
+func moreWorkflowMutations() []workflowMutation {
+	guardLine := "    if: github.event_name == 'push' && startsWith(github.ref, 'refs/tags/v') && " +
+		"github.repository == 'OpenDustpan/OpenDustpan'\n"
+	compare := actorCompareText
+	rows := make([]workflowMutation, 0, 22)
+	rows = append(rows, []workflowMutation{
+		{"archives-verify with no guard", "archives-verify", "guard", func(s string) string {
+			return replaceInJob(s, "archives-verify", guardLine, "")
+		}},
+		{"publish with no guard", "publish", "guard", func(s string) string {
+			return replaceInJob(s, "publish", guardLine, "")
+		}},
+		{"release-draft with no guard", "release-draft", "guard", func(s string) string {
+			return replaceInJob(s, "release-draft", guardLine, "")
+		}},
+		{"release-draft with no repository clause", "release-draft", "guard", func(s string) string {
+			return replaceInJob(s, "release-draft", " && github.repository == 'OpenDustpan/OpenDustpan'", "")
+		}},
+		{"publish with no repository clause", "publish", "guard", func(s string) string {
+			return replaceInJob(s, "publish", " && github.repository == 'OpenDustpan/OpenDustpan'", "")
+		}},
+		{"archives-verify with no checksum check", "archives-verify", "checksum check", func(s string) string {
+			return replaceInJob(s, "archives-verify", "          (cd \"$RELEASE_OUT\" && "+checksumText+")\n", "")
+		}},
+		{"archives-verify with a lax checksum check", "archives-verify", "checksum check", func(s string) string {
+			return replaceInJob(s, "archives-verify", "--check --strict", "--check")
+		}},
+		{"archives-build reads a secret", "archives-build", "secrets", func(s string) string {
+			return replaceInJob(s, "archives-build", "          RELEASE_OUT:",
+				"          TOKEN: ${{ secrets.GITHUB_TOKEN }}\n          RELEASE_OUT:")
+		}},
+		{"archives-verify reads a secret", "archives-verify", "secrets", func(s string) string {
+			return replaceInJob(s, "archives-verify", "          RELEASE_OUT:",
+				"          TOKEN: ${{ secrets.GITHUB_TOKEN }}\n          RELEASE_OUT:")
+		}},
+		{"the actor step after the download", "release-draft", "authorization", func(s string) string {
+			return mutateJob(s, "release-draft", func(j string) string {
+				a := strings.Index(j, "      - name: "+actorStepName)
+				b := strings.Index(j, "      - name: "+tagStepName)
+				c := strings.Index(j, "      - name: Create the draft release")
+
+				if a < 0 || b < a || c < b {
+					return j
+				}
+
+				return j[:a] + j[b:c] + j[a:b] + j[c:]
+			})
+		}},
+		{"release-draft accepts admin only", "release-draft", "authorization", func(s string) string {
+			return replaceInJob(s, "release-draft", compare, `[ "$PERMISSION" != "admin" ]`)
+		}},
+		{"release-draft accepts write", "release-draft", "authorization", func(s string) string {
+			return replaceInJob(s, "release-draft", `"$PERMISSION" != "maintain"`, `"$PERMISSION" != "write"`)
+		}},
+		{"release-draft accepts any one of the two", "release-draft", "authorization", func(s string) string {
+			return replaceInJob(s, "release-draft", `] && [`, `] || [`)
+		}},
+		{"publish accepts maintain only", "publish", "authorization", func(s string) string {
+			return replaceInJob(s, "publish", compare, `[ "$PERMISSION" != "maintain" ]`)
+		}},
+		{"publish with no permission lookup", "publish", "authorization", func(s string) string {
+			return replaceInJob(s, "publish", "collaborators", "contributors")
+		}},
+	}...)
+
+	for _, job := range []string{"archives-build", "publish", "release-draft"} {
+		rows = append(rows,
+			workflowMutation{"the tag step removed from " + job, job, "tag format", func(s string) string {
+				return removeStepInJob(s, job, tagStepName)
+			}},
+			// The pattern with no end anchor accepts v1.2.3-rc1.
+			workflowMutation{"a tag step that accepts v1.2.3-rc1 in " + job, job, "tag format", func(s string) string {
+				return replaceInJob(s, job, `[0-9]+$'`, `[0-9]+'`)
+			}},
+		)
+	}
+
+	return rows
+}
+
+// TestReleaseWorkflowTagFormatRefusesHostileTags runs the pattern of each
+// tag-format step on hostile tags and on a final version tag.
+func TestReleaseWorkflowTagFormatRefusesHostileTags(t *testing.T) {
+	t.Parallel()
+
+	_, raw := releaseWorkflowBytes(t)
+
+	var wf workflowFile
+	if err := yaml.Unmarshal(raw, &wf); err != nil {
+		t.Fatal(err)
+	}
+
+	for _, name := range []string{"archives-build", "publish", "release-draft"} {
+		re, ok := releaseTagRegexp(wf.Jobs[name])
+		if !ok {
+			t.Errorf("job %s has no tag-format step", name)
+
+			continue
+		}
+
+		if !re.MatchString("v1.2.3") {
+			t.Errorf("job %s refuses v1.2.3", name)
+		}
+
+		for _, tag := range hostileReleaseTags() {
+			if re.MatchString(tag) {
+				t.Errorf("job %s accepts the tag %q", name, tag)
+			}
+		}
+	}
+}
+
 // checkOneMutation runs the checker on one hostile copy and wants a finding
-// that names the job and the item.
-func checkOneMutation(t *testing.T, good string, tt workflowMutation) {
+// that names the job and the item. File-level findings read
+// "workflow <path>:", so a file-level row names "workflow" as the job and
+// the check wants the full "workflow <path>:" prefix with the item.
+func checkOneMutation(t *testing.T, path, good string, tt workflowMutation) {
 	t.Helper()
 
 	mutated := tt.mutate(good)
@@ -719,12 +1080,20 @@ func checkOneMutation(t *testing.T, good string, tt workflowMutation) {
 		t.Fatalf("the mutation %q changed nothing", tt.name)
 	}
 
-	findings := releaseWorkflowFindings([]byte(mutated))
+	findings := releaseWorkflowFindings(path, []byte(mutated))
 	if len(findings) == 0 {
 		t.Fatalf("the mutation %q yields no finding", tt.name)
 	}
 
 	for _, finding := range findings {
+		if tt.job == "workflow" {
+			if strings.Contains(finding, "workflow "+path+":") && strings.Contains(finding, tt.item) {
+				return
+			}
+
+			continue
+		}
+
 		if strings.Contains(finding, tt.job) && strings.Contains(finding, tt.item) {
 			return
 		}
@@ -745,12 +1114,131 @@ func checkOneMutation(t *testing.T, good string, tt workflowMutation) {
 func TestReleaseWorkflowCheckerRefusesWeakWorkflows(t *testing.T) {
 	t.Parallel()
 
-	good := string(releaseWorkflowBytes(t))
+	path, raw := releaseWorkflowBytes(t)
+	good := string(raw)
 
-	for _, tt := range workflowMutations() {
+	for _, tt := range append(workflowMutations(), moreWorkflowMutations()...) {
 		t.Run(tt.name, func(t *testing.T) {
 			t.Parallel()
-			checkOneMutation(t, good, tt)
+			checkOneMutation(t, path, good, tt)
+		})
+	}
+}
+
+// sourceGuardCase is one case of the guard rule for the two workflow paths.
+type sourceGuardCase struct {
+	name           string
+	stagedExists   bool
+	stagedRaw      []byte
+	liveRaw        []byte
+	wantPath       string
+	wantErr        bool
+	wantMissingJob bool
+}
+
+// checkSourceGuardCase runs chooseWorkflowFile and the checker on one case.
+func checkSourceGuardCase(t *testing.T, tc sourceGuardCase) {
+	t.Helper()
+
+	path, raw, err := chooseWorkflowFile(tc.stagedExists, tc.stagedRaw, tc.liveRaw)
+	if tc.wantErr {
+		if err == nil {
+			t.Fatalf("want an error, got path %q", path)
+		}
+
+		return
+	}
+
+	if err != nil {
+		t.Fatalf("want path %q, got error: %v", tc.wantPath, err)
+	}
+
+	if path != tc.wantPath {
+		t.Errorf("want path %q, got %q", tc.wantPath, path)
+	}
+
+	missing := "job archives-build: workflow guard: the job is missing"
+	gotMissing := slices.Contains(releaseWorkflowFindings(path, raw), missing)
+
+	if gotMissing != tc.wantMissingJob {
+		t.Errorf("want missing-job finding %t, got %t", tc.wantMissingJob, gotMissing)
+	}
+
+	t.Logf("checked workflow file: %s", path)
+}
+
+// TestReleaseWorkflowSourceGuard checks the guard rule for the two workflow
+// paths: while the staged copy exists, it is the file checked in full, and a
+// staged copy without the archives-build job fails through its missing-job
+// finding. With no staged copy, the live file is checked. Both holding the
+// job fails, and no staged copy with a live file without the job fails.
+func TestReleaseWorkflowSourceGuard(t *testing.T) {
+	t.Parallel()
+
+	withJob := "jobs:\n  archives-build:\n    runs-on: ubuntu-26.04\n"
+	withoutJob := "jobs:\n  publish:\n    runs-on: ubuntu-26.04\n"
+
+	cases := []sourceGuardCase{
+		{
+			"only staged holds the job",
+			true,
+			[]byte(withJob),
+			[]byte(withoutJob),
+			stagedWorkflowPath,
+			false,
+			false,
+		},
+		{
+			"only live holds it",
+			false,
+			nil,
+			[]byte(withJob),
+			liveWorkflowPath,
+			false,
+			false,
+		},
+		{
+			"live holds it and a staged copy without the job is left",
+			true,
+			[]byte(withoutJob),
+			[]byte(withJob),
+			stagedWorkflowPath,
+			false,
+			true,
+		},
+		{
+			"neither holds the job and the staged copy exists",
+			true,
+			[]byte(withoutJob),
+			[]byte(withoutJob),
+			stagedWorkflowPath,
+			false,
+			true,
+		},
+		{
+			"no staged copy and the live file has no job",
+			false,
+			nil,
+			[]byte(withoutJob),
+			"",
+			true,
+			false,
+		},
+		{
+			"both hold it",
+			true,
+			[]byte(withJob),
+			[]byte(withJob),
+			"",
+			true,
+			false,
+		},
+	}
+
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			t.Parallel()
+			checkSourceGuardCase(t, tc)
 		})
 	}
 }
