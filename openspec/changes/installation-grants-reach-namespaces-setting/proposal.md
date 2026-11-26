@@ -84,5 +84,6 @@ none
 Questions considered and answered:
 
 - Does an accepted ADR already decide the setting? Yes. ADR 216 decision 7 gives the name, the default and the effect of the value `false`.
+- How often does the server read the setting? Once for each request, in a request-scoped value, with no cache across requests. Decided by the PM (rule 16; benchmark: Google Zanzibar-style request-scoped consistency, one read per request). See design decision 12.
 
 Refined by the PM from the lead's request after the first driver run blocked.

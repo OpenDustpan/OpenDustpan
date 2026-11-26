@@ -27,3 +27,11 @@ The server SHALL have the installation setting `access.installationGrantsReachNa
 #### Scenario: Default reaches namespaces
 - **WHEN** no one set the setting
 - **THEN** the settings API shows the value `true` and a grant on `@server` reaches each namespace
+
+#### Scenario: Two authorizations in one request make one settings read
+- **WHEN** one request authorizes two or more actions, or authorizes an action and lists objects, with the setting `false`
+- **THEN** the server reads the setting one time for that request, and every decision of the request uses that one value
+
+#### Scenario: A change before the next request is seen
+- **WHEN** an operator changes the setting after a request has read it, and a second request then starts
+- **THEN** the second request reads the new value, and the server keeps no value across requests
