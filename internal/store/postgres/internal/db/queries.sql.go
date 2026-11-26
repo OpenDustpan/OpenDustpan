@@ -2044,13 +2044,15 @@ WHERE deleted_at_ms IS NULL
   AND ($2::text = '' OR subject COLLATE "C" < $2::text)
   AND ($3::text = '' OR kind = $3::text)
   AND ($4::text = '' OR namespace = $4::text)
+  AND ($5::boolean = false OR namespace = '')
 `
 
 type CountPrincipalsParams struct {
-	Low       string
-	High      string
-	Kind      string
-	Namespace string
+	Low              string
+	High             string
+	Kind             string
+	Namespace        string
+	InstallationOnly bool
 }
 
 func (q *Queries) CountPrincipals(ctx context.Context, arg CountPrincipalsParams) (int64, error) {
@@ -2059,6 +2061,7 @@ func (q *Queries) CountPrincipals(ctx context.Context, arg CountPrincipalsParams
 		arg.High,
 		arg.Kind,
 		arg.Namespace,
+		arg.InstallationOnly,
 	)
 	var count int64
 	err := row.Scan(&count)
@@ -19117,17 +19120,19 @@ WHERE p.deleted_at_ms IS NULL
   AND ($3::text = '' OR p.subject COLLATE "C" < $3::text)
   AND ($4::text = '' OR p.kind = $4::text)
   AND ($5::text = '' OR p.namespace = $5::text)
+  AND ($6::boolean = false OR p.namespace = '')
 ORDER BY p.subject COLLATE "C"
-LIMIT $6
+LIMIT $7
 `
 
 type ListPrincipalsParams struct {
-	After     string
-	Low       string
-	High      string
-	Kind      string
-	Namespace string
-	RowLimit  int32
+	After            string
+	Low              string
+	High             string
+	Kind             string
+	Namespace        string
+	InstallationOnly bool
+	RowLimit         int32
 }
 
 type ListPrincipalsRow struct {
@@ -19151,6 +19156,7 @@ func (q *Queries) ListPrincipals(ctx context.Context, arg ListPrincipalsParams) 
 		arg.High,
 		arg.Kind,
 		arg.Namespace,
+		arg.InstallationOnly,
 		arg.RowLimit,
 	)
 	if err != nil {

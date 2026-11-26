@@ -44,6 +44,7 @@ import (
 	"opendustpan.org/opendustpan/pkg/dustpan"
 	"opendustpan.org/opendustpan/pkg/freshstep"
 	"opendustpan.org/opendustpan/pkg/principal"
+	"opendustpan.org/opendustpan/pkg/setting"
 	"opendustpan.org/opendustpan/pkg/tempadmin"
 )
 
@@ -420,28 +421,9 @@ func createTempAdmin(ctx context.Context, st store, in hostInput, stderr io.Writ
 		return hostMade{}, fmt.Errorf("read principal %q: %w", in.person, readErr)
 	}
 
-	tokens, err := accesstoken.NewService(accesstoken.Config{
-		Makers: nil,
-		Reach: access.ReachConfig{
-			Grants:      nil,
-			Roles:       nil,
-			Callers:     nil,
-			Principals:  nil,
-			Collections: nil,
-			Units:       nil,
-		},
-		Store:      st,
-		Principals: st,
-		TempAdmins: st,
-		Freshness:  nil,
-		Authorizer: nil,
-		Logger:     nil,
-		Now:        nil,
-		NewID:      nil,
-		Guard:      freshstep.Guard{},
-	})
+	tokens, err := hostTokenService(st)
 	if err != nil {
-		return hostMade{}, fmt.Errorf("access token service: %w", err)
+		return hostMade{}, err
 	}
 
 	issuer, err := accesstoken.NewHostIssuer(tokens, st)
@@ -470,6 +452,57 @@ func createTempAdmin(ctx context.Context, st store, in hostInput, stderr io.Writ
 	}
 
 	return hostMade{subject: in.person, secret: got.Secret.Reveal(), expires: got.Token.ExpiresAt}, nil
+}
+
+// hostSettings returns the settings reader of a host command: the stored value
+// of each setting over the declarations of the server. A host command has no
+// flags of the serve command, so it has no static layer.
+func hostSettings(st store) (*setting.Service, error) {
+	builtin := st.builtin()
+
+	registry, err := setting.NewRegistry(append(cli.SettingDeclarations(), builtin.SettingDeclarations()...))
+	if err != nil {
+		return nil, fmt.Errorf("settings registry: %w", err)
+	}
+
+	return setting.NewService(builtin.SettingStore(), registry, nil, nil, nil), nil
+}
+
+// hostTokenService returns the access token service of a host command. Its
+// reach config has no store of grants: a host command makes a token and reads
+// no reach. It holds the settings reader, as each reach config does.
+func hostTokenService(st store) (*accesstoken.Service, error) {
+	settings, err := hostSettings(st)
+	if err != nil {
+		return nil, err
+	}
+
+	tokens, err := accesstoken.NewService(accesstoken.Config{
+		Makers: nil,
+		Reach: access.ReachConfig{
+			Grants:      nil,
+			Roles:       nil,
+			Callers:     nil,
+			Principals:  nil,
+			Collections: nil,
+			Units:       nil,
+			Settings:    settings,
+		},
+		Store:      st,
+		Principals: st,
+		TempAdmins: st,
+		Freshness:  nil,
+		Authorizer: nil,
+		Logger:     nil,
+		Now:        nil,
+		NewID:      nil,
+		Guard:      freshstep.Guard{},
+	})
+	if err != nil {
+		return nil, fmt.Errorf("access token service: %w", err)
+	}
+
+	return tokens, nil
 }
 
 // personExists returns the refusal of a person name that a principal

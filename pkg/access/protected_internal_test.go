@@ -162,6 +162,7 @@ func TestProtectedReadsTheObjectOfEachAction(t *testing.T) {
 				collections: nil,
 				units:       nil,
 				principals:  tc.port,
+				settings:    nil,
 			}
 
 			got, err := r.protected(t.Context())
@@ -183,7 +184,7 @@ func TestProtectedReadsTheObjectOfEachAction(t *testing.T) {
 func TestProtectedKindRefusesAnUnknownKind(t *testing.T) {
 	t.Parallel()
 
-	r := Reach{entries: nil, collections: nil, units: nil, principals: nil}
+	r := Reach{entries: nil, collections: nil, units: nil, principals: nil, settings: nil}
 
 	got, err := r.protectedKind(t.Context(), identity.ServerObject(), ObjectKind("future-kind"))
 	if !errors.Is(err, ErrInvalid) {
@@ -201,7 +202,9 @@ func TestProtectedKindRefusesAnUnknownKind(t *testing.T) {
 func TestProtectedSkipsANilEntry(t *testing.T) {
 	t.Parallel()
 
-	r := Reach{entries: map[string]*reachEntry{"nil": nil}, collections: nil, units: nil, principals: nil}
+	r := Reach{
+		entries: map[string]*reachEntry{"nil": nil}, collections: nil, units: nil, principals: nil, settings: nil,
+	}
 
 	got, err := r.protected(t.Context())
 	if err != nil {

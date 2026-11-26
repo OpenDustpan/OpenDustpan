@@ -115,12 +115,13 @@ func listPrincipalRows(
 	return q.ListPrincipals(
 		ctx,
 		db.ListPrincipalsParams{
-			After:     pq.After,
-			Low:       pq.Low,
-			High:      pq.High,
-			Kind:      string(kind),
-			Namespace: ns.String(),
-			RowLimit:  rowLimit(pq.Limit),
+			After:            pq.After,
+			Low:              pq.Low,
+			High:             pq.High,
+			Kind:             string(kind),
+			Namespace:        ns.String(),
+			InstallationOnly: pq.InstallationOnly,
+			RowLimit:         rowLimit(pq.Limit),
 		},
 	)
 }
@@ -130,6 +131,7 @@ func countPrincipalRows(
 ) (int64, error) {
 	return q.CountPrincipals(ctx, db.CountPrincipalsParams{
 		Low: pq.Low, High: pq.High, Kind: string(kind), Namespace: ns.String(),
+		InstallationOnly: pq.InstallationOnly,
 	})
 }
 

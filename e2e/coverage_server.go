@@ -65,7 +65,7 @@ func coverageServerRoutes(tb testing.TB) []RouteRef {
 		Schema:             coverageSchema{},
 		Principals:         nil,
 		Access:             nil,
-		Reach:              coverageReach(),
+		Reach:              coverageReach(coverageSettings(tb, coverageStore(tb))),
 		DeletedUnits:       nil,
 		AuditChain:         nil,
 		AuditSinks:         nil,
@@ -96,11 +96,13 @@ func coverageServerRoutes(tb testing.TB) []RouteRef {
 }
 
 // coverageReach returns the reach config of the group routes of the route
-// table. The coverage gate reads the route table only, and a zero reach config
-// makes a group read fail closed.
-func coverageReach() access.ReachConfig {
+// table. The coverage gate reads the route table only, and a reach config with
+// no store makes a group read fail closed. It holds settings, the settings
+// reader of coverageSettings, as the reach config of the server does.
+func coverageReach(settings access.Settings) access.ReachConfig {
 	return access.ReachConfig{
 		Grants: nil, Roles: nil, Callers: nil, Principals: nil, Collections: nil, Units: nil,
+		Settings: settings,
 	}
 }
 

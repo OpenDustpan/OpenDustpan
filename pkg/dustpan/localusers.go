@@ -284,7 +284,9 @@ func newLocalUserService(
 // grants gives an empty config: a reset of a person and a token change then
 // fail closed.
 func reachConfig(cfg *settings) (access.ReachConfig, error) {
-	none := access.ReachConfig{Grants: nil, Roles: nil, Callers: nil, Principals: nil, Collections: nil, Units: nil}
+	none := access.ReachConfig{
+		Grants: nil, Roles: nil, Callers: nil, Principals: nil, Collections: nil, Units: nil, Settings: nil,
+	}
 
 	stores, ok := cfg.namespaceStore.(accessStores)
 	if !ok {
@@ -296,9 +298,18 @@ func reachConfig(cfg *settings) (access.ReachConfig, error) {
 		return none, err
 	}
 
-	return access.ReachConfig{
+	reach := access.ReachConfig{
 		Grants: stores, Roles: stores, Callers: stores, Principals: stores, Collections: collections, Units: stores,
-	}, nil
+		Settings: nil,
+	}
+
+	// The service is set only when it is not nil, so that a nil service does not
+	// become a non-nil port. A nil port makes the reach fail closed.
+	if svc := newSettingService(cfg, cfg.namespaceStore); svc != nil {
+		reach.Settings = svc
+	}
+
+	return reach, nil
 }
 
 // identityProviders returns the function that tells whether the installation

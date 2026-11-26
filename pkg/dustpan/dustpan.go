@@ -115,6 +115,13 @@ var ErrMissingOption = errors.New("missing required option")
 // ErrInvalidOption reports an option with a value that the server refuses.
 var ErrInvalidOption = errors.New("invalid option")
 
+// errBuiltinStoreWithoutSettings is returned when a built-in store has no
+// WithSettings. It wraps ErrMissingOption and names the fix.
+var errBuiltinStoreWithoutSettings = fmt.Errorf(
+	"%w: WithSettings. Open the store with OpenStore, pass it with WithBuiltinStore, and give WithSettings",
+	ErrMissingOption,
+)
+
 // MinSoftDeleteRetention is the shortest soft-delete retention that
 // WithSoftDeleteRetention accepts (ADR 47, decision 2). There is no maximum.
 const MinSoftDeleteRetention = time.Hour
@@ -845,6 +852,14 @@ func NewServer(opts ...Option) (*Server, error) {
 	}
 
 	closeStore := cfg.builtinStore.closeFunc()
+
+	if cfg.builtinStore.source != builtinStoreNone && cfg.settingsConfig.store == nil {
+		if closeStore == nil {
+			return nil, errBuiltinStoreWithoutSettings
+		}
+
+		return nil, errors.Join(errBuiltinStoreWithoutSettings, closeStore())
+	}
 
 	srv, err := buildServer(cfg)
 	if err != nil {
@@ -3300,6 +3315,12 @@ func newPrincipalService(cfg *settings, grants *access.Service) (*principal.Serv
 		return nil, fmt.Errorf("principal service: %w", err)
 	}
 
+	if grants != nil {
+		svc = svc.WithInstallationReach(grants.Authorizer())
+	} else if installationReach, ok := cfg.authorizer.(principal.InstallationReach); ok {
+		svc = svc.WithInstallationReach(installationReach)
+	}
+
 	return svc, nil
 }
 
@@ -3374,7 +3395,20 @@ func defaultAuthorizer(cfg *settings) (identity.Authorizer, error) {
 		return nil, fmt.Errorf("authorizer: %w", err)
 	}
 
-	return authz, nil
+	return withSettingsPort(authz, cfg), nil
+}
+
+// withSettingsPort gives authz the settings service when the server keeps
+// settings. The service is passed only when it is not nil, so that a nil
+// service does not become a non-nil port. Without a service, authz keeps the
+// default of the setting.
+func withSettingsPort(authz *access.Authorizer, cfg *settings) *access.Authorizer {
+	svc := newSettingService(cfg, cfg.namespaceStore)
+	if svc == nil {
+		return authz
+	}
+
+	return authz.WithSettingsPort(svc)
 }
 
 // newCollectionService builds the collection service on the namespace store
@@ -3481,11 +3515,8 @@ func newAccessService(cfg *settings) (*access.Service, error) {
 		if err != nil {
 			return nil, fmt.Errorf("access authorizer: %w", err)
 		}
-	}
 
-	var settings access.Settings
-	if settingsSvc := newSettingService(cfg, cfg.namespaceStore); settingsSvc != nil {
-		settings = settingsSvc
+		authz = withSettingsPort(authz, cfg)
 	}
 
 	reach, reachErr := reachConfig(cfg)
@@ -3499,11 +3530,20 @@ func newAccessService(cfg *settings) (*access.Service, error) {
 		limits = reader
 	}
 
-	svc, err := access.NewService(access.ServiceConfig{
+	svcCfg := access.ServiceConfig{
 		Store: stores, Directory: stores, Namespaces: cfg.namespaceStore, Authorizer: authz,
 		Reach: reach, Now: nil, NewID: nil,
-		BootstrapAdmins: adminSubjectsOf(cfg.authenticator), Settings: settings, LimitGroups: limits,
-	})
+		BootstrapAdmins: adminSubjectsOf(cfg.authenticator), Settings: nil, LimitGroups: limits,
+	}
+
+	settingSvc := newSettingService(cfg, cfg.namespaceStore)
+	if settingSvc == nil {
+		return nil, fmt.Errorf("access service: %w: settings", access.ErrMissingDependency)
+	}
+
+	svcCfg.Settings = settingSvc
+
+	svc, err := access.NewService(svcCfg)
 	if err != nil {
 		return nil, fmt.Errorf("access service: %w", err)
 	}

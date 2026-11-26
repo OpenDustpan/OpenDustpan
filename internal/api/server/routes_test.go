@@ -289,14 +289,23 @@ func newServiceBackedHandler(
 
 // routeReach returns the reach config of the group routes over st.
 func routeReach(st *sqlite.Store) access.ReachConfig {
-	return access.ReachConfig{Grants: st, Roles: st, Callers: st, Principals: st, Collections: nil, Units: st}
+	return access.ReachConfig{
+		Settings:    access.FixedSettings(true),
+		Grants:      st,
+		Roles:       st,
+		Callers:     st,
+		Principals:  st,
+		Collections: nil,
+		Units:       st,
+	}
 }
 
 // noReach returns the reach config of a handler whose test serves no group
 // route: the zero config makes each group read fail closed.
 func noReach() access.ReachConfig {
 	return access.ReachConfig{
-		Grants: nil, Roles: nil, Callers: nil, Principals: nil, Collections: nil, Units: nil,
+		Settings: nil,
+		Grants:   nil, Roles: nil, Callers: nil, Principals: nil, Collections: nil, Units: nil,
 	}
 }
 
@@ -543,7 +552,8 @@ func seedRouteTokens(t *testing.T, st *sqlite.Store) *accesstoken.Service {
 		Freshness:  nil,
 		Authorizer: allowAll{},
 		Reach: access.ReachConfig{
-			Grants: st, Roles: st, Callers: st, Principals: st, Collections: stubCollections{}, Units: st,
+			Settings: access.FixedSettings(true),
+			Grants:   st, Roles: st, Callers: st, Principals: st, Collections: stubCollections{}, Units: st,
 		},
 		Logger: nil,
 		Now:    nil,
@@ -665,7 +675,8 @@ func seedRouteAccess(t *testing.T, st *sqlite.Store) *access.Service {
 	svc, err := access.NewService(access.ServiceConfig{
 		Store: st, Directory: st, Namespaces: st, Authorizer: authz,
 		Reach: access.ReachConfig{
-			Grants: st, Roles: st, Callers: st, Principals: st, Collections: stubCollections{}, Units: st,
+			Settings: access.FixedSettings(true),
+			Grants:   st, Roles: st, Callers: st, Principals: st, Collections: stubCollections{}, Units: st,
 		},
 		Now: nil, NewID: nil,
 		BootstrapAdmins: nil, Settings: nil, LimitGroups: nil,
@@ -2126,7 +2137,8 @@ func newRouteLocalUsers(t *testing.T, st *sqlite.Store) *localusersvc.Service {
 		Settings:    nil,
 		SSO:         nil,
 		Reach: access.ReachConfig{
-			Grants: st, Roles: st, Callers: st, Principals: st, Collections: nil, Units: st,
+			Settings: access.FixedSettings(true),
+			Grants:   st, Roles: st, Callers: st, Principals: st, Collections: nil, Units: st,
 		},
 		Subjects: st,
 		Kind:     installation.KindProduction,

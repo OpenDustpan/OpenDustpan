@@ -118,7 +118,8 @@ func newFixtureAt(t *testing.T, fresh accesstoken.Freshness, start time.Time) fi
 		Makers:     nil,
 		TempAdmins: nil,
 		Store:      st, Principals: st, Freshness: fresh, Authorizer: nil, Reach: access.ReachConfig{
-			Grants: nil, Roles: nil, Callers: nil, Principals: nil, Collections: nil, Units: nil,
+			Settings: nil,
+			Grants:   nil, Roles: nil, Callers: nil, Principals: nil, Collections: nil, Units: nil,
 		},
 		Logger: nil, Now: c.Now, NewID: nil,
 		Guard: freshstep.Guard{},
@@ -239,7 +240,8 @@ func TestNewServiceNeedsDependencies(t *testing.T) {
 		Makers:     nil,
 		TempAdmins: nil,
 		Store:      nil, Principals: nil, Freshness: nil, Authorizer: nil, Reach: access.ReachConfig{
-			Grants: nil, Roles: nil, Callers: nil, Principals: nil, Collections: nil, Units: nil,
+			Settings: nil,
+			Grants:   nil, Roles: nil, Callers: nil, Principals: nil, Collections: nil, Units: nil,
 		},
 		Logger: nil, Now: nil, NewID: nil,
 		Guard: freshstep.Guard{},
@@ -1066,7 +1068,8 @@ func newCheckedService(t *testing.T, f *fixture, authz identity.Authorizer) *acc
 		TempAdmins: nil,
 		Store:      f.store, Principals: f.store, Freshness: nil, Authorizer: authz,
 		Reach: access.ReachConfig{
-			Grants: f.store, Roles: f.store, Callers: f.store, Principals: f.store, Collections: nil, Units: nil,
+			Settings: access.FixedSettings(true),
+			Grants:   f.store, Roles: f.store, Callers: f.store, Principals: f.store, Collections: nil, Units: nil,
 		},
 		Logger: nil,
 		Now:    f.clock.Now, NewID: nil,
@@ -1608,7 +1611,8 @@ func TestPolicyReadErrorFailsClosed(t *testing.T) {
 		TempAdmins: nil,
 		Store:      failingPolicy{f.store}, Principals: f.store, Freshness: nil, Authorizer: nil,
 		Reach: access.ReachConfig{
-			Grants: nil, Roles: nil, Callers: nil, Principals: nil, Collections: nil, Units: nil,
+			Settings: nil,
+			Grants:   nil, Roles: nil, Callers: nil, Principals: nil, Collections: nil, Units: nil,
 		}, Logger: nil,
 		Now: f.clock.Now, NewID: nil,
 		Guard: freshstep.Guard{},
@@ -1847,7 +1851,8 @@ func TestNamespacePrincipalTokens(t *testing.T) {
 		Store:      f.store, Principals: reader, Freshness: nil,
 		Authorizer: &recordAuthorizer{allowed: map[string]bool{manage: true}, checked: nil, mu: sync.Mutex{}},
 		Reach: access.ReachConfig{
-			Grants: f.store, Roles: f.store, Callers: f.store, Principals: f.store, Collections: nil, Units: nil,
+			Settings: access.FixedSettings(true),
+			Grants:   f.store, Roles: f.store, Callers: f.store, Principals: f.store, Collections: nil, Units: nil,
 		},
 		Logger: nil,
 		Now:    f.clock.Now, NewID: nil,
@@ -1863,7 +1868,8 @@ func TestNamespacePrincipalTokens(t *testing.T) {
 		Store:      f.store, Principals: reader, Freshness: nil,
 		Authorizer: &recordAuthorizer{allowed: map[string]bool{}, checked: nil, mu: sync.Mutex{}},
 		Reach: access.ReachConfig{
-			Grants: f.store, Roles: f.store, Callers: f.store, Principals: f.store, Collections: nil, Units: nil,
+			Settings: access.FixedSettings(true),
+			Grants:   f.store, Roles: f.store, Callers: f.store, Principals: f.store, Collections: nil, Units: nil,
 		},
 		Logger: nil,
 		Now:    f.clock.Now, NewID: nil,

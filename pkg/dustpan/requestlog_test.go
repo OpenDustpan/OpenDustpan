@@ -17,6 +17,7 @@ import (
 	"time"
 
 	"opendustpan.org/opendustpan/internal/store/sqlite"
+	"opendustpan.org/opendustpan/pkg/access"
 	"opendustpan.org/opendustpan/pkg/blob/fs"
 	"opendustpan.org/opendustpan/pkg/dustpan"
 	"opendustpan.org/opendustpan/pkg/identity"
@@ -111,6 +112,7 @@ func loggedServer(
 		dustpan.WithInventoryReader(st),
 		dustpan.WithAuthenticator(authn),
 		dustpan.WithLogger(logger),
+		dustpan.WithSettings(st.SettingStore(), access.SettingDeclarations(), nil),
 		dustpan.WithClock(func() time.Time { return time.Date(2026, time.October, 8, 21, 0, 0, 0, time.UTC) }),
 	)
 	if err != nil {
@@ -606,6 +608,7 @@ func TestRequestLogTextFormat(t *testing.T) {
 		dustpan.WithInventoryReader(st),
 		dustpan.WithAuthenticator(authn),
 		dustpan.WithLogger(logger),
+		dustpan.WithSettings(st.SettingStore(), access.SettingDeclarations(), nil),
 	)
 	if err != nil {
 		t.Fatalf("new server: %v", err)

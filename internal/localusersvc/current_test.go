@@ -87,6 +87,7 @@ func TestCurrentPasswordHasherErrors(t *testing.T) {
 
 			f.hasher = failingHasher{PasswordHasher: f.hasher, reserveErr: tc.reserveErr, verifyErr: tc.verifyErr}
 			svc := f.serviceWith(t, access.ReachConfig{
+				Settings:    access.FixedSettings(true),
 				Grants:      f.store,
 				Roles:       f.store,
 				Callers:     f.store,

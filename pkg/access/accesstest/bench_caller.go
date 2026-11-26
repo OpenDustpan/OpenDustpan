@@ -136,6 +136,7 @@ func seedBenchCaller(b *testing.B, s BenchStore) *access.Service {
 		Store: s, Directory: s, Namespaces: s, Authorizer: authz,
 		Reach: access.ReachConfig{
 			Grants: s, Roles: s, Callers: s, Principals: s, Collections: nil, Units: s,
+			Settings: access.FixedSettings(true),
 		},
 		Now: nil, NewID: nil, BootstrapAdmins: nil,
 		Settings:    nil,

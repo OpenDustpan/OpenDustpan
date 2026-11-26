@@ -17,6 +17,7 @@ import (
 	"time"
 
 	"opendustpan.org/opendustpan/internal/store/sqlite"
+	"opendustpan.org/opendustpan/pkg/access"
 	"opendustpan.org/opendustpan/pkg/backup"
 	"opendustpan.org/opendustpan/pkg/blob/fs"
 	"opendustpan.org/opendustpan/pkg/dustpan"
@@ -93,6 +94,7 @@ func newFixture(t *testing.T) fixture {
 		dustpan.WithAuthenticator(authn),
 		dustpan.WithAllowedOrigins(origin),
 		dustpan.WithClock(func() time.Time { return time.Date(2026, time.October, 8, 21, 0, 0, 0, time.UTC) }),
+		dustpan.WithSettings(st.SettingStore(), access.SettingDeclarations(), nil),
 	)
 	if err != nil {
 		t.Fatalf("new server: %v", err)
@@ -807,7 +809,10 @@ func TestNewServerRequiresSecretWrapper(t *testing.T) {
 	st, blobs, authn := requireServerPorts(t)
 	full := fullServerOptions(t, st, blobs, authn)
 
-	_, err := dustpan.NewServer(full[:len(full)-1]...)
+	withoutWrapper := append([]dustpan.Option(nil), full[:len(full)-2]...)
+	withoutWrapper = append(withoutWrapper, full[len(full)-1])
+
+	_, err := dustpan.NewServer(withoutWrapper...)
 	if !errors.Is(err, dustpan.ErrMissingOption) {
 		t.Fatalf("NewServer without a wrapper: err = %v, want ErrMissingOption", err)
 	}
@@ -933,6 +938,7 @@ func fullServerOptions(
 		dustpan.WithBlobStore(blobs),
 		dustpan.WithInventoryReader(st),
 		dustpan.WithSecretWrapper(testWrapper(t)),
+		dustpan.WithSettings(st.SettingStore(), access.SettingDeclarations(), nil),
 	}
 }
 
@@ -1079,6 +1085,7 @@ func newRunCheckServer(t *testing.T, st *sqlite.Store, extra ...dustpan.Option) 
 		dustpan.WithInventoryReader(st),
 		dustpan.WithAuthenticator(authn),
 		dustpan.WithListenAddr("127.0.0.1:0"),
+		dustpan.WithSettings(st.SettingStore(), access.SettingDeclarations(), nil),
 	}
 
 	srv, err := dustpan.NewServer(append(opts, extra...)...)
@@ -1139,6 +1146,7 @@ func TestConsoleDir(t *testing.T) {
 		dustpan.WithInventoryReader(st),
 		dustpan.WithAuthenticator(authn),
 		dustpan.WithConsoleDir(dir),
+		dustpan.WithSettings(st.SettingStore(), access.SettingDeclarations(), nil),
 	)
 	if err != nil {
 		t.Fatalf("new server: %v", err)

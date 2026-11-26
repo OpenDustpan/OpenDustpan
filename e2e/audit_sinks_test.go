@@ -19,7 +19,7 @@ import (
 	"time"
 
 	"opendustpan.org/opendustpan/e2e"
-	"opendustpan.org/opendustpan/internal/store/sqlite"
+	"opendustpan.org/opendustpan/pkg/access"
 	"opendustpan.org/opendustpan/pkg/audit"
 	"opendustpan.org/opendustpan/pkg/blob/fs"
 	"opendustpan.org/opendustpan/pkg/dustpan"
@@ -100,7 +100,7 @@ func newAuditSinkTestServer(t *testing.T) *dustpan.Server {
 
 	ctx := t.Context()
 
-	st, err := sqlite.Open(ctx, filepath.Join(t.TempDir(), "dustpan.db"))
+	st, err := dustpan.OpenStore(ctx, "sqlite:"+filepath.Join(t.TempDir(), "dustpan.db"))
 	if err != nil {
 		t.Fatalf("open store: %v", err)
 	}
@@ -145,17 +145,10 @@ func newAuditSinkTestServer(t *testing.T) *dustpan.Server {
 
 	srv, err := dustpan.NewServer(
 		dustpan.WithInstallation("e2e"),
-		dustpan.WithNamespaceStore(st),
-		dustpan.WithStackStore(st),
-		dustpan.WithUpdateStore(st),
-		dustpan.WithCheckpointStore(st),
-		dustpan.WithEventStore(st),
-		dustpan.WithSecretKeyStore(st),
+		dustpan.WithBuiltinStore(st),
+		dustpan.WithSettings(st.SettingStore(), access.SettingDeclarations(), nil),
 		dustpan.WithSecretWrapper(wrapper),
-		dustpan.WithWorkspaceStore(st),
-		dustpan.WithStateStore(st),
 		dustpan.WithBlobStore(blobs),
-		dustpan.WithInventoryReader(st),
 		dustpan.WithAuthenticator(authn),
 		dustpan.WithAuditSinks(audit.ShipSink{Sink: sink, Name: "file", Kind: "file", Interval: 0}),
 	)

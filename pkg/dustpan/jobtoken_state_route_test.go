@@ -179,6 +179,7 @@ func newJobTokenStateServer(
 		dustpan.WithAuthorizer(&jobTokenStatePermissive{}),
 		dustpan.WithJobStore(jobStore),
 		dustpan.WithJobTokenStore(tokenStore),
+		dustpan.WithSettings(st.SettingStore(), access.SettingDeclarations(), nil),
 		dustpan.WithClock(func() time.Time { return now }),
 	)
 	if err != nil {

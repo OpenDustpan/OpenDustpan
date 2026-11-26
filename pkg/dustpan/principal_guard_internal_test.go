@@ -6,6 +6,7 @@ import (
 	"testing"
 
 	"opendustpan.org/opendustpan/internal/store/sqlite"
+	"opendustpan.org/opendustpan/pkg/access"
 	"opendustpan.org/opendustpan/pkg/identity"
 	"opendustpan.org/opendustpan/pkg/principal"
 )
@@ -69,6 +70,11 @@ func TestPrincipalServiceWithGrantsUsesTheAccessService(t *testing.T) {
 
 	cfg := defaultSettings()
 	cfg.namespaceStore = st
+	cfg.settingsConfig = settingsConfig{
+		store:        st.SettingStore(),
+		declarations: access.SettingDeclarations(),
+		static:       nil,
+	}
 
 	grants, err := newAccessService(cfg)
 	if err != nil || grants == nil {

@@ -137,10 +137,24 @@ func newDelegation(t *testing.T, st DelegationStore) *delegation {
 	}
 
 	svc, err := access.NewService(access.ServiceConfig{
-		Store: st, Directory: st, Namespaces: st, Authorizer: authz,
-		Reach: access.ReachConfig{Grants: st, Roles: st, Callers: st, Principals: st, Collections: nil, Units: st},
-		Now:   nil, NewID: nil,
-		BootstrapAdmins: []string{"admin"}, Settings: nil, LimitGroups: limitgroups.New(st, st),
+		Store:      st,
+		Directory:  st,
+		Namespaces: st,
+		Authorizer: authz,
+		Reach: access.ReachConfig{
+			Grants:      st,
+			Roles:       st,
+			Callers:     st,
+			Principals:  st,
+			Collections: nil,
+			Units:       st,
+			Settings:    access.FixedSettings(true),
+		},
+		Now:             nil,
+		NewID:           nil,
+		BootstrapAdmins: []string{"admin"},
+		Settings:        nil,
+		LimitGroups:     limitgroups.New(st, st),
 	})
 	if err != nil {
 		t.Fatalf("access service: %v", err)
@@ -162,6 +176,7 @@ func newDelegation(t *testing.T, st DelegationStore) *delegation {
 		Store:      st, Principals: st, Freshness: nil, Authorizer: authz,
 		Reach: access.ReachConfig{
 			Grants: st, Roles: st, Callers: st, Principals: st, Collections: nil, Units: st,
+			Settings: access.FixedSettings(true),
 		},
 		Logger: nil, Now: nil, NewID: nil,
 		Guard: freshstep.Guard{},

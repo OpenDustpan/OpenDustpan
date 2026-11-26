@@ -7,6 +7,7 @@ import (
 	"testing"
 
 	"opendustpan.org/opendustpan/internal/store/sqlite"
+	"opendustpan.org/opendustpan/pkg/access"
 	blobfs "opendustpan.org/opendustpan/pkg/blob/fs"
 	"opendustpan.org/opendustpan/pkg/identity"
 	"opendustpan.org/opendustpan/pkg/secret"
@@ -49,6 +50,7 @@ func newMuxServer(t *testing.T, set Components, extra ...Option) *Server {
 		WithCheckpointStore(st), WithEventStore(st), WithSecretKeyStore(st), WithSecretWrapper(wrapper),
 		WithWorkspaceStore(st), WithStateStore(st), WithBlobStore(blobs), WithInventoryReader(st),
 		WithAuthenticator(authn), WithComponents(set),
+		WithSettings(st.SettingStore(), access.SettingDeclarations(), nil),
 	}, extra...)
 
 	srv, err := NewServer(opts...)

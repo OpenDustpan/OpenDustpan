@@ -89,6 +89,7 @@ func startFaultServer(t *testing.T) *faultServer {
 		dustpan.WithBlobStore(blobs),
 		dustpan.WithInventoryReader(st),
 		dustpan.WithAuthenticator(authn),
+		dustpan.WithSettings(st.SettingStore(), nil, nil),
 	)
 	if err != nil {
 		t.Fatalf("new server: %v", err)

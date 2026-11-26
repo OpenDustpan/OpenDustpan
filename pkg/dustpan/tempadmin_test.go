@@ -182,6 +182,7 @@ func newTempAdminServer(
 		dustpan.WithBlobStore(blobs),
 		dustpan.WithInventoryReader(st),
 		dustpan.WithAuthenticator(authn),
+		dustpan.WithSettings(st.SettingStore(), access.SettingDeclarations(), nil),
 		dustpan.WithClock(clock),
 	)
 	if err != nil {
@@ -320,7 +321,13 @@ func seedTempAdmin(t *testing.T, st *sqlite.Store, base time.Time, now func() ti
 		Makers: nil,
 		Store:  st, Principals: st, TempAdmins: st, Freshness: nil, Authorizer: nil,
 		Reach: access.ReachConfig{
-			Grants: nil, Roles: nil, Callers: nil, Principals: nil, Collections: nil, Units: nil,
+			Grants:      nil,
+			Roles:       nil,
+			Callers:     nil,
+			Principals:  nil,
+			Collections: nil,
+			Units:       nil,
+			Settings:    access.FixedSettings(true),
 		},
 		Logger: nil,
 		Now:    now, NewID: nil,

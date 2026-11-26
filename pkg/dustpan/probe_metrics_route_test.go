@@ -11,7 +11,7 @@ import (
 func TestProbeMetricsRouteListsTheCounter(t *testing.T) {
 	t.Parallel()
 
-	srv := newBuiltinSQLiteServer(t, filepath.Join(t.TempDir(), "dustpan.db"))
+	srv, _ := newBuiltinSQLiteServer(t, filepath.Join(t.TempDir(), "dustpan.db"))
 
 	t.Cleanup(func() {
 		if closeErr := srv.Close(); closeErr != nil {

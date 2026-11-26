@@ -209,6 +209,7 @@ func (c *reachCache) config() ReachConfig {
 		Roles:       cachedRoles{RoleStore: c.cfg.Roles, c: c},
 		Callers:     cachedCallers{c: c},
 		Principals:  cachedPrincipals{c: c},
+		Settings:    c.cfg.Settings,
 		Collections: nil,
 		Units:       nil,
 	}

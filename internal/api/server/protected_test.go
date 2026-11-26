@@ -149,6 +149,7 @@ func TestGroupProtectedFlag(t *testing.T) {
 	// A check that cannot read the grants answers an error, never a false
 	// flag.
 	failing := newReachPrincipalHandler(t, svc, st, access.ReachConfig{
+		Settings:    access.FixedSettings(true),
 		Grants:      failingGrantReads{GrantLookups: st, err: errGrantRead},
 		Roles:       st,
 		Callers:     st,
@@ -406,6 +407,7 @@ func seedStoredGroup(t *testing.T, st *sqlite.Store, at time.Time, groupID strin
 // failingGrantReach returns a reach whose grant read fails.
 func failingGrantReach(st *sqlite.Store) access.ReachConfig {
 	return access.ReachConfig{
+		Settings:    access.FixedSettings(true),
 		Grants:      failingGrantReads{GrantLookups: st, err: errGrantRead},
 		Roles:       st,
 		Callers:     st,

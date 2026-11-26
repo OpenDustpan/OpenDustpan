@@ -19,6 +19,7 @@ import (
 	"opendustpan.org/opendustpan/internal/pgtest"
 	"opendustpan.org/opendustpan/internal/store/postgres"
 	"opendustpan.org/opendustpan/internal/store/sqlite"
+	"opendustpan.org/opendustpan/pkg/access"
 	"opendustpan.org/opendustpan/pkg/audit"
 	"opendustpan.org/opendustpan/pkg/blob/fs"
 	"opendustpan.org/opendustpan/pkg/durable"
@@ -384,6 +385,7 @@ func runPostgresChainServer(t *testing.T, st *postgres.Store) chainServer {
 		dustpan.WithAuthenticator(authn),
 		dustpan.WithListener(ln),
 		dustpan.WithAuditChain(audit.ChainOff),
+		dustpan.WithSettings(st.SettingStore(), access.SettingDeclarations(), nil),
 	)...)
 	if err != nil {
 		t.Fatalf("new server: %v", err)

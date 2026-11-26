@@ -1741,7 +1741,8 @@ func newSignInAccess(
 	grants, err := access.NewService(access.ServiceConfig{
 		Store: st, Directory: st, Namespaces: st, Authorizer: grantAuthz,
 		Reach: access.ReachConfig{
-			Grants: st, Roles: st, Callers: st, Principals: st, Collections: stubCollections{}, Units: st,
+			Settings: access.FixedSettings(true),
+			Grants:   st, Roles: st, Callers: st, Principals: st, Collections: stubCollections{}, Units: st,
 		},
 		Now: clock.Now, NewID: nil,
 		BootstrapAdmins: nil, Settings: nil, LimitGroups: nil,

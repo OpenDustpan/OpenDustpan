@@ -74,7 +74,8 @@ func racingServiceWith(
 	svc, err := access.NewService(access.ServiceConfig{
 		Store: st, Directory: f.store, Namespaces: f.store, Authorizer: authz,
 		Reach: access.ReachConfig{
-			Grants: f.store, Roles: f.store, Callers: f.store, Principals: f.store, Collections: port, Units: f.store,
+			Grants: f.store, Roles: f.store, Callers: f.store, Principals: f.store, Collections: port,
+			Units: f.store, Settings: access.FixedSettings(true),
 		},
 		Now: nil, NewID: nil,
 		BootstrapAdmins: []string{"admin"}, Settings: nil, LimitGroups: nil,

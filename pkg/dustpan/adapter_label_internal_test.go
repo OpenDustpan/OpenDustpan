@@ -12,6 +12,7 @@ import (
 
 	"opendustpan.org/opendustpan/internal/metrics"
 	"opendustpan.org/opendustpan/internal/store/sqlite"
+	"opendustpan.org/opendustpan/pkg/access"
 	blobfs "opendustpan.org/opendustpan/pkg/blob/fs"
 	"opendustpan.org/opendustpan/pkg/identity"
 	"opendustpan.org/opendustpan/pkg/secret"
@@ -63,6 +64,7 @@ func newLabelTestServerWith(t *testing.T, extra ...Option) *Server {
 		WithProfileSessions(st.ProfileSessions()), WithIssuerStore(st.Issuer()),
 		WithRegistry(st.Registry(), st.RegistryKeys()), WithSinkStore(st.NotificationSinks()),
 		WithRunners(st.Runners()), WithGitHostStore(st.GitHost()),
+		WithSettings(st.SettingStore(), access.SettingDeclarations(), nil),
 	}
 
 	srv, err := NewServer(append(opts, extra...)...)

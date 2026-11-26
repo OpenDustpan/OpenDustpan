@@ -157,7 +157,9 @@ func TestPlantedNamespaceServiceRecordIsNotEditable(t *testing.T) {
 	name := "other"
 	steps := map[string]func() error{
 		"update": func() error {
-			_, e := f.svc.UpdatePrincipal(t.Context(), testEntry(), "prn-svc", principal.Change{DisplayName: &name})
+			_, e := f.svc.UpdatePrincipal(
+				t.Context(), testEntry(), adminCaller(), "prn-svc", principal.Change{DisplayName: &name},
+			)
 
 			return e
 		},

@@ -288,7 +288,15 @@ func TestSourcePrefix(t *testing.T) {
 
 // noReach returns a reach config with no store: each reset fails closed.
 func noReach() access.ReachConfig {
-	return access.ReachConfig{Grants: nil, Roles: nil, Callers: nil, Principals: nil, Collections: nil, Units: nil}
+	return access.ReachConfig{
+		Settings:    nil,
+		Grants:      nil,
+		Roles:       nil,
+		Callers:     nil,
+		Principals:  nil,
+		Collections: nil,
+		Units:       nil,
+	}
 }
 
 // brokenClear is a counter whose clear of a name fails.

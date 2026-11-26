@@ -66,7 +66,8 @@ func TestBearerOfOldKindTokenAnswers401(t *testing.T) {
 		TempAdmins: nil,
 		Store:      st, Principals: st, Freshness: nil, Authorizer: nil,
 		Reach: access.ReachConfig{
-			Grants: st, Roles: st, Callers: st, Principals: st, Collections: stubCollections{}, Units: st,
+			Settings: access.FixedSettings(true),
+			Grants:   st, Roles: st, Callers: st, Principals: st, Collections: stubCollections{}, Units: st,
 		},
 		Logger: nil, Now: func() time.Time { return at }, NewID: nil,
 		Guard: freshstep.Guard{},

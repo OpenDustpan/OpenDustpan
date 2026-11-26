@@ -13,6 +13,7 @@ import (
 	"time"
 
 	"opendustpan.org/opendustpan/internal/store/sqlite"
+	"opendustpan.org/opendustpan/pkg/access"
 	"opendustpan.org/opendustpan/pkg/blob/fs"
 	"opendustpan.org/opendustpan/pkg/dustpan"
 	"opendustpan.org/opendustpan/pkg/identity"
@@ -21,7 +22,7 @@ import (
 
 // baseOptionCount is the count of base options in newClientAddrServer, so
 // the slice fits one append of the extra options.
-const baseOptionCount = 15
+const baseOptionCount = 16
 
 // newClientAddrServer returns a server with extra options and a JSON request
 // log to buf at debug level, so the liveness probe leaves a line.
@@ -89,6 +90,7 @@ func newClientAddrServerOn(
 		dustpan.WithAuthenticator(authn),
 		dustpan.WithLogger(logger),
 		dustpan.WithClock(func() time.Time { return time.Date(2026, time.October, 8, 21, 0, 0, 0, time.UTC) }),
+		dustpan.WithSettings(st.SettingStore(), access.SettingDeclarations(), nil),
 	)
 	opts = append(opts, extra...)
 

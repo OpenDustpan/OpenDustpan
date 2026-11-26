@@ -62,6 +62,11 @@ func newGroupLimitFixture(t *testing.T) groupLimitFixture {
 
 	cfg := defaultSettings()
 	cfg.namespaceStore = st
+	cfg.settingsConfig = settingsConfig{
+		store:        st.SettingStore(),
+		declarations: access.SettingDeclarations(),
+		static:       nil,
+	}
 
 	grants, err := newAccessService(cfg)
 	if err != nil || grants == nil {

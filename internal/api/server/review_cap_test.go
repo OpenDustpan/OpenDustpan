@@ -64,7 +64,7 @@ func TestReviewOfACollectionOverTheCap(t *testing.T) {
 	t.Parallel()
 
 	f := newAccessFixturePorts(t, accessPorts{
-		collections: capCollections{count: 3}, settings: capSettings{value: "2"},
+		collections: capCollections{count: 3}, settings: capSettings{value: "2"}, authzSettings: nil,
 	})
 
 	rec := f.asToken(t, "alice", http.MethodGet,

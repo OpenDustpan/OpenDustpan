@@ -15,6 +15,7 @@ import (
 	"time"
 
 	"opendustpan.org/opendustpan/internal/store/sqlite"
+	"opendustpan.org/opendustpan/pkg/access"
 	"opendustpan.org/opendustpan/pkg/accesstoken"
 	"opendustpan.org/opendustpan/pkg/audit"
 	blobfs "opendustpan.org/opendustpan/pkg/blob/fs"
@@ -113,6 +114,7 @@ func newWiredSignIn(t *testing.T, extra func(st *sqlite.Store) []Option) wiredSi
 			HTTPClient: nil, ID: "corp", DisplayName: "Corp", Issuer: "https://idp.example", ClientID: "dustpan",
 			ClientSecret: "client-secret-for-tests", Scopes: nil, AutoCreate: true,
 		}),
+		WithSettings(st.SettingStore(), access.SettingDeclarations(), nil),
 	}
 
 	if extra != nil {

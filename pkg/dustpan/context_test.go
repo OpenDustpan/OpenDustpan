@@ -190,6 +190,7 @@ func newContextWorld(t *testing.T, extra ...dustpan.Option) contextWorld {
 		dustpan.WithBlobStore(blobs),
 		dustpan.WithInventoryReader(st),
 		dustpan.WithAuthenticator(authn),
+		dustpan.WithSettings(st.SettingStore(), access.SettingDeclarations(), nil),
 	}, extra...)...)
 	if err != nil {
 		t.Fatalf("new server: %v", err)

@@ -98,7 +98,7 @@ func serviceOver(t *testing.T, f *fixture, st access.Store) *access.Service {
 		Store: st, Directory: f.store, Namespaces: f.store, Authorizer: authz, Now: nil, NewID: nil,
 		BootstrapAdmins: []string{"admin"}, Settings: nil, LimitGroups: nil,
 		Reach: access.ReachConfig{
-			Grants: nil, Roles: nil, Callers: nil, Principals: nil, Collections: nil, Units: nil,
+			Grants: nil, Roles: nil, Callers: nil, Principals: nil, Collections: nil, Units: nil, Settings: nil,
 		},
 	})
 	if err != nil {

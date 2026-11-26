@@ -24,11 +24,13 @@ type ServicePrincipals interface {
 	ListServicePrincipals(ctx context.Context) ([]string, error)
 }
 
-// ReachConfig holds the dependencies of ReachOf. Grants, Roles, Callers
-// and Principals are required. Collections answers the collection
+// ReachConfig holds the dependencies of ReachOf. Grants, Roles, Callers,
+// Principals and Settings are required. Collections answers the collection
 // of a unit: nil means no unit is in a collection, so no grant on a
 // collection gives anything. Units resolves the stable ID of a unit: nil
-// means no grant on a unit gives anything.
+// means no grant on a unit gives anything. Settings reads
+// SettingInstallationGrantsReachNamespaces: a nil port would give the default
+// without a read, so the reach refuses it.
 type ReachConfig struct {
 	Grants      GrantLookups
 	Roles       RoleStore
@@ -36,6 +38,7 @@ type ReachConfig struct {
 	Principals  PrincipalNamespaces
 	Collections UnitCollections
 	Units       Units
+	Settings    Settings
 }
 
 // Reach is the set of actions on objects that one principal can do: the
@@ -52,6 +55,7 @@ type Reach struct {
 	collections UnitCollections
 	units       Units
 	principals  PrincipalNamespaces
+	settings    Settings
 }
 
 // reachEntry is the actions that a reach holds on one object.
@@ -498,6 +502,8 @@ func checkReachConfig(cfg ReachConfig) error {
 		return fmt.Errorf("%w: callers", ErrMissingDependency)
 	case cfg.Principals == nil:
 		return fmt.Errorf("%w: principals", ErrMissingDependency)
+	case cfg.Settings == nil:
+		return fmt.Errorf("%w: settings", ErrMissingDependency)
 	default:
 		return nil
 	}
@@ -533,6 +539,7 @@ func emptyReach(cfg ReachConfig) Reach {
 		collections: cfg.Collections,
 		units:       cfg.Units,
 		principals:  cfg.Principals,
+		settings:    cfg.Settings,
 	}
 }
 
@@ -969,7 +976,16 @@ func (w *reachWalker) deriveNamespaceTokens(out *Reach, grants []Grant, roles ma
 // chain returns obj and every object that holds it, innermost first, as the
 // authorizer reads it.
 func (r Reach) chain(ctx context.Context, obj identity.Object) ([]identity.Object, error) {
-	return chainObjects(ctx, obj, r.collections, r.withUnitID, r.principals)
+	reaches, err := InstallationGrantsReachNamespaces(ctx, r.settings)
+	if err != nil {
+		return nil, err
+	}
+
+	ports := chainPorts{
+		collections: r.collections, resolveUnit: r.withUnitID, principals: r.principals, reachesNamespaces: reaches,
+	}
+
+	return chainObjects(ctx, obj, ports)
 }
 
 // withUnitID returns the unit obj with its stable ID. A unit that already

@@ -91,7 +91,8 @@ func TestResetFailsClosedWithNoReach(t *testing.T) {
 	c := f.mustCreate(t, "alice", goodPassword)
 
 	svc := f.serviceWith(t, access.ReachConfig{
-		Grants: nil, Roles: nil, Callers: nil, Principals: nil, Collections: nil, Units: nil,
+		Settings: nil,
+		Grants:   nil, Roles: nil, Callers: nil, Principals: nil, Collections: nil, Units: nil,
 	})
 
 	_, err := svc.StartReset(t.Context(), admin(), c.Principal.ID, localusersvc.ResetInput{

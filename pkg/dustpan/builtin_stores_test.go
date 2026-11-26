@@ -12,6 +12,7 @@ import (
 	"opendustpan.org/opendustpan/internal/fakecred"
 	"opendustpan.org/opendustpan/internal/localusersvc"
 	"opendustpan.org/opendustpan/internal/store/sqlite"
+	"opendustpan.org/opendustpan/pkg/access"
 	"opendustpan.org/opendustpan/pkg/blob/fs"
 	"opendustpan.org/opendustpan/pkg/collection"
 	"opendustpan.org/opendustpan/pkg/dustpan"
@@ -20,14 +21,29 @@ import (
 	"opendustpan.org/opendustpan/pkg/namespace"
 )
 
-// newBuiltinSQLiteServer opens a server over the built-in SQLite store at path,
-// with the extra options after the options that NewServer requires. The caller
+// newBuiltinSQLiteServer opens the SQLite store at path with OpenStore, and
+// starts a server over it with WithBuiltinStore and WithSettings. The extra
+// options follow them. The store is closed when the test ends; the caller
 // closes the server.
-func newBuiltinSQLiteServer(t *testing.T, path string, extra ...dustpan.Option) *dustpan.Server {
+func newBuiltinSQLiteServer(
+	t *testing.T, path string, extra ...dustpan.Option,
+) (*dustpan.Server, *dustpan.BuiltinStore) {
 	t.Helper()
 
+	st, err := dustpan.OpenStore(t.Context(), "sqlite:"+path)
+	if err != nil {
+		t.Fatalf("open store: %v", err)
+	}
+
+	t.Cleanup(func() {
+		if closeErr := st.Close(); closeErr != nil {
+			t.Errorf("close store: %v", closeErr)
+		}
+	})
+
 	opts := builtinServerOptions(t)
-	opts = append(opts, dustpan.WithSQLite(path))
+	opts = append(opts, dustpan.WithBuiltinStore(st),
+		dustpan.WithSettings(st.SettingStore(), access.SettingDeclarations(), nil))
 	opts = append(opts, extra...)
 
 	srv, err := dustpan.NewServer(opts...)
@@ -35,7 +51,7 @@ func newBuiltinSQLiteServer(t *testing.T, path string, extra ...dustpan.Option) 
 		t.Fatalf("new server: %v", err)
 	}
 
-	return srv
+	return srv, st
 }
 
 // builtinServerOptions returns the options that NewServer requires besides the
@@ -67,11 +83,12 @@ func builtinServerOptions(t *testing.T) []dustpan.Option {
 	}
 }
 
-// newBuiltinSQLiteFixture starts a server whose only store option is WithSQLite.
+// newBuiltinSQLiteFixture starts a server over a built-in SQLite store that
+// OpenStore opened.
 func newBuiltinSQLiteFixture(t *testing.T) fixture {
 	t.Helper()
 
-	srv := newBuiltinSQLiteServer(t, filepath.Join(t.TempDir(), "dustpan.db"))
+	srv, _ := newBuiltinSQLiteServer(t, filepath.Join(t.TempDir(), "dustpan.db"))
 
 	t.Cleanup(func() {
 		if closeErr := srv.Close(); closeErr != nil {
@@ -85,9 +102,10 @@ func newBuiltinSQLiteFixture(t *testing.T) fixture {
 	return fixture{store: nil, server: ts, srv: srv}
 }
 
-// TestWithSQLiteAlone proves that WithSQLite alone sets every store option:
-// one Pulumi stack update and one OpenTofu state write go through the HTTP API
-// and read back.
+// TestWithSQLiteAlone proves that a built-in SQLite store, opened with
+// OpenStore and given with WithBuiltinStore and WithSettings, sets every store
+// option: one Pulumi stack update and one OpenTofu state write go through the
+// HTTP API and read back.
 func TestWithSQLiteAlone(t *testing.T) {
 	t.Parallel()
 
@@ -112,7 +130,8 @@ func TestOpenStoreWithBuiltinStore(t *testing.T) {
 		}
 	})
 
-	opts := append(builtinServerOptions(t), dustpan.WithBuiltinStore(store))
+	opts := append(builtinServerOptions(t), dustpan.WithBuiltinStore(store),
+		dustpan.WithSettings(store.SettingStore(), access.SettingDeclarations(), nil))
 
 	srv, err := dustpan.NewServer(opts...)
 	if err != nil {
@@ -242,7 +261,7 @@ func TestBuiltinStoreOpenError(t *testing.T) {
 func TestServerCloseTwice(t *testing.T) {
 	t.Parallel()
 
-	srv := newBuiltinSQLiteServer(t, filepath.Join(t.TempDir(), "dustpan.db"))
+	srv, _ := newBuiltinSQLiteServer(t, filepath.Join(t.TempDir(), "dustpan.db"))
 
 	if err := srv.Close(); err != nil {
 		t.Fatalf("close the server: %v", err)
@@ -577,7 +596,7 @@ func TestBuiltinStoreOptionReplacesTheStoreOption(t *testing.T) {
 		}
 	})
 
-	srv := newBuiltinSQLiteServer(t, filepath.Join(t.TempDir(), "dustpan.db"), dustpan.WithNamespaceStore(second))
+	srv, _ := newBuiltinSQLiteServer(t, filepath.Join(t.TempDir(), "dustpan.db"), dustpan.WithNamespaceStore(second))
 
 	t.Cleanup(func() {
 		if closeErr := srv.Close(); closeErr != nil {
@@ -607,13 +626,14 @@ func TestBuiltinStoreOptionReplacesTheStoreOption(t *testing.T) {
 	}
 }
 
-// TestServerCloseClosesTheBuiltinStore proves that Close closes the store that
-// WithSQLite opened: the database file stays locked until then.
+// TestServerCloseClosesTheBuiltinStore proves that the database file stays
+// locked while the server runs. The store of OpenStore is closed by the caller,
+// so the file opens after the server and the store are closed.
 func TestServerCloseClosesTheBuiltinStore(t *testing.T) {
 	t.Parallel()
 
 	path := filepath.Join(t.TempDir(), "dustpan.db")
-	srv := newBuiltinSQLiteServer(t, path)
+	srv, st := newBuiltinSQLiteServer(t, path)
 
 	if _, err := dustpan.OpenStore(t.Context(), "sqlite:"+path); !errors.Is(err, sqlite.ErrInUse) {
 		t.Fatalf("open the same database file while the server runs = %v, want the lock of the server", err)
@@ -621,6 +641,10 @@ func TestServerCloseClosesTheBuiltinStore(t *testing.T) {
 
 	if err := srv.Close(); err != nil {
 		t.Fatalf("close the server: %v", err)
+	}
+
+	if err := st.Close(); err != nil {
+		t.Fatalf("close the store: %v", err)
 	}
 
 	checkOpenStoreOpens(t, "sqlite:"+path)
@@ -638,7 +662,8 @@ func TestServerCloseLeavesTheCallerStoreOpen(t *testing.T) {
 	}
 
 	opts := builtinServerOptions(t)
-	opts = append(opts, dustpan.WithBuiltinStore(st))
+	opts = append(opts, dustpan.WithBuiltinStore(st),
+		dustpan.WithSettings(st.SettingStore(), access.SettingDeclarations(), nil))
 
 	srv, err := dustpan.NewServer(opts...)
 	if err != nil {
@@ -668,7 +693,23 @@ func TestNewServerClosesTheBuiltinStoreWhenItFails(t *testing.T) {
 
 	path := filepath.Join(t.TempDir(), "dustpan.db")
 
-	_, err := dustpan.NewServer(dustpan.WithSQLite(path))
+	// WithSettings takes a store of its own, so the refusal of a built-in store
+	// without settings does not hide the authenticator check.
+	settingsStore, err := sqlite.Open(t.Context(), filepath.Join(t.TempDir(), "settings.db"))
+	if err != nil {
+		t.Fatalf("open the settings store: %v", err)
+	}
+
+	t.Cleanup(func() {
+		if closeErr := settingsStore.Close(); closeErr != nil {
+			t.Errorf("close the settings store: %v", closeErr)
+		}
+	})
+
+	_, err = dustpan.NewServer(
+		dustpan.WithSQLite(path),
+		dustpan.WithSettings(settingsStore.SettingStore(), access.SettingDeclarations(), nil),
+	)
 	if err == nil {
 		t.Fatal("NewServer succeeded without an authenticator, want an error")
 	}
@@ -680,9 +721,12 @@ func TestNewServerClosesTheBuiltinStoreWhenItFails(t *testing.T) {
 	checkOpenStoreOpens(t, "sqlite:"+path)
 }
 
-// TestWithPostgreSQLOpensTheTestDatabase proves that WithPostgreSQL opens the
-// store of the test database and sets its store options, so that
-// postgresStoreOptions runs. The test skips without the test database.
+// TestWithPostgreSQLOpensTheTestDatabase proves that the PostgreSQL store of
+// the test database opens and sets its store options, so that
+// postgresStoreOptions runs. WithPostgreSQL opens the store inside NewServer,
+// so the caller cannot give WithSettings; the test uses OpenStore,
+// WithBuiltinStore and WithSettings, the form that the settings check
+// requires. The test skips without the test database.
 func TestWithPostgreSQLOpensTheTestDatabase(t *testing.T) {
 	t.Parallel()
 
@@ -691,16 +735,48 @@ func TestWithPostgreSQLOpensTheTestDatabase(t *testing.T) {
 		t.Skipf("set %s to run the PostgreSQL case", postgresURLEnv)
 	}
 
-	opts := builtinServerOptions(t)
-	opts = append(opts, dustpan.WithPostgreSQL(isolatedPostgresURL(t, base)))
-
-	srv, err := dustpan.NewServer(opts...)
+	st, err := dustpan.OpenStore(t.Context(), isolatedPostgresURL(t, base))
 	if err != nil {
-		t.Fatalf("new server: %v", err)
+		t.Fatalf("open the store: %v", err)
 	}
+
+	t.Cleanup(func() {
+		if closeErr := st.Close(); closeErr != nil {
+			t.Errorf("close the store: %v", closeErr)
+		}
+	})
+
+	srv := newAdoptingServer(t, st)
 
 	if closeErr := srv.Close(); closeErr != nil {
 		t.Fatalf("close the server: %v", closeErr)
+	}
+}
+
+// TestWithPostgreSQLWithoutSettingsRefused proves that WithPostgreSQL alone
+// answers ErrMissingOption that names WithSettings. WithPostgreSQL opens the
+// store inside NewServer, so the caller cannot give WithSettings; the error
+// names the form that works. The test skips without the test database because
+// the settings check runs after the store opens.
+func TestWithPostgreSQLWithoutSettingsRefused(t *testing.T) {
+	t.Parallel()
+
+	base := os.Getenv(postgresURLEnv)
+	if base == "" {
+		t.Skipf("set %s to run the PostgreSQL case", postgresURLEnv)
+	}
+
+	_, err := dustpan.NewServer(dustpan.WithPostgreSQL(isolatedPostgresURL(t, base)))
+	if err == nil {
+		t.Fatal("NewServer(WithPostgreSQL) succeeded, want an error")
+	}
+
+	if !errors.Is(err, dustpan.ErrMissingOption) {
+		t.Fatalf("NewServer error = %v, want ErrMissingOption", err)
+	}
+
+	if !strings.Contains(err.Error(), "WithSettings") {
+		t.Fatalf("NewServer error = %v, want it to name WithSettings", err)
 	}
 }
 
@@ -723,7 +799,8 @@ func newAdoptingServer(t *testing.T, st *dustpan.BuiltinStore, extra ...dustpan.
 	t.Helper()
 
 	opts := builtinServerOptions(t)
-	opts = append(opts, dustpan.WithBuiltinStore(st))
+	opts = append(opts, dustpan.WithBuiltinStore(st),
+		dustpan.WithSettings(st.SettingStore(), access.SettingDeclarations(), nil))
 	opts = append(opts, extra...)
 
 	srv, err := dustpan.NewServer(opts...)

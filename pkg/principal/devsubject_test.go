@@ -91,7 +91,9 @@ func TestUpdatePrincipalRefusesTheDevPerson(t *testing.T) {
 
 	name := "other"
 
-	_, err := f.svc.UpdatePrincipal(t.Context(), testEntry(), "prn-dev", principal.Change{DisplayName: &name})
+	_, err := f.svc.UpdatePrincipal(
+		t.Context(), testEntry(), adminCaller(), "prn-dev", principal.Change{DisplayName: &name},
+	)
 	if !errors.Is(err, principal.ErrReservedSubject) {
 		t.Fatalf("UpdatePrincipal of the dev person = %v, want ErrReservedSubject", err)
 	}

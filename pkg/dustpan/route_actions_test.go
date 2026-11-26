@@ -998,6 +998,7 @@ func newDiscoveryServer(t *testing.T, st *sqlite.Store, blobs *fs.Store, at time
 		dustpan.WithBlobStore(blobs),
 		dustpan.WithInventoryReader(st),
 		dustpan.WithAuthenticator(tokenMapAuthenticator{tokens: tokens}),
+		dustpan.WithSettings(st.SettingStore(), access.SettingDeclarations(), nil),
 		dustpan.WithClock(at.UTC),
 	)...)
 	if serverErr != nil {

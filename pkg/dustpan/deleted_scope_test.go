@@ -143,6 +143,7 @@ func newDeletedScopeServer(t *testing.T) *dustpan.Server {
 		dustpan.WithBlobStore(blobs),
 		dustpan.WithInventoryReader(st),
 		dustpan.WithAuthenticator(authn),
+		dustpan.WithSettings(st.SettingStore(), access.SettingDeclarations(), nil),
 	)
 	if err != nil {
 		t.Fatalf("new server: %v", err)

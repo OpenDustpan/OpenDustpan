@@ -189,7 +189,8 @@ func newFAFixture(t *testing.T) faFixture {
 	}
 
 	reach := access.ReachConfig{
-		Grants: st, Roles: st, Callers: st, Principals: st, Collections: stubCollections{}, Units: st,
+		Settings: access.FixedSettings(true),
+		Grants:   st, Roles: st, Callers: st, Principals: st, Collections: stubCollections{}, Units: st,
 	}
 
 	grants, err := access.NewService(access.ServiceConfig{

@@ -129,7 +129,8 @@ func newReachFixture(t *testing.T) reachFixture {
 	var rf reachFixture
 	rf.fixture = newFixture(t, nil)
 	rf.reach = access.ReachConfig{
-		Grants: rf.store, Roles: rf.store, Callers: rf.store, Principals: rf.store, Collections: nil, Units: rf.store,
+		Settings: access.FixedSettings(true),
+		Grants:   rf.store, Roles: rf.store, Callers: rf.store, Principals: rf.store, Collections: nil, Units: rf.store,
 	}
 
 	rf.account = rf.personOf(t, "account@example.com")
@@ -536,7 +537,8 @@ func TestDirectTokenHolderIsNotCompared(t *testing.T) {
 	ctx := t.Context()
 
 	svc := f.newService(t, access.ReachConfig{
-		Grants: f.store, Roles: f.store, Callers: f.store,
+		Settings: access.FixedSettings(true),
+		Grants:   f.store, Roles: f.store, Callers: f.store,
 		Principals: failingPrincipals{Store: f.store}, Collections: nil, Units: f.store,
 	})
 
@@ -580,7 +582,8 @@ func TestInstallationAndPrincipalHolderIsNotCompared(t *testing.T) {
 
 	// The principals port fails: a compare would refuse the change.
 	svc := f.newService(t, access.ReachConfig{
-		Grants: f.store, Roles: f.store, Callers: f.store,
+		Settings: access.FixedSettings(true),
+		Grants:   f.store, Roles: f.store, Callers: f.store,
 		Principals: failingPrincipals{Store: f.store}, Collections: nil, Units: f.store,
 	})
 
@@ -648,6 +651,7 @@ func TestServiceTokenReachFailsClosed(t *testing.T) {
 		{
 			name: "a zero reach config",
 			reach: access.ReachConfig{
+				Settings:    nil,
 				Grants:      nil,
 				Roles:       nil,
 				Callers:     nil,
@@ -661,7 +665,8 @@ func TestServiceTokenReachFailsClosed(t *testing.T) {
 		{
 			name: "a reach config with no principals",
 			reach: access.ReachConfig{
-				Grants: f.store, Roles: f.store, Callers: f.store, Principals: nil, Collections: nil, Units: f.store,
+				Settings: access.FixedSettings(true),
+				Grants:   f.store, Roles: f.store, Callers: f.store, Principals: nil, Collections: nil, Units: f.store,
 			},
 			principals: nil,
 			target:     f.plain,
@@ -669,7 +674,8 @@ func TestServiceTokenReachFailsClosed(t *testing.T) {
 		{
 			name: "a failed read of the grants of the caller",
 			reach: access.ReachConfig{
-				Grants: failingGrants{Store: f.store}, Roles: f.store, Callers: f.store, Principals: f.store,
+				Settings: access.FixedSettings(true),
+				Grants:   failingGrants{Store: f.store}, Roles: f.store, Callers: f.store, Principals: f.store,
 				Collections: nil, Units: f.store,
 			},
 			principals: nil,
@@ -678,7 +684,8 @@ func TestServiceTokenReachFailsClosed(t *testing.T) {
 		{
 			name: "a failed read of the grants of the principal",
 			reach: access.ReachConfig{
-				Grants: failingTargetGrants{Store: f.store, id: f.plain.ID}, Roles: f.store, Callers: f.store,
+				Settings: access.FixedSettings(true),
+				Grants:   failingTargetGrants{Store: f.store, id: f.plain.ID}, Roles: f.store, Callers: f.store,
 				Principals: f.store, Collections: nil, Units: f.store,
 			},
 			principals: nil,
@@ -687,7 +694,8 @@ func TestServiceTokenReachFailsClosed(t *testing.T) {
 		{
 			name: "a failed read of the principals",
 			reach: access.ReachConfig{
-				Grants: f.store, Roles: f.store, Callers: f.store, Principals: failingPrincipals{Store: f.store},
+				Settings: access.FixedSettings(true),
+				Grants:   f.store, Roles: f.store, Callers: f.store, Principals: failingPrincipals{Store: f.store},
 				Collections: nil, Units: f.store,
 			},
 			principals: nil,
@@ -696,6 +704,7 @@ func TestServiceTokenReachFailsClosed(t *testing.T) {
 		{
 			name: "a failed read of the principal of the caller",
 			reach: access.ReachConfig{
+				Settings:    access.FixedSettings(true),
 				Grants:      f.store,
 				Roles:       f.store,
 				Callers:     f.store,
@@ -709,7 +718,8 @@ func TestServiceTokenReachFailsClosed(t *testing.T) {
 		{
 			name: "a failed read of the collection of a unit",
 			reach: access.ReachConfig{
-				Grants: f.store, Roles: f.store, Callers: f.store, Principals: f.store,
+				Settings: access.FixedSettings(true),
+				Grants:   f.store, Roles: f.store, Callers: f.store, Principals: f.store,
 				Collections: failingCollections{}, Units: liveUnits{id: unitObj.UnitID(), obj: unitObj},
 			},
 			principals: nil,
@@ -876,7 +886,8 @@ func TestBootstrapAdministratorPassesTheReachCheck(t *testing.T) {
 	f := newReachFixture(t)
 
 	svc := f.newService(t, access.ReachConfig{
-		Grants: nil, Roles: nil, Callers: nil, Principals: nil, Collections: nil, Units: nil,
+		Settings: nil,
+		Grants:   nil, Roles: nil, Callers: nil, Principals: nil, Collections: nil, Units: nil,
 	})
 
 	p := admin()

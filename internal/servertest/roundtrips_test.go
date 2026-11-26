@@ -955,12 +955,12 @@ type requestFlow struct {
 // reads the stack.
 func requestFlows() []requestFlow {
 	return []requestFlow{
-		{"opentofu upload", 42, func(h *rtHarness) {
+		{"opentofu upload", 42 + 2*reachSettingReadTrips, func(h *rtHarness) {
 			h.lock()
 			h.measure(h.upload)
 			h.unlock()
 		}},
-		{"lock", 34, func(h *rtHarness) {
+		{"lock", 34 + reachSettingReadTrips, func(h *rtHarness) {
 			h.measure(h.lock)
 			h.unlock()
 		}},
@@ -970,7 +970,7 @@ func requestFlows() []requestFlow {
 		// of a job row that moves the job to a terminal state also reads the
 		// accepted claims of the job, 1 round trip, to end them in the same
 		// transaction.
-		{"job cancel", 49, func(h *rtHarness) {
+		{"job cancel", 49 + reachSettingReadTrips, func(h *rtHarness) {
 			jobID := h.startPlanJob()
 			h.measure(func() {
 				h.call(http.MethodPost, "/api/dustpan/v1/namespaces/acme/jobs/"+jobID+"/cancel",
@@ -981,22 +981,22 @@ func requestFlows() []requestFlow {
 		// operation, the job and its starter, checks the grant of the starter,
 		// and then issues the token and its audit entry in one transaction
 		// that rereads the job, the operation and the starter.
-		{"job session credentials", 43, func(h *rtHarness) {
+		{"job session credentials", 43 + reachSettingReadTrips, func(h *rtHarness) {
 			sess := h.jobSession()
 			h.measure(func() { h.credentials(sess) })
 		}},
-		{"unlock", 13, func(h *rtHarness) {
+		{"unlock", 13 + reachSettingReadTrips, func(h *rtHarness) {
 			h.lock()
 			h.measure(h.unlock)
 		}},
-		{"lock, upload and unlock", 94, func(h *rtHarness) {
+		{"lock, upload and unlock", 94 + 4*reachSettingReadTrips, func(h *rtHarness) {
 			h.measure(func() {
 				h.lock()
 				h.upload()
 				h.unlock()
 			})
 		}},
-		{"pulumi checkpoint save", 14, func(h *rtHarness) {
+		{"pulumi checkpoint save", 14 + reachSettingReadTrips, func(h *rtHarness) {
 			h.newStack()
 			run := h.startUpdate()
 			h.measure(func() { h.save(run, 1) })
@@ -1012,7 +1012,7 @@ func requestFlows() []requestFlow {
 		// attempt deadline with one set_config: one more round trip. The start
 		// reads the stack one time, so that the manual lock check matches the
 		// lock by the stable ID of the stack, not by its name.
-		{"pulumi update cycle", 70, func(h *rtHarness) {
+		{"pulumi update cycle", 70 + 5*reachSettingReadTrips, func(h *rtHarness) {
 			h.newStack()
 			h.measure(func() {
 				run := h.startUpdate()
@@ -1026,7 +1026,7 @@ func requestFlows() []requestFlow {
 		// the namespace, then one seal for each event in memory. The store
 		// writes each event with its own insert, so 1000 of the round trips
 		// are the inserts of the rows.
-		{"pulumi event batch of 1000 events", 1010, func(h *rtHarness) {
+		{"pulumi event batch of 1000 events", 1010 + reachSettingReadTrips, func(h *rtHarness) {
 			h.newStack()
 			run := h.startUpdate()
 			h.measure(func() { h.events(run, eventBatchSize) })
@@ -1045,16 +1045,16 @@ func requestFlows() []requestFlow {
 		// state of a unit, so the item key transaction of each arms its attempt
 		// deadline with one set_config: one more round trip in each of their
 		// budgets.
-		{"pulumi stack rm", 41, func(h *rtHarness) {
+		{"pulumi stack rm", 41 + reachSettingReadTrips, func(h *rtHarness) {
 			h.newStack()
 			h.measureStackCall(http.MethodDelete, "", "", http.StatusNoContent)
 		}},
-		{"pulumi stack import", 74, func(h *rtHarness) {
+		{"pulumi stack import", 74 + reachSettingReadTrips, func(h *rtHarness) {
 			h.newStack()
 			body := `{"version":3,"deployment":` + deployment(3) + `}`
 			h.measureStackCall(http.MethodPost, "/import", body, http.StatusOK)
 		}},
-		{"pulumi stack restore", 75, func(h *rtHarness) {
+		{"pulumi stack restore", 75 + reachSettingReadTrips, func(h *rtHarness) {
 			h.newStack()
 			run := h.startUpdate()
 			h.save(run, 1)
@@ -1064,12 +1064,12 @@ func requestFlows() []requestFlow {
 		// The rename appends its audit entry in the transaction of the rename:
 		// one read of the namespace, one read of the last entry of the chain and
 		// one insert.
-		{"pulumi stack rename", 42, func(h *rtHarness) {
+		{"pulumi stack rename", 42 + reachSettingReadTrips, func(h *rtHarness) {
 			h.newStack()
 			body := `{"newName":"` + h.stack + `-renamed"}`
 			h.measureStackCall(http.MethodPost, "/rename", body, http.StatusOK)
 		}},
-		{"pulumi cancel", 36, func(h *rtHarness) {
+		{"pulumi cancel", 36 + reachSettingReadTrips, func(h *rtHarness) {
 			h.newStack()
 			run := h.startUpdate()
 			h.measure(func() { h.call(http.MethodPost, run.path+"/cancel", "", http.StatusOK) })
@@ -1081,14 +1081,14 @@ func requestFlows() []requestFlow {
 		// stores the session and its audit entry in the fenced transaction
 		// of the namespace (11), which rereads the root and counts the live
 		// sessions of the owner.
-		{"profile open", 28, func(h *rtHarness) {
+		{"profile open", 28 + reachSettingReadTrips, func(h *rtHarness) {
 			name := h.nextProfile()
 			h.createProfile(name)
 			h.measure(func() { h.openProfile(name) })
 		}},
 		// The budget is 5. The read runs in a fenced transaction (4) and
 		// reads the data key of the root to unseal the session (1).
-		{"profile session read", 5, func(h *rtHarness) {
+		{"profile session read", 5 + reachSettingReadTrips, func(h *rtHarness) {
 			name := h.nextProfile()
 			h.createProfile(name)
 			id := h.openProfile(name)
@@ -1526,6 +1526,18 @@ func backupModel() costModel {
 // a put under the directory of an attempt.
 const claimReadTrips = 4
 
+// reachSettingReadTrips is the number of round trips of the read of the reach
+// setting for one authorized request. The authorizer reads the reach setting once for each request that it
+// authorizes, and the request cache keeps the value. So each request flow and
+// the fixed part of restoreModel count one such read for the authorized
+// request. The backup path counts no settings statement.
+const reachSettingReadTrips = settingReadTrips
+
+// settingReadTrips is the number of round trips of one read of a setting
+// through pkg/setting/service.go: ListSettings (Effective, :65) and then
+// GetSettingsState (Get, :54), two statements.
+const settingReadTrips = 2
+
 // attemptClaimTrips is the number of round trips that the reads of the claim
 // before the writes that are not a table file add to the fixed part of a
 // backup. The value is the measured one on PostgreSQL.
@@ -1620,7 +1632,7 @@ const attemptClaimTrips = 23
 // backups/.
 func restoreModel() costModel {
 	return costModel{
-		fixed: 331 + 1 + attemptClaimTrips + forgeStripClassTrips + blobDeleteLeaseTrips - breakGlassReviewTrips + stagedJobCheckTrips +
+		fixed: 331 + 1 + attemptClaimTrips + reachSettingReadTrips + forgeStripClassTrips + blobDeleteLeaseTrips - breakGlassReviewTrips + stagedJobCheckTrips +
 			removalAlertTrips + stagedPrincipalCheckTrips + stagedGrantIDCheckTrips + stagedStackTagCheckTrips + stagedTriggerClockTrips +
 			unitStateTrips +
 			breakGlassFloorTrips + breakGlassPasswordTrips + serverAuditLockTrips + checkpointSupersedesTrips +

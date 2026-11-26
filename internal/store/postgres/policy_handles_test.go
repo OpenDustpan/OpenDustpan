@@ -136,6 +136,7 @@ func tokenService(t *testing.T, s *postgres.Store, now func() time.Time) *access
 	svc, err := accesstoken.NewService(accesstoken.Config{
 		Makers: nil,
 		Reach: access.ReachConfig{
+			Settings:    nil,
 			Grants:      nil,
 			Roles:       nil,
 			Callers:     nil,

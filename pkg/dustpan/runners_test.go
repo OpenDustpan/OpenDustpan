@@ -10,6 +10,7 @@ import (
 	"time"
 
 	"opendustpan.org/opendustpan/internal/store/sqlite"
+	"opendustpan.org/opendustpan/pkg/access"
 	"opendustpan.org/opendustpan/pkg/blob/fs"
 	"opendustpan.org/opendustpan/pkg/dustpan"
 	"opendustpan.org/opendustpan/pkg/identity"
@@ -81,6 +82,7 @@ func runnerServer(
 		dustpan.WithStateStore(st), dustpan.WithBlobStore(blobs), dustpan.WithInventoryReader(st),
 		dustpan.WithAuthenticator(authn), dustpan.WithDurableStore(st.DurableOperations()),
 		dustpan.WithPublicURL(publicURL),
+		dustpan.WithSettings(st.SettingStore(), access.SettingDeclarations(), nil),
 	}
 	extras := make([]dustpan.Option, 0, len(extra))
 	for _, option := range extra {

@@ -122,10 +122,21 @@ func newFixtureWithSettings(tb testing.TB, units access.UnitCollections, setting
 		tb.Fatalf("new authorizer: %v", err)
 	}
 
+	authz = authz.WithSettingsPort(settings)
+
+	// A fixture with no settings port reads the default, true, in its reach too.
+	reachSettings := settings
+	if reachSettings == nil {
+		reachSettings = access.FixedSettings(true)
+	}
+
 	svc, err := access.NewService(access.ServiceConfig{
 		Store: st, Directory: st, Namespaces: st, Authorizer: authz,
-		Reach: access.ReachConfig{Grants: st, Roles: st, Callers: st, Principals: st, Collections: units, Units: st},
-		Now:   nil, NewID: nil,
+		Reach: access.ReachConfig{
+			Grants: st, Roles: st, Callers: st, Principals: st,
+			Collections: units, Units: st, Settings: reachSettings,
+		},
+		Now: nil, NewID: nil,
 		BootstrapAdmins: []string{"admin"}, Settings: settings, LimitGroups: nil,
 	})
 	if err != nil {
@@ -269,8 +280,11 @@ func (f *fixture) serviceOverGrantStore(tb testing.TB, store access.Store) *acce
 
 	svc, err := access.NewService(access.ServiceConfig{
 		Store: store, Directory: st, Namespaces: st, Authorizer: f.authz,
-		Reach: access.ReachConfig{Grants: st, Roles: st, Callers: st, Principals: st, Collections: nil, Units: st},
-		Now:   nil, NewID: nil,
+		Reach: access.ReachConfig{
+			Grants: st, Roles: st, Callers: st, Principals: st, Collections: nil, Units: st,
+			Settings: access.FixedSettings(true),
+		},
+		Now: nil, NewID: nil,
 		BootstrapAdmins: []string{"admin"}, Settings: nil, LimitGroups: nil,
 	})
 	if err != nil {
@@ -996,7 +1010,9 @@ func TestExplainListsOnlyGrantsThatGive(t *testing.T) {
 	lost := &lostRoleStore{Store: f.store, role: gone.ID}
 
 	authz, err := access.NewAuthorizer(
-		access.AuthorizerConfig{Store: lost, Callers: lost, Collections: nil, Units: lost, Principals: lost},
+		access.AuthorizerConfig{
+			Store: lost, Callers: lost, Collections: nil, Units: lost, Principals: lost,
+		},
 	)
 	if err != nil {
 		t.Fatalf("authorizer: %v", err)

@@ -46,7 +46,8 @@ func newAccessTokens(t *testing.T, st *sqlite.Store, clock *envClock) *accesstok
 		Makers: nil,
 		Store:  st, Principals: st, Freshness: nil, Authorizer: nil, TempAdmins: nil,
 		Reach: access.ReachConfig{
-			Grants: nil, Roles: nil, Callers: nil, Principals: nil, Collections: nil, Units: nil,
+			Settings: nil,
+			Grants:   nil, Roles: nil, Callers: nil, Principals: nil, Collections: nil, Units: nil,
 		},
 		Logger: nil, NewID: nil, Now: clock.Now,
 		Guard: freshstep.Guard{},

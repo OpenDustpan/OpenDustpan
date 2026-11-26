@@ -58,6 +58,22 @@ func reachCases() []struct {
 			test: testGroupProtectedUnknownAction,
 		},
 		{name: "a reach config without a required port fails closed", test: testReachConfigPorts},
+		{
+			name: "installation reach denies a grant on the installation inside a namespace when the setting is false",
+			test: testInstallationReachOff,
+		},
+		{
+			name: "installation reach allows a grant on the installation inside a namespace when the setting is true",
+			test: testInstallationReachOn,
+		},
+		{
+			name: "installation reach keeps the operator actions of a grant on the installation when the setting is false",
+			test: testInstallationReachOperators,
+		},
+		{
+			name: "installation reach keeps a grant on a namespace inside it when the setting is false",
+			test: testInstallationReachNamespaceGrant,
+		},
 	}
 }
 
@@ -79,7 +95,7 @@ func reachStores(t *testing.T, s access.Store) reachStore {
 func reachConfig(s reachStore) access.ReachConfig {
 	return access.ReachConfig{
 		Grants: s, Roles: s, Callers: s, Principals: s,
-		Collections: testCollections(), Units: s,
+		Collections: testCollections(), Units: s, Settings: access.FixedSettings(true),
 	}
 }
 
@@ -1592,6 +1608,205 @@ func testGroupProtectedUnknownAction(t *testing.T, s access.Store) {
 	}
 }
 
+// installationAuthorizer returns an Authorizer over s whose settings port
+// answers the reach setting with reaches.
+func installationAuthorizer(t *testing.T, s reachStore, reaches bool) *access.Authorizer {
+	t.Helper()
+
+	authz, err := access.NewAuthorizer(access.AuthorizerConfig{
+		Store: s, Callers: s, Collections: testCollections(), Units: s, Principals: s,
+	})
+	if err != nil {
+		t.Fatalf("new authorizer: %v", err)
+	}
+
+	return authz.WithSettingsPort(access.FixedSettings(reaches))
+}
+
+// subjectCaller returns a signed-in caller with the subject. It is not an
+// administrator, and it holds no token of a stored access token.
+func subjectCaller(subject string) identity.Principal {
+	return identity.Principal{
+		TemporaryAdministrator: false,
+		TemporaryExpiresAt:     time.Time{},
+		Subject:                subject,
+		DisplayName:            "",
+		Admin:                  false,
+		TokenID:                "",
+		TokenExpiresAt:         time.Time{},
+		Kind:                   "",
+		Credential:             "",
+		JobID:                  "",
+	}
+}
+
+// installationCase is one decision that an installation reach case checks.
+type installationCase struct {
+	name    string
+	subject string
+	action  identity.Action
+	obj     identity.Object
+	want    bool
+}
+
+// assertInstallationCases checks each decision of cases with authz. A refused
+// action is a denial; any other error fails the test.
+func assertInstallationCases(t *testing.T, authz *access.Authorizer, cases []installationCase) {
+	t.Helper()
+
+	for i := range cases {
+		tc := &cases[i]
+
+		got := true
+
+		err := authz.Authorize(t.Context(), subjectCaller(tc.subject), tc.action, tc.obj)
+		if err != nil {
+			if _, ok := errors.AsType[*identity.DeniedError](err); !ok {
+				t.Fatalf("%s: authorize %s on %q: %v", tc.name, tc.action, tc.obj.String(), err)
+			}
+
+			got = false
+		}
+
+		if got != tc.want {
+			t.Errorf("%s: %q may %s on %q = %t, want %t",
+				tc.name, tc.subject, tc.action, tc.obj.String(), got, tc.want)
+		}
+	}
+}
+
+// testInstallationReachOff checks that a grant on the installation with a
+// role of namespace actions gives no action inside a namespace while the
+// setting is false: not on the namespace, a unit, a collection, or a token of a
+// principal of the namespace.
+func testInstallationReachOff(t *testing.T, s access.Store) {
+	t.Helper()
+
+	rs := reachStores(t, s)
+	installationCallers(t, rs)
+	authz := installationAuthorizer(t, rs, false)
+
+	web, err := identity.UnitObject("pulumi", "acme", "web/prod")
+	if err != nil {
+		t.Fatalf("unit object: %v", err)
+	}
+
+	acme := identity.NamespaceObject("acme")
+	payments := identity.CollectionObject("acme", "payments").WithCollectionID("col-payments")
+	bot := identity.PrincipalObject("bot-acme")
+
+	assertInstallationCases(t, authz, []installationCase{
+		{name: "namespace", subject: "site", action: identity.ActionNamespaceRead, obj: acme, want: false},
+		{name: "unit", subject: "site", action: identity.ActionUnitRead, obj: web, want: false},
+		{name: "collection", subject: "site", action: identity.ActionCollectionRead, obj: payments, want: false},
+		{
+			name: "principal in namespace", subject: "tok", action: identity.ActionPrincipalManageTokens,
+			obj: bot, want: false,
+		},
+	})
+}
+
+// testInstallationReachOn checks that the same grants on the installation give
+// their actions inside a namespace while the setting is true.
+func testInstallationReachOn(t *testing.T, s access.Store) {
+	t.Helper()
+
+	rs := reachStores(t, s)
+	installationCallers(t, rs)
+	authz := installationAuthorizer(t, rs, true)
+
+	web, err := identity.UnitObject("pulumi", "acme", "web/prod")
+	if err != nil {
+		t.Fatalf("unit object: %v", err)
+	}
+
+	acme := identity.NamespaceObject("acme")
+	bot := identity.PrincipalObject("bot-acme")
+
+	assertInstallationCases(t, authz, []installationCase{
+		{name: "namespace", subject: "site", action: identity.ActionNamespaceRead, obj: acme, want: true},
+		{name: "unit", subject: "site", action: identity.ActionUnitRead, obj: web, want: true},
+		{
+			name: "principal in namespace", subject: "tok", action: identity.ActionPrincipalManageTokens,
+			obj: bot, want: true,
+		},
+	})
+}
+
+// testInstallationReachOperators checks that the operator actions of a grant on
+// the installation stay on the installation while the setting is false: the
+// operator action on the installation and the token of a principal of the
+// installation.
+func testInstallationReachOperators(t *testing.T, s access.Store) {
+	t.Helper()
+
+	rs := reachStores(t, s)
+	installationCallers(t, rs)
+	mustCreatePerson(t, rs, "prn-ops", "ops")
+	mustCreateGrant(t, rs, newGrant("grt-ops", principalSubject("prn-ops"), access.RoleInstallationOperator,
+		identity.ServerObject()))
+	authz := installationAuthorizer(t, rs, false)
+
+	site := identity.PrincipalObject("prn-site")
+
+	assertInstallationCases(t, authz, []installationCase{
+		{
+			name: "operator action on the installation", subject: "ops", action: identity.ActionServerBackup,
+			obj: identity.ServerObject(), want: true,
+		},
+		{
+			name: "token of an installation principal", subject: "tok", action: identity.ActionPrincipalManageTokens,
+			obj: site, want: true,
+		},
+	})
+}
+
+// testInstallationReachNamespaceGrant checks that a grant on a namespace still
+// gives its actions inside that namespace while the setting is false, and that
+// it gives none on another namespace.
+func testInstallationReachNamespaceGrant(t *testing.T, s access.Store) {
+	t.Helper()
+
+	rs := reachStores(t, s)
+	mustCreatePerson(t, rs, "prn-ns", "ns")
+	mustCreateGrant(t, rs, newGrant("grt-ns", principalSubject("prn-ns"), access.RoleViewer,
+		identity.NamespaceObject("acme")))
+
+	web, err := identity.UnitObject("pulumi", "acme", "web/prod")
+	if err != nil {
+		t.Fatalf("unit object: %v", err)
+	}
+
+	other, err := identity.UnitObject("pulumi", "beta", "web/prod")
+	if err != nil {
+		t.Fatalf("unit object: %v", err)
+	}
+
+	authz := installationAuthorizer(t, rs, false)
+	acme := identity.NamespaceObject("acme")
+
+	assertInstallationCases(t, authz, []installationCase{
+		{name: "unit of the namespace", subject: "ns", action: identity.ActionUnitRead, obj: web, want: true},
+		{name: "namespace", subject: "ns", action: identity.ActionNamespaceRead, obj: acme, want: true},
+		{name: "unit of another namespace", subject: "ns", action: identity.ActionUnitRead, obj: other, want: false},
+	})
+}
+
+// installationCallers stores the callers of the installation cases: a
+// person with a viewer grant on the installation, a token manager of the
+// installation, and a service principal of the namespace acme.
+func installationCallers(t *testing.T, rs reachStore) {
+	t.Helper()
+
+	mustCreatePerson(t, rs, "prn-site", "site")
+	mustCreateGrant(t, rs, newGrant("grt-site", principalSubject("prn-site"), access.RoleViewer,
+		identity.ServerObject()))
+	mustCreatePerson(t, rs, "prn-tok", "tok")
+	mustCreateGrant(t, rs, newGrant("grt-tok", principalSubject("prn-tok"), access.RoleTokenManager,
+		identity.ServerObject()))
+	mustCreateBot(t, rs, "bot-acme", "bot-acme", "acme")
+}
+
 // testReachConfigPorts checks that ReachOf, GroupReachOf and Protected
 // refuse a config that lacks a required port, one port at a time.
 func testReachConfigPorts(t *testing.T, s access.Store) {
@@ -1605,31 +1820,38 @@ func testReachConfigPorts(t *testing.T, s access.Store) {
 		cfg  access.ReachConfig
 	}{
 		{
+			name: "settings",
+			cfg: access.ReachConfig{
+				Grants: full.Grants, Roles: full.Roles, Callers: full.Callers, Principals: full.Principals,
+				Collections: full.Collections, Units: full.Units, Settings: nil,
+			},
+		},
+		{
 			name: "grants",
 			cfg: access.ReachConfig{
 				Grants: nil, Roles: full.Roles, Callers: full.Callers, Principals: full.Principals,
-				Collections: full.Collections, Units: full.Units,
+				Collections: full.Collections, Units: full.Units, Settings: full.Settings,
 			},
 		},
 		{
 			name: "roles",
 			cfg: access.ReachConfig{
 				Grants: full.Grants, Roles: nil, Callers: full.Callers, Principals: full.Principals,
-				Collections: full.Collections, Units: full.Units,
+				Collections: full.Collections, Units: full.Units, Settings: full.Settings,
 			},
 		},
 		{
 			name: "callers",
 			cfg: access.ReachConfig{
 				Grants: full.Grants, Roles: full.Roles, Callers: nil, Principals: full.Principals,
-				Collections: full.Collections, Units: full.Units,
+				Collections: full.Collections, Units: full.Units, Settings: full.Settings,
 			},
 		},
 		{
 			name: "principals",
 			cfg: access.ReachConfig{
 				Grants: full.Grants, Roles: full.Roles, Callers: full.Callers, Principals: nil,
-				Collections: full.Collections, Units: full.Units,
+				Collections: full.Collections, Units: full.Units, Settings: full.Settings,
 			},
 		},
 	}
