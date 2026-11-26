@@ -47,6 +47,9 @@ jobs:
           ref: ${{ github.ref }}
           persist-credentials: false
 
+      # Defense in depth: the job guard accepts each tag that starts with v,
+      # and the build script has its own version allowlist; this step stays
+      # so that the job does not rely on the job guard or on the build script.
       - name: Check that the tag is a final version tag
         env:
           TAG: ${{ github.ref_name }}

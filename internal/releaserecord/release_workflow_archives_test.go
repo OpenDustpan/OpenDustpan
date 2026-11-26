@@ -2,6 +2,7 @@ package releaserecord_test
 
 import (
 	"errors"
+	"io/fs"
 	"os"
 	"regexp"
 	"slices"
@@ -20,6 +21,7 @@ var (
 	errBothHoldArchivesJob = errors.New(
 		"both .github-workflows-staging/release.yml and .github/workflows/release.yml hold the archives-build job: the staged copy was left behind",
 	)
+	errReadDenied              = errors.New("permission denied")
 	errNeitherHoldsArchivesJob = errors.New(
 		".github-workflows-staging/release.yml does not exist and .github/workflows/release.yml does not hold the archives-build job",
 	)
@@ -39,35 +41,60 @@ func workflowHoldsArchivesBuild(raw []byte) bool {
 	return ok
 }
 
-// chooseWorkflowFile applies the guard rule for the two workflow paths: while
-// the staged copy exists, it is the file checked in full, whatever it holds,
-// so a staged copy without the archives-build job fails through its
-// missing-job finding. With no staged copy, the live file is checked when it
-// holds the job. It fails when both hold the job (a move that left the staged
-// copy behind), and when there is no staged copy and the live file has no
-// job. No path is skipped, so the guard is not fail-open.
-func chooseWorkflowFile(stagedExists bool, stagedRaw, liveRaw []byte) (string, []byte, error) {
+// workflowSource is one workflow file that the checker reads in full.
+type workflowSource struct {
+	path string
+	raw  []byte
+}
+
+// chooseWorkflowFile applies the guard rule for the two workflow paths. It
+// returns each file that the checker must read in full; the first one is the
+// primary file. While the staged copy exists, it is the primary file, whatever
+// it holds, so a staged copy without the archives-build job fails through its
+// missing-job finding. The live file is also checked when it holds the job,
+// so a weak live guard cannot hide behind a staged copy. With no staged copy,
+// the live file is checked when it holds the job. It fails when both hold the
+// job (a move that left the staged copy behind), and when there is no staged
+// copy and the live file has no job. No path is skipped, so the guard is not
+// fail-open.
+func chooseWorkflowFile(stagedExists bool, stagedRaw, liveRaw []byte) ([]workflowSource, error) {
 	liveHolds := workflowHoldsArchivesBuild(liveRaw)
+	live := workflowSource{liveWorkflowPath, liveRaw}
 
 	switch {
 	case stagedExists && liveHolds && workflowHoldsArchivesBuild(stagedRaw):
-		return "", nil, errBothHoldArchivesJob
+		return nil, errBothHoldArchivesJob
+	case stagedExists && liveHolds:
+		return []workflowSource{{stagedWorkflowPath, stagedRaw}, live}, nil
 	case stagedExists:
-		return stagedWorkflowPath, stagedRaw, nil
+		return []workflowSource{{stagedWorkflowPath, stagedRaw}}, nil
 	case liveHolds:
-		return liveWorkflowPath, liveRaw, nil
+		return []workflowSource{live}, nil
 	default:
-		return "", nil, errNeitherHoldsArchivesJob
+		return nil, errNeitherHoldsArchivesJob
 	}
 }
 
-// releaseWorkflowBytes returns the path and the bytes of the patched release
-// workflow. The operator rule keeps the workflow change in
+// readOptionalWorkflow reads a file that may be absent. Only a missing file
+// counts as absent; any other read error is returned, so an unreadable file
+// is never skipped.
+func readOptionalWorkflow(read func(string) ([]byte, error), path string) ([]byte, bool, error) {
+	raw, err := read(path)
+	if err == nil {
+		return raw, true, nil
+	}
+
+	if errors.Is(err, fs.ErrNotExist) {
+		return nil, false, nil
+	}
+
+	return nil, false, err
+}
+
+// releaseWorkflowSources returns each patched release workflow file that
+// the checker reads in full. The operator rule keeps the workflow change in
 // .github-workflows-staging/ until a person moves it into .github/workflows/.
-// Before the move the live file has no archives job, so nothing of that job
-// is live yet: the staged copy is checked in full while it exists, and the
-// live file is checked in full when no staged copy exists.
-func releaseWorkflowBytes(t *testing.T) (string, []byte) {
+func releaseWorkflowSources(t *testing.T) []workflowSource {
 	t.Helper()
 
 	root, openErr := os.OpenRoot("../..")
@@ -81,13 +108,9 @@ func releaseWorkflowBytes(t *testing.T) (string, []byte) {
 		}
 	}()
 
-	var stagedRaw []byte
-
-	stagedExists := false
-
-	if staged, readErr := root.ReadFile(stagedWorkflowPath); readErr == nil {
-		stagedRaw = staged
-		stagedExists = true
+	stagedRaw, stagedExists, stagedErr := readOptionalWorkflow(root.ReadFile, stagedWorkflowPath)
+	if stagedErr != nil {
+		t.Fatal(stagedErr)
 	}
 
 	liveRaw, readErr := root.ReadFile(liveWorkflowPath)
@@ -95,14 +118,26 @@ func releaseWorkflowBytes(t *testing.T) (string, []byte) {
 		t.Fatal(readErr)
 	}
 
-	path, raw, chooseErr := chooseWorkflowFile(stagedExists, stagedRaw, liveRaw)
+	sources, chooseErr := chooseWorkflowFile(stagedExists, stagedRaw, liveRaw)
 	if chooseErr != nil {
 		t.Fatal(chooseErr)
 	}
 
-	t.Logf("checking workflow file: %s", path)
+	for _, src := range sources {
+		t.Logf("checking workflow file: %s", src.path)
+	}
 
-	return path, raw
+	return sources
+}
+
+// releaseWorkflowBytes returns the path and the bytes of the primary file of
+// the patched release workflow.
+func releaseWorkflowBytes(t *testing.T) (string, []byte) {
+	t.Helper()
+
+	sources := releaseWorkflowSources(t)
+
+	return sources[0].path, sources[0].raw
 }
 
 // workflowStep is one step of a job of the release workflow.
@@ -205,15 +240,36 @@ func checkWorkflowTriggers(path string, wf workflowFile) []string {
 	return out
 }
 
-// checkWorkflowFilePermissions checks that no job inherits a permission.
-func checkWorkflowFilePermissions(path string, wf workflowFile) []string {
-	out := make([]string, 0, len(wf.Permissions))
-
-	for k, v := range wf.Permissions {
-		out = append(out, "workflow "+path+": permissions: the file grants "+k+": "+v+", want empty")
+// checkWorkflowFilePermissions checks that no job inherits a permission. It
+// reads the YAML node, not a decoded map, because a decoded map cannot tell an
+// absent key from an empty mapping: the top-level permissions key must be
+// present and its value must be an empty mapping.
+func checkWorkflowFilePermissions(path string, doc *yaml.Node) []string {
+	top := doc
+	if top.Kind == yaml.DocumentNode && len(top.Content) > 0 {
+		top = top.Content[0]
 	}
 
-	return out
+	if top.Kind != yaml.MappingNode {
+		return []string{"workflow " + path + ": permissions: the file is not a mapping"}
+	}
+
+	for i := 0; i+1 < len(top.Content); i += 2 {
+		if top.Content[i].Value != "permissions" {
+			continue
+		}
+
+		value := top.Content[i+1]
+		if value.Kind == yaml.MappingNode && len(value.Content) == 0 {
+			return nil
+		}
+
+		return []string{"workflow " + path + ": permissions: the file grants a permission, want an empty mapping"}
+	}
+
+	return []string{
+		"workflow " + path + ": permissions: the file has no top-level permissions key, want an empty mapping",
+	}
 }
 
 // checkWorkflowJobPresence checks that the four jobs exist.
@@ -614,10 +670,15 @@ func releaseWorkflowFindings(path string, raw []byte) []string {
 		return []string{"workflow " + path + ": the release workflow does not parse: " + err.Error()}
 	}
 
+	var doc yaml.Node
+	if err := yaml.Unmarshal(raw, &doc); err != nil {
+		return []string{"workflow " + path + ": the release workflow does not parse: " + err.Error()}
+	}
+
 	var findings []string
 
 	findings = append(findings, checkWorkflowTriggers(path, wf)...)
-	findings = append(findings, checkWorkflowFilePermissions(path, wf)...)
+	findings = append(findings, checkWorkflowFilePermissions(path, &doc)...)
 	findings = append(findings, checkWorkflowJobPresence(wf)...)
 
 	publishGuard := wf.Jobs["publish"].If
@@ -702,10 +763,13 @@ func checkActorBeforeDownload(t *testing.T, wf workflowFile) {
 func TestReleaseWorkflowArchiveJobs(t *testing.T) {
 	t.Parallel()
 
-	path, raw := releaseWorkflowBytes(t)
-	if findings := releaseWorkflowFindings(path, raw); len(findings) != 0 {
-		t.Fatalf("the release workflow has %d findings:\n%s", len(findings), strings.Join(findings, "\n"))
+	for _, src := range releaseWorkflowSources(t) {
+		if findings := releaseWorkflowFindings(src.path, src.raw); len(findings) != 0 {
+			t.Fatalf("the release workflow has %d findings:\n%s", len(findings), strings.Join(findings, "\n"))
+		}
 	}
+
+	_, raw := releaseWorkflowBytes(t)
 
 	var wf workflowFile
 	if err := yaml.Unmarshal(raw, &wf); err != nil {
@@ -802,6 +866,22 @@ func workflowMutations() []workflowMutation {
 			"permissions",
 			func(s string) string {
 				return strings.Replace(s, "permissions: {}", "permissions:\n  contents: write", 1)
+			},
+		},
+		{
+			"the file permissions line deleted",
+			"workflow",
+			"permissions",
+			func(s string) string {
+				return strings.Replace(s, "permissions: {}\n", "", 1)
+			},
+		},
+		{
+			"a non-empty file permissions map",
+			"workflow",
+			"permissions",
+			func(s string) string {
+				return strings.Replace(s, "permissions: {}", "permissions:\n  contents: read", 1)
 			},
 		},
 		{
@@ -1125,113 +1205,162 @@ func TestReleaseWorkflowCheckerRefusesWeakWorkflows(t *testing.T) {
 	}
 }
 
-// sourceGuardCase is one case of the guard rule for the two workflow paths.
-type sourceGuardCase struct {
-	name           string
-	stagedExists   bool
-	stagedRaw      []byte
-	liveRaw        []byte
-	wantPath       string
-	wantErr        bool
-	wantMissingJob bool
+// sourceWant is what the checker must report for one file that
+// chooseWorkflowFile returns.
+type sourceWant struct {
+	path       string
+	missingJob bool
+	finding    string
 }
 
-// checkSourceGuardCase runs chooseWorkflowFile and the checker on one case.
+// sourceGuardCase is one case of the guard rule for the two workflow paths.
+type sourceGuardCase struct {
+	name         string
+	stagedExists bool
+	stagedRaw    []byte
+	liveRaw      []byte
+	want         []sourceWant
+	wantErr      error
+}
+
+// checkSourceGuardCase runs chooseWorkflowFile and then the checker on each
+// file that it returns.
 func checkSourceGuardCase(t *testing.T, tc sourceGuardCase) {
 	t.Helper()
 
-	path, raw, err := chooseWorkflowFile(tc.stagedExists, tc.stagedRaw, tc.liveRaw)
-	if tc.wantErr {
-		if err == nil {
-			t.Fatalf("want an error, got path %q", path)
+	sources, err := chooseWorkflowFile(tc.stagedExists, tc.stagedRaw, tc.liveRaw)
+	if tc.wantErr != nil {
+		if !errors.Is(err, tc.wantErr) {
+			t.Fatalf("want error %v, got %v and %d files", tc.wantErr, err, len(sources))
 		}
 
 		return
 	}
 
 	if err != nil {
-		t.Fatalf("want path %q, got error: %v", tc.wantPath, err)
+		t.Fatalf("want %d files, got error: %v", len(tc.want), err)
 	}
 
-	if path != tc.wantPath {
-		t.Errorf("want path %q, got %q", tc.wantPath, path)
+	if len(sources) != len(tc.want) {
+		t.Fatalf("want %d files, got %d", len(tc.want), len(sources))
 	}
 
 	missing := "job archives-build: workflow guard: the job is missing"
-	gotMissing := slices.Contains(releaseWorkflowFindings(path, raw), missing)
 
-	if gotMissing != tc.wantMissingJob {
-		t.Errorf("want missing-job finding %t, got %t", tc.wantMissingJob, gotMissing)
+	for i, src := range sources {
+		want := tc.want[i]
+		if src.path != want.path {
+			t.Fatalf("file %d: want path %q, got %q", i, want.path, src.path)
+		}
+
+		findings := releaseWorkflowFindings(src.path, src.raw)
+
+		if got := slices.Contains(findings, missing); got != want.missingJob {
+			t.Errorf("%s: want missing-job finding %t, got %t", src.path, want.missingJob, got)
+		}
+
+		if want.finding != "" && !slices.Contains(findings, want.finding) {
+			t.Errorf("%s: want finding %q, got %q", src.path, want.finding, findings)
+		}
+	}
+}
+
+// TestReadOptionalWorkflow checks that only a missing file counts as absent.
+func TestReadOptionalWorkflow(t *testing.T) {
+	t.Parallel()
+
+	missing := func(string) ([]byte, error) { return nil, fs.ErrNotExist }
+	denied := func(string) ([]byte, error) { return nil, errReadDenied }
+	readable := func(string) ([]byte, error) { return []byte("a"), nil }
+
+	if _, exists, err := readOptionalWorkflow(missing, "x"); err != nil || exists {
+		t.Errorf("a missing file: want absent and no error, got exists %t, error %v", exists, err)
 	}
 
-	t.Logf("checked workflow file: %s", path)
+	if _, _, err := readOptionalWorkflow(denied, "x"); !errors.Is(err, errReadDenied) {
+		t.Errorf("an unreadable file: want the read error, got %v", err)
+	}
+
+	if raw, exists, err := readOptionalWorkflow(readable, "x"); err != nil || !exists || string(raw) != "a" {
+		t.Errorf("a readable file: got %q, %t, %v", raw, exists, err)
+	}
 }
 
 // TestReleaseWorkflowSourceGuard checks the guard rule for the two workflow
 // paths: while the staged copy exists, it is the file checked in full, and a
 // staged copy without the archives-build job fails through its missing-job
 // finding. With no staged copy, the live file is checked. Both holding the
-// job fails, and no staged copy with a live file without the job fails.
+// job fails, and no staged copy with a live file without the job fails. The
+// checker runs on each file that is returned, so a weak live file gives its
+// own findings.
 func TestReleaseWorkflowSourceGuard(t *testing.T) {
 	t.Parallel()
 
-	withJob := "jobs:\n  archives-build:\n    runs-on: ubuntu-26.04\n"
-	withoutJob := "jobs:\n  publish:\n    runs-on: ubuntu-26.04\n"
+	_, clean := releaseWorkflowBytes(t)
+	weakJob := []byte("jobs:\n  archives-build:\n    runs-on: ubuntu-26.04\n")
+	withoutJob := []byte("jobs:\n  publish:\n    runs-on: ubuntu-26.04\n")
+	noGuard := "job archives-build: workflow guard: the job has no guard"
+
+	stagedNoGuard := sourceWant{path: stagedWorkflowPath, missingJob: false, finding: noGuard}
+	stagedMissing := sourceWant{path: stagedWorkflowPath, missingJob: true, finding: ""}
+	liveNoGuard := sourceWant{path: liveWorkflowPath, missingJob: false, finding: noGuard}
 
 	cases := []sourceGuardCase{
 		{
-			"only staged holds the job",
-			true,
-			[]byte(withJob),
-			[]byte(withoutJob),
-			stagedWorkflowPath,
-			false,
-			false,
+			name:         "only staged holds the job",
+			stagedExists: true,
+			stagedRaw:    weakJob,
+			liveRaw:      withoutJob,
+			want:         []sourceWant{stagedNoGuard},
+			wantErr:      nil,
 		},
 		{
-			"only live holds it",
-			false,
-			nil,
-			[]byte(withJob),
-			liveWorkflowPath,
-			false,
-			false,
+			name:         "only live holds it",
+			stagedExists: false,
+			stagedRaw:    nil,
+			liveRaw:      weakJob,
+			want:         []sourceWant{liveNoGuard},
+			wantErr:      nil,
 		},
 		{
-			"live holds it and a staged copy without the job is left",
-			true,
-			[]byte(withoutJob),
-			[]byte(withJob),
-			stagedWorkflowPath,
-			false,
-			true,
+			name:         "live holds it and a staged copy without the job is left",
+			stagedExists: true,
+			stagedRaw:    withoutJob,
+			liveRaw:      weakJob,
+			want:         []sourceWant{stagedMissing, liveNoGuard},
+			wantErr:      nil,
 		},
 		{
-			"neither holds the job and the staged copy exists",
-			true,
-			[]byte(withoutJob),
-			[]byte(withoutJob),
-			stagedWorkflowPath,
-			false,
-			true,
+			name:         "neither holds the job and the staged copy exists",
+			stagedExists: true,
+			stagedRaw:    withoutJob,
+			liveRaw:      withoutJob,
+			want:         []sourceWant{stagedMissing},
+			wantErr:      nil,
 		},
 		{
-			"no staged copy and the live file has no job",
-			false,
-			nil,
-			[]byte(withoutJob),
-			"",
-			true,
-			false,
+			name:         "no staged copy and the live file has no job",
+			stagedExists: false,
+			stagedRaw:    nil,
+			liveRaw:      withoutJob,
+			want:         nil,
+			wantErr:      errNeitherHoldsArchivesJob,
 		},
 		{
-			"both hold it",
-			true,
-			[]byte(withJob),
-			[]byte(withJob),
-			"",
-			true,
-			false,
+			name:         "both hold it",
+			stagedExists: true,
+			stagedRaw:    weakJob,
+			liveRaw:      weakJob,
+			want:         nil,
+			wantErr:      errBothHoldArchivesJob,
+		},
+		{
+			name:         "a clean staged copy and a weak live file",
+			stagedExists: true,
+			stagedRaw:    clean,
+			liveRaw:      weakJob,
+			want:         nil,
+			wantErr:      errBothHoldArchivesJob,
 		},
 	}
 
