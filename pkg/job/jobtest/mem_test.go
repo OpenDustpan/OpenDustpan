@@ -819,7 +819,7 @@ func (m *memDB) admit(j *job.Job, d *durable.StartRequest, fence namespace.Fence
 		return job.ErrInvalid
 	}
 
-	return nil
+	return m.checkCreateNoneKind(j)
 }
 
 // byKey returns the job that the idempotency key of j already names, as
@@ -1043,6 +1043,29 @@ func checkDestroyProof(j *job.Job, ap *job.Approval, kind identity.Kind, now tim
 	if ap.Verdict != job.VerdictApprove || ap.Agent != "" || ap.Auth != job.ConfirmAuthMFA || ap.AuthAt.IsZero() ||
 		ap.AuthAt.After(ap.At) || ap.At.After(now) || now.Sub(ap.AuthAt) > job.ConfirmFreshness {
 		return job.ErrAuthStale
+	}
+
+	return nil
+}
+
+// checkCreateNoneKind refuses an approval of a destroy with the authentication
+// none unless the approver is a person. A subject with no principal row has
+// the zero kind, so it is refused too.
+//
+// Defense in depth: the handler and the service check the kind too. This
+// check stays so that a direct caller of Create cannot store the approval.
+func (m *memDB) checkCreateNoneKind(j *job.Job) error {
+	if j.Spec.Operation != job.OperationDestroy {
+		return nil
+	}
+
+	for i := range j.Phases {
+		for k := range j.Phases[i].Approvals {
+			ap := &j.Phases[i].Approvals[k]
+			if ap.Auth == job.ConfirmAuthNone && m.principals[ap.Subject] != identity.KindPerson {
+				return job.ErrAuthStale
+			}
+		}
 	}
 
 	return nil

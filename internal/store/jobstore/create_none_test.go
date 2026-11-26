@@ -12,6 +12,9 @@ import (
 	"opendustpan.org/opendustpan/pkg/namespace"
 )
 
+// errPrincipalLookup is the lookup error of lookupErrTx.
+var errPrincipalLookup = errors.New("principal lookup failed")
+
 // createTx is a jobstore.Tx for Create. It counts no open job and stores each
 // inserted row in the embedded fake, so the write path of Create runs. The
 // principals come from the embedded kindTx.
@@ -25,37 +28,68 @@ func (createTx) CountOpen(context.Context, namespace.Name, string) (int, error) 
 // InsertJob implements jobstore.Tx.
 func (createTx) InsertJob(context.Context, jobstore.Row) error { return nil }
 
-// TestCreateStoresNoneAuthApprovals proves that Create stores an approval with
-// the authentication none for each operation and each approver kind. With the
-// setting off the gate opens on such a job, so Create does not refuse it. The
-// reconcile gate and Apply decide what the approval is worth.
-func TestCreateStoresNoneAuthApprovals(t *testing.T) {
+// lookupErrTx is a jobstore.Tx whose principal lookup fails.
+type lookupErrTx struct {
+	createTx
+}
+
+// PrincipalKind implements jobstore.Tx: the lookup fails.
+func (lookupErrTx) PrincipalKind(context.Context, string) (identity.Kind, bool, error) {
+	return "", false, errPrincipalLookup
+}
+
+// TestCreateNoneAuthKinds proves that Create refuses an approval of a destroy
+// with the authentication none unless the approver is a person. The setting is
+// off, so the kind is the only rule that can refuse. Create accepts the none
+// authentication for another operation, because the gate opens on such a job
+// when the setting is off, and Apply and the reconcile gate decide what the
+// approval is worth.
+func TestCreateNoneAuthKinds(t *testing.T) {
 	t.Parallel()
 
 	const subject = "ada"
 
 	tests := []struct {
-		name    string
-		kind    identity.Kind
-		op      job.Operation
-		auth    job.ConfirmAuth
-		wantErr error
+		name      string
+		kind      identity.Kind
+		hasRow    bool
+		lookupErr bool
+		op        job.Operation
+		auth      job.ConfirmAuth
+		wantErr   error
 	}{
 		{
-			name: "person with none on a destroy accepted", kind: identity.KindPerson,
-			op: job.OperationDestroy, auth: job.ConfirmAuthNone, wantErr: nil,
+			name: "person with none on a destroy accepted", kind: identity.KindPerson, hasRow: true,
+			lookupErr: false, op: job.OperationDestroy, auth: job.ConfirmAuthNone, wantErr: nil,
 		},
 		{
-			name: "person with none on an apply accepted", kind: identity.KindPerson,
-			op: job.OperationApply, auth: job.ConfirmAuthNone, wantErr: nil,
+			// Apply refuses none outside a destroy; Create accepts it so that the setting-off scenario stays reachable.
+			name: "person with none on an apply accepted", kind: identity.KindPerson, hasRow: true,
+			lookupErr: false, op: job.OperationApply, auth: job.ConfirmAuthNone, wantErr: nil,
 		},
 		{
-			name: "service with none on a destroy accepted", kind: identity.KindService,
-			op: job.OperationDestroy, auth: job.ConfirmAuthNone, wantErr: nil,
+			name: "person with fresh MFA on an apply accepted", kind: identity.KindPerson, hasRow: true,
+			lookupErr: false, op: job.OperationApply, auth: job.ConfirmAuthMFA, wantErr: nil,
 		},
 		{
-			name: "person with fresh MFA on an apply accepted", kind: identity.KindPerson,
-			op: job.OperationApply, auth: job.ConfirmAuthMFA, wantErr: nil,
+			name: "service with none on a destroy refused", kind: identity.KindService, hasRow: true,
+			lookupErr: false, op: job.OperationDestroy, auth: job.ConfirmAuthNone, wantErr: job.ErrAuthStale,
+		},
+		{
+			name: "workload with none on a destroy refused", kind: identity.KindWorkload, hasRow: true,
+			lookupErr: false, op: job.OperationDestroy, auth: job.ConfirmAuthNone, wantErr: job.ErrAuthStale,
+		},
+		{
+			name: "agent with none on a destroy refused", kind: identity.KindAgent, hasRow: true,
+			lookupErr: false, op: job.OperationDestroy, auth: job.ConfirmAuthNone, wantErr: job.ErrAuthStale,
+		},
+		{
+			name: "principal not found with none on a destroy refused", kind: "", hasRow: false,
+			lookupErr: false, op: job.OperationDestroy, auth: job.ConfirmAuthNone, wantErr: job.ErrAuthStale,
+		},
+		{
+			name: "lookup error with none on a destroy refused", kind: identity.KindPerson, hasRow: true,
+			lookupErr: true, op: job.OperationDestroy, auth: job.ConfirmAuthNone, wantErr: job.ErrAuthStale,
 		},
 	}
 
@@ -76,11 +110,22 @@ func TestCreateStoresNoneAuthApprovals(t *testing.T) {
 				j.Phases[0].Approvals[0].AuthAt = now
 			}
 
-			fake := newFakeTx(now)
-			base := settingTx{fakeTx: fake, settings: map[string]string{"freshAuthEnabled": "false"}, err: nil}
-			principals := map[string]identity.Kind{subject: tc.kind}
+			principals := map[string]identity.Kind{}
+			if tc.hasRow {
+				principals[subject] = tc.kind
+			}
 
-			tx := createTx{kindTx{settingTx: base, principals: principals}}
+			base := settingTx{
+				fakeTx:   newFakeTx(now),
+				settings: map[string]string{"freshAuthEnabled": "false"},
+				err:      nil,
+			}
+			ct := createTx{kindTx{settingTx: base, principals: principals}}
+
+			var tx jobstore.Tx = ct
+			if tc.lookupErr {
+				tx = lookupErrTx{ct}
+			}
 
 			s := jobstore.New(changingRunner{tx: tx, beforeWrite: func() {}})
 

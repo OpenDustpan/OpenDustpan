@@ -161,6 +161,43 @@ func (s *Store) Create(ctx context.Context, j job.Job, d *durable.StartRequest, 
 	}
 }
 
+// checkCreateNoneKind refuses an approval of a destroy with the authentication
+// none unless the approver is a person. Create writes the approvals of a job as
+// given, so the kind of each approver is read here, in the write transaction,
+// before the insert. A principal that is not found, a kind that is not a
+// person, and a failed lookup are all refused. The lookup error is not
+// returned, so no driver error reaches the caller.
+//
+// Defense in depth: the handler and the service check the kind too, and Apply
+// checks it again for each later approval. This check stays so that a new
+// caller of Create cannot store the approval.
+//
+// Apply refuses the authentication none on a job that is not a destroy
+// (checkNoneAuth). Create accepts it on such a job, so that the scenario with
+// no step and the setting off stays reachable.
+func checkCreateNoneKind(ctx context.Context, tx Tx, j *job.Job) error {
+	if j.Spec.Operation != job.OperationDestroy {
+		return nil
+	}
+
+	for i := range j.Phases {
+		for k := range j.Phases[i].Approvals {
+			ap := &j.Phases[i].Approvals[k]
+			if ap.Auth != job.ConfirmAuthNone {
+				continue
+			}
+
+			kind, found, err := tx.PrincipalKind(ctx, ap.Subject)
+			if err != nil || !found || kind != identity.KindPerson {
+				return fmt.Errorf("%w: a destroy with the authentication none needs an approval by a person",
+					job.ErrAuthStale)
+			}
+		}
+	}
+
+	return nil
+}
+
 // createIn stores j in the transaction tx, or returns the job that its
 // idempotency key already names.
 func createIn(ctx context.Context, tx Tx, j *job.Job, d *durable.StartRequest, e []audit.Entry,
@@ -172,6 +209,10 @@ func createIn(ctx context.Context, tx Tx, j *job.Job, d *durable.StartRequest, e
 
 	if limitErr := checkLimits(ctx, tx, j.Spec.Unit.Namespace(), j.Spec.Unit.UnitID()); limitErr != nil {
 		return job.Job{}, false, limitErr
+	}
+
+	if kindErr := checkCreateNoneKind(ctx, tx, j); kindErr != nil {
+		return job.Job{}, false, kindErr
 	}
 
 	now, err := tx.Now(ctx)
