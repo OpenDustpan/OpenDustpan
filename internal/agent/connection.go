@@ -11,6 +11,7 @@ import (
 	"net/url"
 	"slices"
 	"strings"
+	"time"
 
 	"opendustpan.org/opendustpan/internal/ident"
 	"opendustpan.org/opendustpan/internal/textbody"
@@ -64,6 +65,11 @@ const (
 	// maxRateLimitWaitHeaders is the largest count of the entries of
 	// rateLimit.waitHeaders.
 	maxRateLimitWaitHeaders = 8
+	// maxCacheTTLBytes is the largest length of cache.ttl, in bytes.
+	maxCacheTTLBytes = 32
+	// maxListEntryBytes is the largest length of one entry of a list field,
+	// in bytes.
+	maxListEntryBytes = 128
 	// maxUserAgentBytes is the largest length of userAgent, in bytes.
 	maxUserAgentBytes = 200
 	// maxProviderFieldsBytes is the largest length of providerFields, in
@@ -419,6 +425,10 @@ func setBodyFields(c *ConnectionSpec, doc connectionDoc) error {
 		return err
 	}
 
+	if doc.ContextTokens < 0 {
+		return fmt.Errorf("%w: contextTokens cannot be below 0", ErrConnectionInvalid)
+	}
+
 	c.outputTokens = ot
 	c.contextTokens = doc.ContextTokens
 
@@ -489,8 +499,8 @@ func setTailFields(c *ConnectionSpec, doc connectionDoc) error {
 		return fmt.Errorf("%w: requestIDHeaders holds at most %d entries", ErrConnectionInvalid, maxRequestIDHeaders)
 	}
 
-	if slices.Contains(doc.RequestIDHeaders, "") {
-		return fmt.Errorf("%w: requestIDHeaders holds an empty name", ErrConnectionInvalid)
+	if err := checkHeaderNameEntries("requestIDHeaders", doc.RequestIDHeaders); err != nil {
+		return err
 	}
 
 	c.requestIDHeaders = slicesClone(doc.RequestIDHeaders)
@@ -1117,6 +1127,10 @@ func parseOutputTokens(raw json.RawMessage) (outputTokensSpec, error) {
 		return ot, fmt.Errorf("%w: outputTokens needs a field", ErrConnectionInvalid)
 	}
 
+	if formed.Max < 0 {
+		return ot, fmt.Errorf("%w: outputTokens.max cannot be below 0", ErrConnectionInvalid)
+	}
+
 	ot.field = formed.Field
 	ot.max = formed.Max
 
@@ -1176,6 +1190,10 @@ func parseReasoning(raw json.RawMessage) (reasoningSpec, error) {
 		return r, fmt.Errorf("%w: reasoning.keep holds more than %d entries", ErrConnectionInvalid, maxReasoningKeep)
 	}
 
+	if err := checkListEntries("reasoning.keep", formed.Keep); err != nil {
+		return r, err
+	}
+
 	r.keep = formed.Keep
 
 	return r, nil
@@ -1203,10 +1221,65 @@ func parseCache(raw json.RawMessage) (cacheSpec, error) {
 		return c, fmt.Errorf("%w: cache.mode must be none, automatic or breakpoints", ErrConnectionInvalid)
 	}
 
+	if err := checkCacheTTL(formed.TTL); err != nil {
+		return c, err
+	}
+
 	c.mode = formed.Mode
 	c.ttl = formed.TTL
 
 	return c, nil
+}
+
+// checkCacheTTL accepts an empty ttl or a positive duration such as 5m or 1h,
+// no longer than maxCacheTTLBytes.
+func checkCacheTTL(ttl string) error {
+	if ttl == "" {
+		return nil
+	}
+
+	if len(ttl) > maxCacheTTLBytes {
+		return fmt.Errorf("%w: cache.ttl is longer than %d bytes", ErrConnectionInvalid, maxCacheTTLBytes)
+	}
+
+	d, err := time.ParseDuration(ttl)
+	if err != nil || d <= 0 {
+		return fmt.Errorf("%w: cache.ttl must be empty or a duration such as 5m or 1h", ErrConnectionInvalid)
+	}
+
+	return nil
+}
+
+// checkListEntries refuses an empty entry and an entry above
+// maxListEntryBytes.
+func checkListEntries(field string, entries []string) error {
+	for _, e := range entries {
+		if e == "" {
+			return fmt.Errorf("%w: %s holds an empty entry", ErrConnectionInvalid, field)
+		}
+
+		if len(e) > maxListEntryBytes {
+			return fmt.Errorf("%w: %s holds an entry above %d bytes", ErrConnectionInvalid, field, maxListEntryBytes)
+		}
+	}
+
+	return nil
+}
+
+// checkHeaderNameEntries applies checkListEntries and refuses an entry that
+// is not a header name.
+func checkHeaderNameEntries(field string, entries []string) error {
+	if err := checkListEntries(field, entries); err != nil {
+		return err
+	}
+
+	for _, e := range entries {
+		if !isHeaderName(e) {
+			return fmt.Errorf("%w: the %s entry %q is not a header name", ErrConnectionInvalid, field, e)
+		}
+	}
+
+	return nil
 }
 
 func parseConversationKey(raw json.RawMessage) (conversationKeySpec, error) {
@@ -1231,6 +1304,18 @@ func parseConversationKey(raw json.RawMessage) (conversationKeySpec, error) {
 			"%w: conversationKey.headers holds more than %d entries",
 			ErrConnectionInvalid,
 			maxConversationKeyHeaders,
+		)
+	}
+
+	if err := checkHeaderNameEntries("conversationKey.headers", formed.Headers); err != nil {
+		return ck, err
+	}
+
+	if len(formed.BodyField) > maxListEntryBytes {
+		return ck, fmt.Errorf(
+			"%w: conversationKey.bodyField is longer than %d bytes",
+			ErrConnectionInvalid,
+			maxListEntryBytes,
 		)
 	}
 
@@ -1296,6 +1381,14 @@ func parseErrors(raw json.RawMessage) (errorsSpec, error) {
 		)
 	}
 
+	if err := checkListEntries("errors.quota", formed.Quota); err != nil {
+		return es, err
+	}
+
+	if err := checkListEntries("errors.contextTooLong", formed.ContextTooLong); err != nil {
+		return es, err
+	}
+
 	es.quota = formed.Quota
 	es.contextTooLong = formed.ContextTooLong
 
@@ -1323,6 +1416,10 @@ func parseRateLimit(raw json.RawMessage) (rateLimitSpec, error) {
 			ErrConnectionInvalid,
 			maxRateLimitWaitHeaders,
 		)
+	}
+
+	if err := checkHeaderNameEntries("rateLimit.waitHeaders", formed.WaitHeaders); err != nil {
+		return rl, err
 	}
 
 	rl.waitHeaders = formed.WaitHeaders

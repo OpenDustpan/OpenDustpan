@@ -119,12 +119,12 @@ func (k AgentSecretItems) Create(
 		Ref: string(ref), Name: name, Ciphertext: sealed, CreatedAtMs: now, ChangedAtMs: now,
 	}
 
-	err = k.s.inTx(ctx, func(q *db.Queries) error {
-		if _, insErr := q.CreateAgentSecretItem(ctx, row); insErr != nil {
+	err = k.s.inServerAuditTx(ctx, func(tx serverAuditTx) error {
+		if _, insErr := tx.q.CreateAgentSecretItem(ctx, row); insErr != nil {
 			return fmt.Errorf("insert secret item: %w", insErr)
 		}
 
-		return appendScopedEntry(ctx, q, &e)
+		return appendScopedServerEntry(ctx, tx, &e)
 	})
 	if err != nil {
 		return agent.SecretItem{}, err
@@ -181,8 +181,8 @@ func (k AgentSecretItems) Replace(
 
 	var out agent.SecretItem
 
-	err = k.s.inTx(ctx, func(q *db.Queries) error {
-		r, repErr := q.ReplaceAgentSecretItem(ctx, db.ReplaceAgentSecretItemParams{
+	err = k.s.inServerAuditTx(ctx, func(tx serverAuditTx) error {
+		r, repErr := tx.q.ReplaceAgentSecretItem(ctx, db.ReplaceAgentSecretItemParams{
 			Ciphertext: sealed, ChangedAtMs: codec.Millis(time.Now().UTC()), Ref: string(ref),
 		})
 		if errors.Is(repErr, pgx.ErrNoRows) {
@@ -195,7 +195,7 @@ func (k AgentSecretItems) Replace(
 
 		out = agentSecretItemOf(r.Ref, r.Name, r.CreatedAtMs, r.ChangedAtMs, r.LastUsedAtMs)
 
-		return appendScopedEntry(ctx, q, &e)
+		return appendScopedServerEntry(ctx, tx, &e)
 	})
 	if err != nil {
 		return agent.SecretItem{}, err
@@ -211,8 +211,8 @@ func (k AgentSecretItems) Delete(ctx context.Context, ref agent.SecretRef, e aud
 		return err
 	}
 
-	return k.s.inTx(ctx, func(q *db.Queries) error {
-		n, err := q.DeleteAgentSecretItem(ctx, string(ref))
+	return k.s.inServerAuditTx(ctx, func(tx serverAuditTx) error {
+		n, err := tx.q.DeleteAgentSecretItem(ctx, string(ref))
 		if isForeignKeyViolation(err) {
 			return agent.ErrSecretInUse
 		}
@@ -225,7 +225,7 @@ func (k AgentSecretItems) Delete(ctx context.Context, ref agent.SecretRef, e aud
 			return agent.ErrSecretNotFound
 		}
 
-		return appendScopedEntry(ctx, q, &e)
+		return appendScopedServerEntry(ctx, tx, &e)
 	})
 }
 
@@ -337,16 +337,16 @@ func (k AgentConnections) PutPending(
 		CreatedAtMs: codec.Millis(time.Now().UTC()),
 	}
 
-	return k.s.inTx(ctx, func(q *db.Queries) error {
-		if err := q.PutAgentConnectionPending(ctx, row); err != nil {
+	return k.s.inServerAuditTx(ctx, func(tx serverAuditTx) error {
+		if err := tx.q.PutAgentConnectionPending(ctx, row); err != nil {
 			return fmt.Errorf("upsert pending connection: %w", err)
 		}
 
-		if err := storeAgentRefs(ctx, q, probe.DocumentRef(), c); err != nil {
+		if err := storeAgentRefs(ctx, tx.q, probe.DocumentRef(), c); err != nil {
 			return err
 		}
 
-		return appendScopedEntry(ctx, q, &e)
+		return appendScopedServerEntry(ctx, tx, &e)
 	})
 }
 
@@ -360,8 +360,8 @@ func (k AgentConnections) Promote(ctx context.Context, probe agent.ProbeRef, e a
 		return err
 	}
 
-	return k.s.inTx(ctx, func(q *db.Queries) error {
-		row, err := q.GetAgentConnectionPending(ctx, string(probe))
+	return k.s.inServerAuditTx(ctx, func(tx serverAuditTx) error {
+		row, err := tx.q.GetAgentConnectionPending(ctx, string(probe))
 		if errors.Is(err, pgx.ErrNoRows) {
 			return agent.ErrNotFound
 		}
@@ -375,11 +375,11 @@ func (k AgentConnections) Promote(ctx context.Context, probe agent.ProbeRef, e a
 			return err
 		}
 
-		if promoteErr := promoteAgentRows(ctx, q, probe, row, spec); promoteErr != nil {
+		if promoteErr := promoteAgentRows(ctx, tx.q, probe, row, spec); promoteErr != nil {
 			return promoteErr
 		}
 
-		return appendScopedEntry(ctx, q, &e)
+		return appendScopedServerEntry(ctx, tx, &e)
 	})
 }
 
@@ -419,8 +419,8 @@ func (k AgentConnections) Delete(ctx context.Context, e audit.Entry) error {
 		return err
 	}
 
-	return k.s.inTx(ctx, func(q *db.Queries) error {
-		n, err := q.DeleteAgentConnectionCurrent(ctx)
+	return k.s.inServerAuditTx(ctx, func(tx serverAuditTx) error {
+		n, err := tx.q.DeleteAgentConnectionCurrent(ctx)
 		if err != nil {
 			return fmt.Errorf("delete connection: %w", err)
 		}
@@ -429,15 +429,15 @@ func (k AgentConnections) Delete(ctx context.Context, e audit.Entry) error {
 			return agent.ErrDisabled
 		}
 
-		if err = q.DeleteAgentConnectionPendingAll(ctx); err != nil {
+		if err = tx.q.DeleteAgentConnectionPendingAll(ctx); err != nil {
 			return fmt.Errorf("delete pending connections: %w", err)
 		}
 
-		if err = q.DeleteAgentSecretRefsAll(ctx); err != nil {
+		if err = tx.q.DeleteAgentSecretRefsAll(ctx); err != nil {
 			return fmt.Errorf("delete reference rows: %w", err)
 		}
 
-		return appendScopedEntry(ctx, q, &e)
+		return appendScopedServerEntry(ctx, tx, &e)
 	})
 }
 
@@ -478,12 +478,12 @@ func (k AgentEgressAllowlist) Set(ctx context.Context, a egress.Allowlist, e aud
 		return err
 	}
 
-	return k.s.inTx(ctx, func(q *db.Queries) error {
-		if err := writeAgentAllowlist(ctx, q, a); err != nil {
+	return k.s.inServerAuditTx(ctx, func(tx serverAuditTx) error {
+		if err := writeAgentAllowlist(ctx, tx.q, a); err != nil {
 			return err
 		}
 
-		return appendScopedEntry(ctx, q, &e)
+		return appendScopedServerEntry(ctx, tx, &e)
 	})
 }
 

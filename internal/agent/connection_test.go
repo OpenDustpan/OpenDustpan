@@ -119,6 +119,76 @@ func TestParseConnectionSpec_Hostile(t *testing.T) {
 			want: agent.ErrConnectionInvalid,
 		},
 		{
+			name: "negative outputTokens max",
+			raw:  strings.Replace(validDocument(), `"max": 8192`, `"max": -5`, 1),
+			want: agent.ErrConnectionInvalid,
+		},
+		{
+			name: "negative contextTokens",
+			raw:  strings.Replace(validDocument(), `"outputTokens"`, `"contextTokens": -1, "outputTokens"`, 1),
+			want: agent.ErrConnectionInvalid,
+		},
+		{
+			name: "cache ttl with a newline",
+			raw:  strings.Replace(validDocument(), `"outputTokens"`, `"cache": { "ttl": "x\n" }, "outputTokens"`, 1),
+			want: agent.ErrConnectionInvalid,
+		},
+		{
+			name: "cache ttl that is not a duration",
+			raw:  strings.Replace(validDocument(), `"outputTokens"`, `"cache": { "ttl": "soon" }, "outputTokens"`, 1),
+			want: agent.ErrConnectionInvalid,
+		},
+		{
+			name: "cache ttl that is very long",
+			raw: strings.Replace(
+				validDocument(),
+				`"outputTokens"`,
+				`"cache": { "ttl": "`+strings.Repeat("1", 64)+`h" }, "outputTokens"`,
+				1,
+			),
+			want: agent.ErrConnectionInvalid,
+		},
+		{
+			name: "rateLimit wait header that is not a token",
+			raw: strings.Replace(
+				validDocument(),
+				`"outputTokens"`,
+				`"rateLimit": { "waitHeaders": ["bad name"] }, "outputTokens"`,
+				1,
+			),
+			want: agent.ErrConnectionInvalid,
+		},
+		{
+			name: "requestIDHeaders entry that is not a token",
+			raw:  strings.Replace(validDocument(), `"outputTokens"`, `"requestIDHeaders": ["a:b"], "outputTokens"`, 1),
+			want: agent.ErrConnectionInvalid,
+		},
+		{
+			name: "conversationKey header that is not a token",
+			raw: strings.Replace(
+				validDocument(),
+				`"outputTokens"`,
+				`"conversationKey": { "headers": ["a b"] }, "outputTokens"`,
+				1,
+			),
+			want: agent.ErrConnectionInvalid,
+		},
+		{
+			name: "empty errors quota entry",
+			raw:  strings.Replace(validDocument(), `"outputTokens"`, `"errors": { "quota": [""] }, "outputTokens"`, 1),
+			want: agent.ErrConnectionInvalid,
+		},
+		{
+			name: "empty reasoning keep entry",
+			raw: strings.Replace(
+				validDocument(),
+				`"outputTokens"`,
+				`"reasoning": { "keep": [""] }, "outputTokens"`,
+				1,
+			),
+			want: agent.ErrConnectionInvalid,
+		},
+		{
 			name: "unknown field in a header entry",
 			raw: strings.Replace(
 				validDocument(),
