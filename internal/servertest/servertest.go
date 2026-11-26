@@ -36,8 +36,8 @@ import (
 
 	"github.com/jackc/pgx/v5"
 
+	"opendustpan.org/opendustpan/internal/cli"
 	"opendustpan.org/opendustpan/internal/store/postgres"
-	"opendustpan.org/opendustpan/pkg/access"
 	"opendustpan.org/opendustpan/pkg/blob/fs"
 	"opendustpan.org/opendustpan/pkg/durable"
 	"opendustpan.org/opendustpan/pkg/dustpan"
@@ -552,11 +552,21 @@ func serverOptions(
 	}
 
 	if stores.builtin != nil {
-		// The built-in store gives every port, as the binary does.
+		// The built-in store gives every port, as the binary does. The
+		// declarations are the ones of the binary plus the bounds of the
+		// store, as the serve command wires them. The authorizer reads the
+		// reach setting through the settings service, so a registry that
+		// misses a declaration of the request path fails every decision
+		// closed, and a request of a principal that is not an administrator
+		// answers 500.
 		return append(
 			opts,
 			dustpan.WithBuiltinStore(stores.builtin),
-			dustpan.WithSettings(stores.builtin.SettingStore(), stores.builtin.SettingDeclarations(), nil),
+			dustpan.WithSettings(
+				stores.builtin.SettingStore(),
+				append(cli.SettingDeclarations(), stores.builtin.SettingDeclarations()...),
+				nil,
+			),
 		)
 	}
 
@@ -840,7 +850,7 @@ func explicitStoreOptions(store *postgres.Store, logger *slog.Logger) []dustpan.
 		dustpan.WithInstanceStore(store),
 		dustpan.WithSettings(
 			store.SettingStore(),
-			append(postgres.SettingDeclarations(), access.SettingDeclarations()...),
+			append(cli.SettingDeclarations(), postgres.SettingDeclarations()...),
 			nil,
 		),
 	}

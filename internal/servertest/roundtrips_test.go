@@ -1528,9 +1528,11 @@ const claimReadTrips = 4
 
 // reachSettingReadTrips is the number of round trips of one read of the
 // SettingInstallationGrantsReachNamespaces setting for each authorized
-// request. The authorizer reads it once for each decision; the request cache
-// keeps the value for the request, so a request reads it at most once.
-const reachSettingReadTrips = 1
+// request: ListSettings and then GetSettingsState, the two statements of the
+// Load of the scope. The authorizer reads the value once for each decision;
+// the request cache keeps the value for the request, so a request reads it at
+// most once.
+const reachSettingReadTrips = 2
 
 // attemptClaimTrips is the number of round trips that the reads of the claim
 // before the writes that are not a table file add to the fixed part of a
