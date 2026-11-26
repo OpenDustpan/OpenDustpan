@@ -14,7 +14,6 @@ import (
 	"opendustpan.org/opendustpan/pkg/access"
 	"opendustpan.org/opendustpan/pkg/accesstoken"
 	"opendustpan.org/opendustpan/pkg/audit"
-	"opendustpan.org/opendustpan/pkg/freshstep"
 	"opendustpan.org/opendustpan/pkg/identity"
 	"opendustpan.org/opendustpan/pkg/principal"
 	"opendustpan.org/opendustpan/pkg/tempadmin"
@@ -37,12 +36,11 @@ func newHostFixture(t *testing.T) hostFixture {
 	svc, err := accesstoken.NewService(accesstoken.Config{
 		Makers:     nil,
 		TempAdmins: f.store,
-		Store:      f.store, Principals: f.store, Freshness: nil, Authorizer: nil,
+		Store:      f.store, Principals: f.store, Audit: f.store, Guard: noStepGuard(t), Authorizer: nil,
 		Reach: access.ReachConfig{
 			Grants: nil, Roles: nil, Callers: nil, Principals: nil, Collections: nil, Units: nil,
 		},
 		Logger: nil, Now: f.clock.Now, NewID: nil,
-		Guard: freshstep.Guard{},
 	})
 	if err != nil {
 		t.Fatalf("token service: %v", err)

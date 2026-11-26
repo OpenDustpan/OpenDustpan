@@ -62,7 +62,11 @@ func (s *service) Approve(
 		}
 	}
 
-	gates, err := waitingGates(&j, s.approvers)
+	// The setting is read once, so that the gates and the audit entry of this
+	// verdict answer from one value.
+	freshRequired := s.fresh.Required(ctx)
+
+	gates, err := waitingGates(&j, s.approvers, freshRequired)
 	if err != nil {
 		return Job{}, err
 	}
@@ -78,30 +82,34 @@ func (s *service) Approve(
 		// plan phase comes before.
 		ap.Plan = &plan
 
-		err = s.checkApproval(ctx, &j, a, gates, &ap)
+		err = s.checkApproval(ctx, &j, a, waiting{gates: gates, freshRequired: freshRequired}, &ap)
 		if err != nil {
 			return Job{}, err
 		}
 	}
 
-	return s.record(ctx, &j, a, &ap, recordAs{action: ActionJobApprove, auth: mfaOf(&j, v)})
+	return s.record(ctx, &j, a, &ap, recordAs{action: ActionJobApprove, auth: ap.Auth, freshRequired: freshRequired})
+}
+
+// waiting holds the gates that wait for the verdict and the one read of the
+// setting freshAuthEnabled that chose them, so that each check of the verdict
+// answers from the same value.
+type waiting struct {
+	gates         []Gate
+	freshRequired bool
 }
 
 // checkApproval runs the checks that only an approval needs. ap.Plan holds the
 // binding of the caller, and stays as the binding to record.
-func (s *service) checkApproval(ctx context.Context, j *Job, a Actor, gates []Gate, ap *Approval) error {
-	// Defense in depth: the HTTP handler refuses a destroy without session
-	// proof too. This check stays so that another caller cannot skip it.
+func (s *service) checkApproval(ctx context.Context, j *Job, a Actor, w waiting, ap *Approval) error {
 	if j.Spec.Operation == OperationDestroy {
-		fresh, err := newDestroyFresh(a, ap.At)
+		err := checkDestroyAuth(a, ap, w)
 		if err != nil {
 			return err
 		}
-
-		ap.Auth, ap.AuthAt = fresh.auth, fresh.at
 	}
 
-	err := s.checkApprover(ctx, j, a, gates, ap)
+	err := s.checkApprover(ctx, j, a, w.gates, ap)
 	if err != nil {
 		return err
 	}
@@ -114,14 +122,38 @@ func (s *service) checkApproval(ctx context.Context, j *Job, a Actor, gates []Ga
 	return nil
 }
 
-// mfaOf returns the authentication kind that the audit entry records, which
-// is "mfa" for the approval of a destroy, else empty.
-func mfaOf(j *Job, v Verdict) ConfirmAuth {
-	if v == VerdictApprove && j.Spec.Operation == OperationDestroy {
-		return ConfirmAuthMFA
+// checkDestroyAuth checks the fresh step of the approval of a destroy, and sets
+// ap.Auth and ap.AuthAt to what the audit entry records. w.freshRequired is
+// the one read of the setting freshAuthEnabled in Approve. With the setting
+// off, the approval needs no step and records the authentication none.
+// checkApprover still refuses an agent then.
+//
+// Defense in depth: the HTTP handler and the job store check the proof of a
+// destroy too, with the same policy. This check stays so that another caller
+// cannot skip it. It does not rely on them. A zero guard answers true, so a
+// service without a guard fails closed.
+func checkDestroyAuth(a Actor, ap *Approval, w waiting) error {
+	if !w.freshRequired {
+		// Defense in depth: the HTTP handler and the job store also allow only a
+		// person here. This check stays so that a service, a workload or an agent
+		// never gets the authentication none, whatever credential it holds.
+		if a.Agent != "" || a.Principal.Kind != identity.KindPerson {
+			return fmt.Errorf("%w: only a person can approve a destroy when the setting is off", ErrAuthStale)
+		}
+
+		ap.Auth, ap.AuthAt = ConfirmAuthNone, time.Time{}
+
+		return nil
 	}
 
-	return ""
+	fresh, err := newDestroyFresh(a, ap.At)
+	if err != nil {
+		return err
+	}
+
+	ap.Auth, ap.AuthAt = fresh.auth, fresh.at
+
+	return nil
 }
 
 // checkVerdict is the boundary check: an allowlist of the two verdicts and
@@ -180,7 +212,7 @@ func (s *service) authorizedJob(ctx context.Context, a Actor, id ID) (Job, error
 // that ended, and ErrTransition for a job that does not wait, for a phase with
 // no approval gate, and for a phase whose approval gates are open already (a
 // confirmation gate may still wait: Confirm answers it).
-func waitingGates(j *Job, policy gate.ApproverPolicy) ([]Gate, error) {
+func waitingGates(j *Job, policy gate.ApproverPolicy, freshRequired bool) ([]Gate, error) {
 	if j.State.Terminal() {
 		return nil, fmt.Errorf("%w: job %s is %s", ErrFinished, j.ID, j.State)
 	}
@@ -204,7 +236,8 @@ func waitingGates(j *Job, policy gate.ApproverPolicy) ([]Gate, error) {
 		return nil, fmt.Errorf("%w: phase %d of job %s has no approval gate", ErrTransition, j.Current, j.ID)
 	}
 
-	if GatesStatus(gates, phase.Approvals, j.StartedBy, policy) != GateWaiting {
+	status := GatesStatus(gates, phase.Approvals, j.StartedBy, policy, freshRequired)
+	if status != GateWaiting {
 		return nil, fmt.Errorf("%w: no approval gate of phase %d of job %s waits", ErrTransition, j.Current, j.ID)
 	}
 
@@ -439,6 +472,9 @@ func newDestroyFresh(a Actor, now time.Time) (destroyFresh, error) {
 type recordAs struct {
 	action identity.Action
 	auth   ConfirmAuth
+	// freshRequired is the answer of the fresh policy that the verdict read.
+	// The gates of the verdict count with it.
+	freshRequired bool
 }
 
 // record stores the verdict in one change with its audit entry. The event
@@ -454,7 +490,7 @@ func (s *service) record(ctx context.Context, j *Job, a Actor, ap *Approval, as 
 		End: nil,
 	}
 
-	switch GatesStatus(phase.Gates, approvals, j.StartedBy, s.approvers) {
+	switch GatesStatus(phase.Gates, approvals, j.StartedBy, s.approvers, as.freshRequired) {
 	case GateRejected:
 		c.Event, c.Reason = EventRejected, "rejected by "+ap.Subject
 	case GateOpen:

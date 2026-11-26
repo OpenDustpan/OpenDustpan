@@ -16,7 +16,7 @@ import (
 // confirmation gate keeps its own rule (Gate.Status) and fills no slot of the
 // matching. The map has no entry for a confirmation gate.
 func GatesProgress(
-	gates []Gate, approvals []Approval, startedBy string, policy gate.ApproverPolicy,
+	gates []Gate, approvals []Approval, startedBy string, policy gate.ApproverPolicy, freshRequired bool,
 ) (GateStatus, map[string]int) {
 	filled := make(map[string]int, len(gates))
 
@@ -36,7 +36,8 @@ func GatesProgress(
 			continue
 		}
 
-		if g.Status(approvals, startedBy, policy) != GateOpen {
+		confirmed := g.Status(approvals, startedBy, policy, freshRequired)
+		if confirmed != GateOpen {
 			status = GateWaiting
 		}
 	}
@@ -45,7 +46,7 @@ func GatesProgress(
 		return status, filled
 	}
 
-	byGate, open := matchGates(approvalGates, approvals, startedBy, policy)
+	byGate, open := matchGates(approvalGates, approvals, startedBy, policy, freshRequired)
 	for name, n := range byGate {
 		filled[name] += n
 	}
@@ -68,7 +69,7 @@ func GatesProgress(
 // with an empty For is no candidate. The size is at most MaxApprovalGates
 // gates, so the cost is bounded. A set of more gates is never open.
 func matchGates(
-	gates []Gate, approvals []Approval, startedBy string, policy gate.ApproverPolicy,
+	gates []Gate, approvals []Approval, startedBy string, policy gate.ApproverPolicy, freshRequired bool,
 ) (map[string]int, bool) {
 	filled := make(map[string]int, len(gates))
 
@@ -88,7 +89,7 @@ func matchGates(
 		return filled, false
 	}
 
-	subjects, eligible := candidates(gates, approvals, startedBy, policy)
+	subjects, eligible := candidates(gates, approvals, startedBy, policy, freshRequired)
 	assigned := make([][]int, len(gates)) // for each gate, the subjects in its slots
 
 	for s := range subjects {
@@ -125,7 +126,7 @@ func repeatedName(gates []Gate) bool {
 // candidates returns the distinct subjects that may fill a slot, in order of
 // first approval, and for each subject the indexes of the gates it may fill.
 func candidates(
-	gates []Gate, approvals []Approval, startedBy string, policy gate.ApproverPolicy,
+	gates []Gate, approvals []Approval, startedBy string, policy gate.ApproverPolicy, freshRequired bool,
 ) ([]string, [][]int) {
 	subjects := make([]string, 0, len(approvals))
 	eligible := make([][]int, 0, len(approvals))
@@ -142,7 +143,8 @@ func candidates(
 		mine := make([]int, 0, len(gates))
 
 		for gi := range gates {
-			if gates[gi].counts(a, startedBy, policy) && slices.Contains(a.For, gates[gi].Name) {
+			counted := gates[gi].counts(a, startedBy, policy, freshRequired)
+			if counted && slices.Contains(a.For, gates[gi].Name) {
 				mine = append(mine, gi)
 			}
 		}

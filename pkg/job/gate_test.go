@@ -103,7 +103,7 @@ func TestGateStatus(t *testing.T) {
 				UnitOwners: false,
 				Scope:      gate.Scope{},
 			}
-			if got := g.Status(tt.approvals, "al", devInstallation); got != tt.want {
+			if got := g.Status(tt.approvals, "al", devInstallation, true); got != tt.want {
 				t.Fatalf("Status() = %s, want %s", got, tt.want)
 			}
 		})
@@ -131,6 +131,11 @@ func TestConfirmationGateStatus(t *testing.T) {
 			job.GateWaiting,
 		},
 		{"the requester with no MFA step", []job.Approval{noAuth(confirmation("al", 0))}, job.GateWaiting},
+		{
+			"the requester with the authentication none of a destroy",
+			[]job.Approval{withAuth(confirmation("al", 0), job.ConfirmAuthNone)},
+			job.GateOpen,
+		},
 		{
 			"the requester with a fresh SSO sign-in",
 			[]job.Approval{withAuth(confirmation("al", time.Minute), job.ConfirmAuthSSO)},
@@ -183,7 +188,8 @@ func TestConfirmationGateStatus(t *testing.T) {
 				g := job.ConfirmationGate(false)
 				g.AllowSelf = allowSelf
 
-				if got := g.Status(tt.approvals, "al", devInstallation); got != tt.want {
+				// The setting is off: a none approval counts (see TestConfirmationGateFollowsSetting).
+				if got := g.Status(tt.approvals, "al", devInstallation, false); got != tt.want {
 					t.Fatalf("Status(allowSelf %t) = %s, want %s", allowSelf, got, tt.want)
 				}
 			}
@@ -240,7 +246,7 @@ func TestGatesStatus(t *testing.T) {
 		t.Run(tt.name, func(t *testing.T) {
 			t.Parallel()
 
-			if got := job.GatesStatus(tt.gates, tt.approvals, "al", devInstallation); got != tt.want {
+			if got := job.GatesStatus(tt.gates, tt.approvals, "al", devInstallation, true); got != tt.want {
 				t.Fatalf("GatesStatus() = %s, want %s", got, tt.want)
 			}
 		})

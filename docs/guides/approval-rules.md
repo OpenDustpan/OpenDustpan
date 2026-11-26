@@ -231,8 +231,10 @@ changed the object. Read the object again, as the last call above does for the
 default. The header `ETag` holds the current version. Repeat the change with
 `If-Match: "<version>"`.
 
-An access token never gives the recent sign-in that a change needs. A change with
-a token answers 403 with the code `mfa.fresh-step-required`. Sign in to the console
+With the setting `freshAuthEnabled` on, an access token never gives the recent
+sign-in that a change needs. A change with a token answers 403 with the code
+`mfa.fresh-step-required`. With the setting off, the change needs no recent
+sign-in. Sign in to the console
 again, and repeat the call with the session.
 
 ## Approve or reject a job that waits
@@ -277,9 +279,12 @@ The rules:
   can reject.
 - The binding must be the binding of the stored plan. If a new plan replaces the
   plan, the old approvals do not count, and the job waits again.
-- The approval of a `destroy` job needs a fresh MFA step. This version cannot read
-  the MFA step of a console session yet, so it refuses the approval of a destroy
-  with 403 and the error code `mfa.fresh-step-required`. A rejection works.
+- The approval of a `destroy` job needs a fresh MFA step only when the setting
+  `freshAuthEnabled` is on (see "The setting freshAuthEnabled"). With the setting
+  on, this version cannot read the MFA step of a console session yet, so it
+  refuses the approval of a destroy with 403 and the error code
+  `mfa.fresh-step-required`. A rejection works. With the setting off, an access
+  token that holds `job:approve` approves a destroy.
 - One `reject` ends the job in the state `rejected`. A rejection by a person who
   did not start the job needs `job:cancel` on the unit. A namespace
   administrator can add the grant after they check the grant list:
@@ -298,10 +303,33 @@ the unit changed after the plan, the dispatch refuses the approvals, and the job
 again. The
 [jobs API reference](../reference/jobs-api.md) lists the errors.
 
+### The setting freshAuthEnabled
+
+The installation setting `freshAuthEnabled` turns the fresh step on and off for
+the approval of a `destroy` and for the changes that make a setting weaker. Its
+default is `false`: no person gets a request for a fresh authentication. Read
+the value and its source with `GET /api/dustpan/v1/settings`. Change it with
+`PATCH /api/dustpan/v1/settings`.
+
+- With the setting off, an access token that holds `job:approve` may approve a
+  `destroy`, and may make a setting weaker. The grant and the audit entry are
+  then the only checks. The audit entry of a `destroy` approval records
+  `auth: none`. An agent still cannot approve.
+- With the setting on, each step in this guide asks for a fresh authentication,
+  as the next section says.
+- A change from on to off needs a fresh step, because it makes the installation
+  weaker. A change from off to on needs none. Each change writes an audit entry
+  with the old and the new value.
+- A rule and an approval default keep their stored `freshAuthSeconds` while the
+  setting is off. The rule API and the approval-default API show
+  `"enforced": false` for each stored window that is not in force.
+- The first-administrator code, the change or reset of a factor, the enrollment
+  code and the break-glass proof ask as before, with the setting on or off.
+
 ### Destroy approval and the fresh step
 
-An access token, a job token, a trust token or an agent cannot give the fresh
-step for a destroy approval. A break-glass session does not bypass this check.
+With the setting `freshAuthEnabled` on, an access token, a job token, a trust
+token or an agent cannot give the fresh step for a destroy approval. A break-glass session does not bypass this check.
 The refusal changes no approval and writes an approval denial to the audit log.
 
 The refusal names `/api/server/sign-in/{provider}?fresh=1` for a new sign-in.

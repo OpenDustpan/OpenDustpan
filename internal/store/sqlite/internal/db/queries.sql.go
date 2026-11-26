@@ -9850,6 +9850,25 @@ func (q *Queries) GetSessionPrincipal(ctx context.Context, id string) (GetSessio
 	return i, err
 }
 
+const getSettingValue = `-- name: GetSettingValue :one
+SELECT value
+FROM settings
+WHERE scope_id = ?1 AND key = ?2
+`
+
+type GetSettingValueParams struct {
+	ScopeID string
+	Key     string
+}
+
+// The database value of one key of one scope. No row means no database value.
+func (q *Queries) GetSettingValue(ctx context.Context, arg GetSettingValueParams) (string, error) {
+	row := q.db.QueryRowContext(ctx, getSettingValue, arg.ScopeID, arg.Key)
+	var value string
+	err := row.Scan(&value)
+	return value, err
+}
+
 const getSettingsState = `-- name: GetSettingsState :one
 SELECT revision, static_digest
 FROM settings_state

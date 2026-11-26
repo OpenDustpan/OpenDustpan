@@ -35,6 +35,7 @@ func coverageJobRoutes(tb testing.TB, namespaces *namespace.Service) []RouteRef 
 		DenialLimiter:  nil,
 		Sessions:       nil,
 		Logger:         slog.New(slog.DiscardHandler),
+		FreshPolicy:    nil,
 	})
 	if err != nil {
 		tb.Fatalf("jobs handler: %v", err)

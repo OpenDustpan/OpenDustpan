@@ -85,8 +85,8 @@ func TestSignInChallengeSource(t *testing.T) {
 			entry.SourceIP = tc.address
 
 			_, err = svc.BeginAssertion(
-				t.Context(), mfasvc.Actor{Entry: entry, PrincipalID: "", SessionID: ""}, mfa.CeremonySignIn,
-				mfasvc.Binding{PersonID: "", PendingID: ""},
+				t.Context(), mfasvc.Actor{Entry: entry, PrincipalID: "", SessionID: "", Fresh: true},
+				mfa.CeremonySignIn, mfasvc.Binding{PersonID: "", PendingID: ""},
 			)
 			if err != nil {
 				t.Fatalf("begin: %v", err)
@@ -117,7 +117,7 @@ func TestSignInChallengeSourceRefusal(t *testing.T) {
 		entry.SourceIP = address
 
 		_, err := f.svc.BeginAssertion(
-			t.Context(), mfasvc.Actor{Entry: entry, PrincipalID: "", SessionID: ""}, mfa.CeremonySignIn,
+			t.Context(), mfasvc.Actor{Entry: entry, PrincipalID: "", SessionID: "", Fresh: true}, mfa.CeremonySignIn,
 			mfasvc.Binding{PersonID: "", PendingID: ""},
 		)
 

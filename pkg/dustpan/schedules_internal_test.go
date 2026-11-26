@@ -363,12 +363,11 @@ func TestJobSchedulesRunInactivityDisableOncePerTick(t *testing.T) {
 	tokens, err := accesstoken.NewService(accesstoken.Config{
 		Makers:     nil,
 		TempAdmins: nil,
-		Store:      st, Principals: st, Freshness: nil, Authorizer: nil,
+		Store:      st, Principals: st, Audit: st, Guard: noFreshStepGuard(t), Authorizer: nil,
 		Reach: access.ReachConfig{
 			Grants: nil, Roles: nil, Callers: nil, Principals: nil, Collections: nil, Units: nil,
 		},
 		Logger: slog.New(slog.DiscardHandler), Now: time.Now, NewID: nil,
-		Guard: freshstep.Guard{},
 	})
 	if err != nil {
 		t.Fatalf("token service: %v", err)
@@ -421,7 +420,8 @@ func TestJobScheduleReconcileRuns(t *testing.T) {
 
 	reconciler, err := job.NewReconciler(job.ReconcilerConfig{
 		Store: store.Jobs(), Namespaces: store, QueueTimeout: 0, DispatchTimeout: 0, StateTimeout: 0,
-		MaxPlanAge: 0, Approvers: gate.ApproverPolicy{Production: true, IsDev: nil}, Batch: 0, Now: nil, Log: nil,
+		MaxPlanAge: 0, Approvers: gate.ApproverPolicy{Production: true, IsDev: nil}, FreshGuard: freshstep.Guard{},
+		Batch: 0, Now: nil, Log: nil,
 	})
 	if err != nil {
 		t.Fatalf("new reconciler: %v", err)

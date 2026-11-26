@@ -38,7 +38,6 @@ package server
 
 import (
 	"bytes"
-	"context"
 	"errors"
 	"fmt"
 	"io"
@@ -266,7 +265,7 @@ func (h *Handler) serveTokenRead(op tokenOp) RouteHandler {
 // reach refusal. An answer with a secret carries Cache-Control: no-store.
 func (h *Handler) serveTokenChange(action identity.Action, op tokenOp) RouteHandler {
 	return func(w http.ResponseWriter, r *http.Request, p identity.Principal, _ identity.Object) {
-		r = r.WithContext(context.WithValue(r.Context(), freshnessKey{}, h.checkTokenFreshness))
+		r = r.WithContext(h.withFreshness(r.Context()))
 		res, err := h.runTokenOp(w, r, op, p, callerEntry(r, p, action))
 
 		if err != nil && res.object != "" && h.tokens != nil {

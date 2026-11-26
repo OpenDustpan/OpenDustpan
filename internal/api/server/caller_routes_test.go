@@ -16,7 +16,6 @@ import (
 	"opendustpan.org/opendustpan/pkg/access"
 	"opendustpan.org/opendustpan/pkg/accesstoken"
 	"opendustpan.org/opendustpan/pkg/audit"
-	"opendustpan.org/opendustpan/pkg/freshstep"
 	"opendustpan.org/opendustpan/pkg/identity"
 )
 
@@ -44,12 +43,11 @@ func newAccessTokens(t *testing.T, st *sqlite.Store, clock *envClock) *accesstok
 
 	svc, err := accesstoken.NewService(accesstoken.Config{
 		Makers: nil,
-		Store:  st, Principals: st, Freshness: nil, Authorizer: nil, TempAdmins: nil,
+		Store:  st, Audit: st, Principals: st, Guard: noFreshStepGuard(t), Authorizer: nil, TempAdmins: nil,
 		Reach: access.ReachConfig{
 			Grants: nil, Roles: nil, Callers: nil, Principals: nil, Collections: nil, Units: nil,
 		},
 		Logger: nil, NewID: nil, Now: clock.Now,
-		Guard: freshstep.Guard{},
 	})
 	if err != nil {
 		t.Fatalf("token service: %v", err)

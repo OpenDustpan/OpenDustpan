@@ -30,7 +30,13 @@ func (s *Store) Apply(ctx context.Context, c job.Change, fence namespace.Fence, 
 	var out job.Job
 
 	err := s.run.Write(ctx, fence, func(tx Tx) error {
-		next, err := applyIn(ctx, tx, &c, fence.Namespace)
+		// The setting is read in the transaction of the write, so that the
+		// approval decides with the value that the write commits with.
+		readFresh := func(ctx context.Context, tx Tx) (bool, error) {
+			return freshRequired(ctx, s.fresh, tx)
+		}
+
+		next, err := applyIn(ctx, tx, &c, fence.Namespace, readFresh)
 		if err != nil {
 			return err
 		}
@@ -48,8 +54,10 @@ func (s *Store) Apply(ctx context.Context, c job.Change, fence namespace.Fence, 
 }
 
 // applyIn makes the change c in the transaction tx, and returns the job after
-// it. The job must belong to the namespace ns.
-func applyIn(ctx context.Context, tx Tx, c *job.Change, ns namespace.Name) (job.Job, error) {
+// it. The job must belong to the namespace ns. readFresh tells whether the
+// installation requires a fresh step. applyIn calls it only for the approval
+// of a destroy, because no other change uses the answer.
+func applyIn(ctx context.Context, tx Tx, c *job.Change, ns namespace.Name, readFresh freshFunc) (job.Job, error) {
 	cur, err := loadJob(ctx, tx, c.Job, ns)
 	if err != nil {
 		return job.Job{}, err
@@ -64,7 +72,7 @@ func applyIn(ctx context.Context, tx Tx, c *job.Change, ns namespace.Name) (job.
 		return job.Job{}, err
 	}
 
-	now, err := tx.Now(ctx)
+	rules, err := rulesFor(ctx, tx, &cur, c.Approval, readFresh)
 	if err != nil {
 		return job.Job{}, err
 	}
@@ -73,11 +81,11 @@ func applyIn(ctx context.Context, tx Tx, c *job.Change, ns namespace.Name) (job.
 	// database did not move since the last write. The clock time stays the
 	// time of the phase records, of the state change and of the freeze
 	// check: a reader compares those with the clock.
-	updated := nextUpdateAt(now, cur.UpdatedAt)
+	updated := nextUpdateAt(rules.now, cur.UpdatedAt)
 
 	next := cloneJob(&cur)
 
-	if err := change(ctx, tx, &next, c, now); err != nil {
+	if err := changeIn(ctx, tx, &next, c, rules); err != nil {
 		return job.Job{}, err
 	}
 
@@ -100,7 +108,7 @@ func applyIn(ctx context.Context, tx Tx, c *job.Change, ns namespace.Name) (job.
 	}
 
 	if next.State != cur.State {
-		next.StateChangedAt = now
+		next.StateChangedAt = rules.now
 	}
 
 	if err := update(ctx, tx, &next, cur.Version); err != nil {
@@ -108,6 +116,22 @@ func applyIn(ctx context.Context, tx Tx, c *job.Change, ns namespace.Name) (job.
 	}
 
 	return next, nil
+}
+
+// changeIn makes the change c on next in the transaction tx with the rules
+// of the write. The principal of an approval is read in tx, and only for an
+// approval with the authentication none, so no other write reads it.
+func changeIn(ctx context.Context, tx Tx, next *job.Job, c *job.Change, rules writeRules) error {
+	if c.Approval != nil && c.Approval.Auth == job.ConfirmAuthNone {
+		kind, found, err := tx.PrincipalKind(ctx, c.Approval.Subject)
+		if err != nil {
+			return fmt.Errorf("read the kind of the approver: %w", err)
+		}
+
+		rules.approverFound, rules.approverKind = found, kind
+	}
+
+	return change(ctx, tx, next, c, rules)
 }
 
 // endOperation ends the durable operation of c.End, in the transaction tx of

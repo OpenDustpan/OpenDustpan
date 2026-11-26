@@ -13,7 +13,6 @@ import (
 	"opendustpan.org/opendustpan/pkg/access"
 	"opendustpan.org/opendustpan/pkg/accesstoken"
 	"opendustpan.org/opendustpan/pkg/durable"
-	"opendustpan.org/opendustpan/pkg/freshstep"
 )
 
 // openTestStore opens a SQLite store that the test closes.
@@ -89,12 +88,11 @@ func TestStartBackgroundByComponent(t *testing.T) {
 
 			tokens, err := accesstoken.NewService(accesstoken.Config{
 				Makers:     nil,
-				TempAdmins: nil, Store: st, Principals: st, Freshness: nil, Authorizer: nil,
+				TempAdmins: nil, Store: st, Principals: st, Audit: st, Guard: noFreshStepGuard(t), Authorizer: nil,
 				Reach: access.ReachConfig{
 					Grants: nil, Roles: nil, Callers: nil, Principals: nil, Collections: nil, Units: nil,
 				},
 				Logger: srv.logger, Now: time.Now, NewID: nil,
-				Guard: freshstep.Guard{},
 			})
 			if err != nil {
 				t.Fatalf("token service: %v", err)

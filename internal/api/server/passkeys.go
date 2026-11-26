@@ -35,6 +35,7 @@ import (
 	"opendustpan.org/opendustpan/internal/errcode"
 	"opendustpan.org/opendustpan/internal/ident"
 	"opendustpan.org/opendustpan/internal/mfasvc"
+	"opendustpan.org/opendustpan/internal/sessionauth"
 	"opendustpan.org/opendustpan/internal/textbody"
 	"opendustpan.org/opendustpan/pkg/audit"
 	"opendustpan.org/opendustpan/pkg/identity"
@@ -195,12 +196,12 @@ func (h *Handler) passkeyRoutes() []Route {
 		Route{
 			Method: http.MethodPost, Path: passkeyBeginPath, Scope: ScopeAuthorized, Actions: manage,
 			Resolve: resolveCaller, ActionsFor: nil, OpaqueDenial: false,
-			Serve: h.fresh(identity.ActionCallerManageSignIn, h.beginPasskey),
+			Serve: h.freshAlways(identity.ActionCallerManageSignIn, h.beginPasskey),
 		},
 		Route{
 			Method: http.MethodPost, Path: passkeyFinishPath, Scope: ScopeAuthorized, Actions: manage,
 			Resolve: resolveCaller, ActionsFor: nil, OpaqueDenial: false,
-			Serve: h.fresh(identity.ActionCallerManageSignIn, h.finishPasskey),
+			Serve: h.freshAlways(identity.ActionCallerManageSignIn, h.finishPasskey),
 		},
 		Route{
 			Method: http.MethodGet, Path: ownKeysPath, Scope: ScopeAuthorized, Actions: read,
@@ -209,7 +210,7 @@ func (h *Handler) passkeyRoutes() []Route {
 		Route{
 			Method: http.MethodDelete, Path: passkeyPath, Scope: ScopeAuthorized, Actions: manage,
 			Resolve: resolveCaller, ActionsFor: nil, OpaqueDenial: false,
-			Serve: h.fresh(identity.ActionCallerManageSignIn, h.removePasskey),
+			Serve: h.freshAlways(identity.ActionCallerManageSignIn, h.removePasskey),
 		},
 	)
 }
@@ -254,10 +255,15 @@ func (h *Handler) passkeyCaller(
 }
 
 // passkeyActor returns the actor of a step of the caller: the audit entry of
-// the request, and the principal and the session of the console session.
-func passkeyActor(r *http.Request, p identity.Principal, caller sessionCaller, action identity.Action) mfasvc.Actor {
+// the request, and the principal and the session of the console session. Fresh
+// is the result of the same sign-in age check that the route runs, and it does
+// not follow the setting freshAuthEnabled.
+func (h *Handler) passkeyActor(
+	r *http.Request, p identity.Principal, caller sessionCaller, action identity.Action,
+) mfasvc.Actor {
 	return mfasvc.Actor{
 		Entry: callerEntry(r, p, action), PrincipalID: caller.Match.Owner.ID, SessionID: caller.Match.Session.ID,
+		Fresh: h.requireAlwaysFresh(r) == nil,
 	}
 }
 
@@ -300,7 +306,7 @@ func (h *Handler) beginPasskey(w http.ResponseWriter, r *http.Request, p identit
 		return
 	}
 
-	actor := passkeyActor(r, p, caller, identity.ActionCallerManageSignIn)
+	actor := h.passkeyActor(r, p, caller, identity.ActionCallerManageSignIn)
 
 	options, err := h.passkeys.BeginRegistration(ctx, actor, person)
 	if err != nil {
@@ -341,7 +347,7 @@ func (h *Handler) finishPasskey(w http.ResponseWriter, r *http.Request, p identi
 		return
 	}
 
-	actor := passkeyActor(r, p, caller, identity.ActionCallerManageSignIn)
+	actor := h.passkeyActor(r, p, caller, identity.ActionCallerManageSignIn)
 
 	key, err := h.passkeys.FinishRegistration(ctx, actor, person, req.Name, req.Response)
 	if err != nil {
@@ -364,7 +370,7 @@ func (h *Handler) listPasskeys(w http.ResponseWriter, r *http.Request, p identit
 		return
 	}
 
-	keys, err := h.passkeys.Passkeys(ctx, passkeyActor(r, p, caller, identity.ActionCallerRead))
+	keys, err := h.passkeys.Passkeys(ctx, h.passkeyActor(r, p, caller, identity.ActionCallerRead))
 	if err != nil {
 		h.writeError(ctx, w, passkeyError(err))
 
@@ -404,7 +410,7 @@ func (h *Handler) removePasskey(w http.ResponseWriter, r *http.Request, p identi
 		return
 	}
 
-	actor := passkeyActor(r, p, caller, identity.ActionCallerManageSignIn)
+	actor := h.passkeyActor(r, p, caller, identity.ActionCallerManageSignIn)
 
 	if err := h.passkeys.RemovePasskey(ctx, actor, id); err != nil {
 		h.writeError(ctx, w, passkeyError(err))
@@ -458,6 +464,10 @@ type passkeyMapping struct {
 // route.
 func passkeyErrors() []passkeyMapping {
 	return []passkeyMapping{
+		{mfa.ErrFreshStep, &codedError{
+			status: http.StatusForbidden, code: errcode.MFAFreshStepRequired, args: nil,
+			message: sessionauth.FreshStepRequiredMessage,
+		}},
 		{mfa.ErrWrongPerson, &codedError{
 			status: http.StatusForbidden, code: errcode.MFACeremonyWrongPerson, args: nil,
 			message: "the passkey ceremony belongs to another person or session: start it again",

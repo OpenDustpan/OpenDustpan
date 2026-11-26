@@ -469,6 +469,16 @@ func (f *fakeTx) AppendAudit(_ context.Context, e []audit.Entry) error {
 	return nil
 }
 
+// SettingValue implements jobstore.Tx: no setting row, so the store uses the
+// default of the resolver.
+func (f *fakeTx) SettingValue(context.Context, string) (string, bool, error) { return "", false, nil }
+
+// PrincipalKind implements jobstore.Tx: no principal row, so the rule of the
+// approver refuses an approval of the authentication none.
+func (f *fakeTx) PrincipalKind(context.Context, string) (identity.Kind, bool, error) {
+	return "", false, nil
+}
+
 // put stores j as the row of its ID, as a write of the store would.
 func (f *fakeTx) put(t *testing.T, j *job.Job) {
 	t.Helper()

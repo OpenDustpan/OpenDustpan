@@ -16,6 +16,7 @@ package jobtest
 
 import (
 	"context"
+	"errors"
 	"slices"
 	"testing"
 	"time"
@@ -23,6 +24,7 @@ import (
 	"opendustpan.org/opendustpan/internal/ident"
 	"opendustpan.org/opendustpan/pkg/audit"
 	"opendustpan.org/opendustpan/pkg/durable"
+	"opendustpan.org/opendustpan/pkg/gate"
 	"opendustpan.org/opendustpan/pkg/identity"
 	"opendustpan.org/opendustpan/pkg/job"
 	"opendustpan.org/opendustpan/pkg/manuallock"
@@ -80,6 +82,9 @@ type StateWriter func(
 type Domain interface {
 	// CreateNamespace creates the namespace name and returns its fence.
 	CreateNamespace(ctx context.Context, name namespace.Name) (namespace.Fence, error)
+	// CreatePrincipal creates a principal of kind with the subject. The store
+	// reads the kind of an approver from this row.
+	CreatePrincipal(ctx context.Context, subject string, kind identity.Kind) error
 	// CreateUnit creates a unit of tool in the namespace of fence and
 	// returns its reference, with its stable unit ID set.
 	CreateUnit(ctx context.Context, fence namespace.Fence, tool, name string) (identity.Object, error)
@@ -139,6 +144,53 @@ func createRuleCases() []suiteCase {
 		{"a key with another request hash conflicts", testCreateKeyHashConflict},
 		{"a job that waits for approval is stored awaiting-approval", testCreateAwaitingApproval},
 		{"a job in another first state is refused", testCreateBadState},
+		{"Create refuses a service principal's none approval of a destroy", testCreateNoneServiceDestroy},
+	}
+}
+
+// testCreateNoneServiceDestroy proves that Create refuses a destroy whose phase
+// holds an approval with the authentication none by a principal that is not a
+// person. The store stores no job, so the refused approval cannot be kept.
+//
+// Defense in depth: the handler and the service check the kind too. This case
+// stays so that a direct caller of Create cannot store the approval.
+func testCreateNoneServiceDestroy(t *testing.T, h Harness) {
+	t.Helper()
+
+	f := setUp(t, h)
+	if err := h.Domain.CreatePrincipal(t.Context(), "svc-approver", identity.KindService); err != nil {
+		t.Fatalf("create the approver: %v", err)
+	}
+
+	j := newJob(f.unit, job.OperationDestroy, "")
+	j.State = job.StateAwaitingApproval
+	j.Phases[0].Gates = []job.Gate{{
+		Type: job.GateApproval, Name: "", Approvals: 1, Groups: nil, GroupIDs: nil, AllowSelf: false, Timeout: 0,
+		BindPlan:   false,
+		Users:      nil,
+		UserIDs:    nil,
+		UnitOwners: false,
+		Scope:      gate.Scope{},
+	}}
+	j.Phases[0].Approvals = []job.Approval{{
+		Gate:    job.GateApproval,
+		For:     []string{""},
+		Subject: "svc-approver",
+		Agent:   "",
+		Verdict: job.VerdictApprove,
+		Comment: "",
+		Plan:    nil,
+		At:      time.Now().UTC(),
+		Auth:    job.ConfirmAuthNone,
+		AuthAt:  time.Time{},
+	}}
+
+	if _, _, err := h.Jobs.Create(t.Context(), *j, nil, f.fence, nil); !errors.Is(err, job.ErrAuthStale) {
+		t.Fatalf("Create with a service principal's none approval of a destroy = %v, want ErrAuthStale", err)
+	}
+
+	if _, err := h.Jobs.Get(t.Context(), j.ID); !errors.Is(err, job.ErrNotFound) {
+		t.Fatalf("Get after a refused Create = %v, want ErrNotFound", err)
 	}
 }
 

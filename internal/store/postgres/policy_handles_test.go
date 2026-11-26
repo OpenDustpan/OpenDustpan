@@ -10,7 +10,6 @@ import (
 	"opendustpan.org/opendustpan/pkg/access"
 	"opendustpan.org/opendustpan/pkg/accesstoken"
 	"opendustpan.org/opendustpan/pkg/audit"
-	"opendustpan.org/opendustpan/pkg/freshstep"
 	"opendustpan.org/opendustpan/pkg/identity"
 	"opendustpan.org/opendustpan/pkg/principal"
 )
@@ -146,12 +145,12 @@ func tokenService(t *testing.T, s *postgres.Store, now func() time.Time) *access
 		TempAdmins: nil,
 		Store:      s,
 		Principals: s,
-		Freshness:  nil,
+		Audit:      s,
+		Guard:      noFreshStepGuard(t),
 		Authorizer: nil,
 		Logger:     nil,
 		Now:        now,
 		NewID:      nil,
-		Guard:      freshstep.Guard{},
 	})
 	if err != nil {
 		t.Fatalf("token service: %v", err)

@@ -197,7 +197,7 @@ func (h *Handler) getJob(w http.ResponseWriter, r *http.Request, _ identity.Prin
 // the job. A failed read of the pool answers 500, and never a document with a
 // silent blank in place of the name.
 func (h *Handler) answerJob(ctx context.Context, w http.ResponseWriter, status int, j *job.Job) {
-	out := toJobResponse(j, h.approvers)
+	out := toJobResponse(j, h.approvers, h.freshGuard.Required(ctx))
 
 	name, err := h.poolName(ctx, j)
 	if err != nil {
@@ -216,7 +216,15 @@ func (h *Handler) answerJob(ctx context.Context, w http.ResponseWriter, status i
 // keeps the status, with poolID and without pool: a write that committed never
 // gets a failure answer.
 func (h *Handler) answerStartedJob(ctx context.Context, w http.ResponseWriter, status int, j *job.Job) {
-	out := toJobResponse(j, h.approvers)
+	h.writeStartedJob(ctx, w, status, j, h.freshGuard.Required(ctx))
+}
+
+// writeStartedJob is answerStartedJob with the answer of the setting that the
+// caller already read.
+func (h *Handler) writeStartedJob(
+	ctx context.Context, w http.ResponseWriter, status int, j *job.Job, freshRequired bool,
+) {
+	out := toJobResponse(j, h.approvers, freshRequired)
 
 	name, err := h.poolName(ctx, j)
 	if err != nil {
@@ -314,7 +322,7 @@ func locationSourceOf(s *job.Spec) string {
 }
 
 // toJobResponse maps a job to its wire shape.
-func toJobResponse(j *job.Job, policy gate.ApproverPolicy) jobResponse {
+func toJobResponse(j *job.Job, policy gate.ApproverPolicy, freshRequired bool) jobResponse {
 	out := jobResponse{
 		ID:        string(j.ID),
 		Namespace: j.Spec.Unit.Namespace().String(),
@@ -357,7 +365,7 @@ func toJobResponse(j *job.Job, policy gate.ApproverPolicy) jobResponse {
 	}
 
 	for i := range j.Phases {
-		out.Phases = append(out.Phases, toPhaseResponse(&j.Phases[i], j.StartedBy, policy))
+		out.Phases = append(out.Phases, toPhaseResponse(&j.Phases[i], j.StartedBy, policy, freshRequired))
 	}
 
 	if j.BreakGlass != nil {
@@ -383,7 +391,7 @@ func toJobResponse(j *job.Job, policy gate.ApproverPolicy) jobResponse {
 	return out
 }
 
-func toPhaseResponse(p *job.Phase, startedBy string, policy gate.ApproverPolicy) phaseResponse {
+func toPhaseResponse(p *job.Phase, startedBy string, policy gate.ApproverPolicy, freshRequired bool) phaseResponse {
 	out := phaseResponse{
 		Kind: string(p.Kind), Claims: p.Claims, Executor: p.Executor, StateVersion: p.StateVersion,
 		Steps: make([]stepRecordResponse, 0, len(p.Steps)), Plan: nil, Gates: make([]gateResponse, 0, len(p.Gates)),
@@ -423,13 +431,14 @@ func toPhaseResponse(p *job.Phase, startedBy string, policy gate.ApproverPolicy)
 		out.Plan = plan
 	}
 
-	_, filled := job.GatesProgress(p.Gates, p.Approvals, startedBy, policy)
+	_, filled := job.GatesProgress(p.Gates, p.Approvals, startedBy, policy, freshRequired)
 
 	for i := range p.Gates {
 		g := &p.Gates[i]
 
 		slots := filled[g.Name]
-		if g.Type == job.GateConfirmation && g.Status(p.Approvals, startedBy, policy) == job.GateOpen {
+		status := g.Status(p.Approvals, startedBy, policy, freshRequired)
+		if g.Type == job.GateConfirmation && status == job.GateOpen {
 			slots = 1
 		}
 

@@ -127,8 +127,13 @@ func runTokensOnStore(t *testing.T, cli e2e.Install, store e2e.Store) {
 // checkTokenNeedsFreshAuth proves that an access token never makes a token:
 // the bootstrap admin token creates a service token and a personal token, and
 // both answer 403 with mfa.fresh-step-required. The token list does not change.
+// The step turns freshAuthEnabled on first: with the default off, the token
+// makes the change.
 func checkTokenNeedsFreshAuth(ctx context.Context, t *testing.T, env *e2e.Env, deploy e2ePrincipal) {
 	t.Helper()
+
+	restoreFreshAuth := env.EnableFreshAuth(ctx, t)
+	defer restoreFreshAuth()
 
 	_, before, err := env.ServerAPIStatus(ctx, http.MethodGet, "/api/server/tokens", "")
 	if err != nil {
