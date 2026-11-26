@@ -74,7 +74,10 @@ func (s *service) Confirm(ctx context.Context, a Actor, id ID, v Verdict, plan P
 		}
 	}
 
-	return s.record(ctx, &j, a, &ap, recordAs{action: action, auth: ap.Auth, freshRequired: s.fresh.Required(ctx)})
+	// A new confirmation is never auth none (ConfirmAuth.Valid), and
+	// checkConfirmable refuses a phase that already holds a confirmation. So the
+	// setting cannot change the outcome here, and the value true fails closed.
+	return s.record(ctx, &j, a, &ap, recordAs{action: action, auth: ap.Auth, freshRequired: true})
 }
 
 // ConfirmAction returns the action that a confirmation of j needs on its unit:
