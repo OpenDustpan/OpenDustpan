@@ -31,7 +31,7 @@
 
 ## 3. Side effects (computed from main)
 
-- [ ] 3.1 Run `make generate`: it regenerates the sqlc code in `internal/store/sqlite/internal/db` and `internal/store/postgres/internal/db`. The list route on main already has the `source` parameter, so `internal/api/apidesc/openapi.json` does not change, and `clients/typescript` is not in Git. Never edit a generated file by hand. No new route. Check: `sqlc diff` is clean and `TestAPIDescriptionGolden` passes with no `-update-api-description` run. Confirmed by: the driver's gates.
+- [x] 3.1 Run `make generate`: it regenerates the sqlc code in `internal/store/sqlite/internal/db` and `internal/store/postgres/internal/db`. The list route on main already has the `source` parameter, so `internal/api/apidesc/openapi.json` does not change, and `clients/typescript` is not in Git. Never edit a generated file by hand. No new route. Check: `sqlc diff` is clean and `TestAPIDescriptionGolden` passes with no `-update-api-description` run. Confirmed by: the driver's gates.
 
 ## 4. Definition of done
 
