@@ -1,10 +1,10 @@
 ---
-version: 6
+version: 7
 ---
 
 Issue: none. This change is the follow-up of pull request #3251 (change `add-job-service-routes-start-1`) and part of issue #1315, which lists RedactLog among the calls that answered ErrUnsupported.
 
-Depends on: pull request #3251 merged and its change archived. The delta `specs/job-actions` modifies a capability that the archive of #3251 creates. The delta `specs/jobs` and the tasks use the names that #3251 adds (`LogReplacement`, `RedactRequest`, `service_redact.go`, the route `log-redactions`).
+Depends on: pull request #3251 merged and its change archived. The delta `specs/job-actions` modifies a capability that the archive of #3251 creates. The delta `specs/jobs` and the tasks use the names that #3251 adds (`LogReplacement`, `RedactRequest`, `pkg/job/service_redact.go`, the route `log-redactions`).
 
 ## Why
 
@@ -23,15 +23,15 @@ Errors the person may hit, and the one command that helps:
 | --- | --- | --- |
 | The version is not a log version of this job. | 404 with code `job.not-found`. | `GET /api/dustpan/v1/namespaces/{namespace}/jobs/{job_id}` |
 | The step still runs, or the version is redacted already. | 409 with code `job.wrong-state`. The text of the answer names the cause. | `GET /api/dustpan/v1/namespaces/{namespace}/jobs/{job_id}` |
-| The caller holds `job:read` but not `unit:redact`. | 403 with code `access.denied` names `unit:redact`. | `GET /api/dustpan/v1/namespaces/{namespace}/access/grants` (the grant list of the namespace; a namespace administrator adds the grant) |
+| The caller holds `job:read` but not `unit:redact`. | 403 with code `access.denied` names `unit:redact`. | `GET /api/server/namespaces/{namespace}/grants` (`internal/api/server/access.go:283`, the grant list of the namespace; a namespace administrator adds the grant) |
 | The server has no job artifact store. | 501 with code `job.unsupported`. After this change, only a server with no blob store answers this. | `opendustpan doctor` |
 
 The two scenarios "Redact a secret" and "Unknown version" of #3251 cannot pass on a real server today. Evidence, each with the command that proves it:
 
 - The job service on the head of #3251 gets `Artifacts: nil`. Proof: `git show origin/exec/m5/add-job-service-routes-start-1:pkg/dustpan/jobservice.go | rg -n "Artifacts: nil"` prints line 79, with the comment "No adapter of job.ArtifactStore exists yet".
 - No type implements `job.ArtifactStore`. Proof: `rg -n "ArtifactStore" --glob '*.go' pkg internal | rg -v "^pkg/job/artifact.go"` prints three lines, all comments (`pkg/job/store.go:494`, `pkg/job/artifactreader.go:19`, `pkg/job/jobtest/jobtest.go:13`).
-- No SQL store implements `history.Redactor` or `history.RedactionLog`. Proof: `rg -n "func \(.*\) (Redact|AppendRedaction)\(" --glob '*.go' pkg internal` prints only the reference adapters in memory (`Redact` at `pkg/job/jobtest/redactor_mem_test.go:90` and `internal/history/historytest/mem_test.go:469`, `AppendRedaction` at `mem_test.go:204` and `redactor_mem_test.go:372`) and `rg -il redaction pkg/store --glob '*.sql'` prints nothing: no table holds a redaction.
-- The job record holds one log version for each step record. Proof: `pkg/job/step.go:108` declares `Log *LogRef` and `internal/store/jobstore/record.go:740` (`logOfRow`) finds a version only as `r.Log.ID == row.ID`. After a redaction writes the next version, the older version has no place in the record, and a retry cannot find it.
+- No SQL store implements `history.Redactor` or `history.RedactionLog`. Proof: `rg -n "func \(.*\) (Redact|AppendRedaction)\(" --glob '*.go' pkg internal` prints only the reference adapters in memory (`Redact` at `pkg/job/jobtest/redactor_mem_test.go:90` and `internal/history/historytest/mem_test.go:469`, `AppendRedaction` at `internal/history/historytest/mem_test.go:204` and `pkg/job/jobtest/redactor_mem_test.go:372`) and `rg -il redaction pkg/store --glob '*.sql'` prints nothing: no table holds a redaction.
+- The job record holds one log version for each step record. Proof: `pkg/job/step.go:108` declares `Log *LogRef` and `internal/store/jobstore/record.go:747` (`logOfRow`) finds a version only as `r.Log.ID == row.ID`. After a redaction writes the next version, the older version has no place in the record, and a retry cannot find it.
 - The action `unit:redact` has no family, so only a principal with the `Admin` flag passes the authorizer. Proof: `pkg/access/access.go:115` (`families`) has no key `identity.ActionUnitRedact`, `pkg/access/authorizer.go:127` (`FamilyOf`, then `deny`) denies an action that has no family, and `pkg/access/access_test.go` (the list that ends with `identity.ActionUnitRedact`) asserts "want none until its routes land".
 
 ## What Changes
@@ -39,7 +39,7 @@ The two scenarios "Redact a secret" and "Unknown version" of #3251 cannot pass o
 - Add the SQL adapter of `history.RedactionLog` for SQLite and PostgreSQL (two new tables for each dialect), with the suite `historytest.RunRedactions` that main already has.
 - Add the job record rows and store methods that write the next version of a log and that mark a plan or a log version redacted, in one fenced transaction with the shred of its item key, the redaction record and the audit entry.
 - Add the adapter `job.ArtifactStores` of `job.ArtifactStore` over the job store, the blob store (`job.ArtifactBlobs`) and the item sealer, with the suites `historytest.RunRedactor` for plans and log versions and a new suite for `ReplaceLog`.
-- Keep every earlier log version of a step in the step record, and add `LogRef.Replaces`, so that a retry after a failed redaction only redacts the older version, as `Service.RedactLog` documents.
+- Keep every earlier log version of a step in the step record (NEW field `StepRecord.Earlier`), and add the NEW field `LogRef.Replaces`, so that a retry after a failed redaction only redacts the older version, as `Service.RedactLog` documents.
 - Wire the adapter in `pkg/dustpan/jobservice.go` in place of `Artifacts: nil`.
 - Put `unit:redact` in the family `data` of `pkg/access/access.go`, so that the built-in role `admin` holds it.
 - Name the code actions and the code error in the spec of #3251: `job:cancel`, `job:approve`, the start action of the job for a confirmation, `unit:redact`, and `job.not-found`.
@@ -67,11 +67,11 @@ Each fact names its file, line and function on main (commit 23b5c35d4).
 
 - The port `job.ArtifactStore` embeds `history.Redactor` and `ArtifactReader` and has `ReplaceLog`. (`pkg/job/artifact.go:328`)
 - `ArtifactBlobs` reads, writes and deletes the sealed plan parts and log chunks in the blob store, with the scope of the namespace. (`pkg/job/artifactblobs.go:65`)
-- `ArtifactReads` implements `ArtifactReader` over `RecordStore`, `ArtifactBlobs` and `secret.ItemSealer`, and the server wires it. (`pkg/job/artifactreader.go:38`, `newJobArtifactReader` in `pkg/dustpan/jobs.go`)
+- `ArtifactReads` implements `ArtifactReader` over `RecordStore`, `ArtifactBlobs` and `secret.ItemSealer`, and the server wires it. (`pkg/job/artifactreader.go:38`; `newJobArtifactReader` at `pkg/dustpan/jobs.go:110`)
 - The rules of a redaction are `CheckPlanRedaction` and `CheckLogRedaction`. (`pkg/job/artifact.go:220`, `pkg/job/artifact.go:237`)
 - `secret.ItemKeyIndex.ShredItemKey` marks an item key shredded under a fence. (`pkg/secret/itemkey.go:235`)
-- The conformance suites `historytest.RunRedactor`, `JobArtifactSituations`, `JobLogSituations` and `RunRedactions` exist, and run only against reference adapters in memory. (`internal/history/historytest/redactor.go:68`, `:74`, `:106`; `redactions.go:25`)
-- `item_keys` is in the portable backup tables. (`pkg/backup/portable_item_keys.go`)
+- The conformance suites `historytest.RunRedactor`, `JobArtifactSituations`, `JobLogSituations` and `RunRedactions` exist, and run only against reference adapters in memory. (`internal/history/historytest/redactor.go:68`, `:74`, `:106`; `internal/history/historytest/redactions.go:25`)
+- `item_keys` is in the portable backup tables (`portableItemKeyTables`). (`pkg/backup/portable_item_keys.go:6`)
 
 ## ADR check
 
@@ -108,7 +108,7 @@ Questions considered and answered:
 - What does the route answer for an unknown version? 404 `job.not-found`. The spec of #3251 says `job.version-not-found`, which no catalog has (`rg -n "version-not-found" internal docs` prints nothing on the head of #3251). The delta `specs/job-actions` fixes the spec.
 - Where do the earlier versions live? In the step record, as `StepRecord.Earlier`, oldest first. ADR 102 decision 8 says "`LogRef` on each step record" and decision 11 says the job record keeps the hashes of the two versions. No ADR fixes the Go shape. `job_logs` already holds one row for each version, so no new table is needed.
 - Does the redaction of a plan need a route here? No (see "Out of scope"). The adapter implements `Redact` for plans for the suite `JobArtifactSituations` and for the later retention expiry.
-- Can the memory limit of a redaction be hit? `MaxRedactLogBytes` is 64 MiB in `service_redact.go` of #3251, and a version over it answers 400 `job.invalid`. `ReplaceLog` writes chunks of at most `MaxLogChunk` (1 MiB), so memory in the adapter is one chunk.
+- Can the memory limit of a redaction be hit? `MaxRedactLogBytes` is 64 MiB in `pkg/job/service_redact.go` of #3251, and a version over it answers 400 `job.invalid`. `ReplaceLog` writes chunks of at most `MaxLogChunk` (1 MiB), so memory in the adapter is one chunk.
 - Does the change need a dependency? No. The adapter uses `blob.Store`, `secret.ItemSealer`, `database/sql` through the existing stores, and the standard library.
 - Is a numbered migration needed? No. The two new tables go into the baseline of each dialect in name order (ADR 322, `CLAUDE.md`). No tag shipped the shape.
 - Does the second review pass add a failure mode? The adversarial list is in `design.md` "Failure modes" and "Threat model". Each answer is either a task or the out-of-scope list above.
