@@ -11,6 +11,7 @@ import (
 	"opendustpan.org/opendustpan/internal/mfasvc"
 	"opendustpan.org/opendustpan/pkg/mfa"
 	"opendustpan.org/opendustpan/pkg/mfa/gowebauthn"
+	"opendustpan.org/opendustpan/pkg/namespace"
 	"opendustpan.org/opendustpan/pkg/principal"
 )
 
@@ -178,6 +179,60 @@ func (s failingPrincipalStore) GetPrincipal(_ context.Context, id string) (princ
 		Subject: "", DisplayName: "", Kind: principal.KindPerson, Source: "", Namespace: "",
 		GroupCount: 0, BreakGlass: false,
 	}, s.err
+}
+
+// recordStore reads every principal as the record row, as a store that holds
+// a row the write checks did not make (a restored backup, another version),
+// with the read error err.
+type recordStore struct {
+	mfa.PasskeyStore
+
+	row principal.Principal
+	err error
+}
+
+func (s recordStore) GetPrincipal(_ context.Context, _ string) (principal.Principal, error) {
+	return s.row, s.err
+}
+
+// TestBreakGlassRotateRefusesRecordsOutsideTheSet sends a break-glass record
+// of a namespace and one of another kind into checkBreakGlassPerson. The store
+// refuses to write either row, so a fake read returns them. Each row is refused
+// by the service alone, with one refusal entry and no change of the passkeys.
+func TestBreakGlassRotateRefusesRecordsOutsideTheSet(t *testing.T) {
+	t.Parallel()
+
+	rows := []struct {
+		name      string
+		kind      principal.Kind
+		namespace namespace.Name
+	}{
+		{name: "a person of a namespace", kind: principal.KindPerson, namespace: "team-a"},
+		{name: "a principal of another kind", kind: principal.KindService, namespace: ""},
+	}
+
+	for _, row := range rows {
+		t.Run(row.name, func(t *testing.T) {
+			t.Parallel()
+
+			f := newBreakGlassFixture(t)
+			old := storedPasskey(t, f, storedPasskeyInput{
+				personID: glass, id: "pky-old", body: "old-material", name: "old-key",
+			})
+			store := recordStore{PasskeyStore: f.store, row: principal.Principal{
+				CreatedAt: f.clock.now(), UpdatedAt: f.clock.now(), DisabledAt: time.Time{}, ID: glass,
+				Subject: glass, DisplayName: glass, Kind: row.kind, Source: principal.SourceLocal,
+				Namespace: row.namespace, GroupCount: 0, BreakGlass: true,
+			}, err: nil}
+			svc := serviceOverStore(t, f, store)
+
+			err := svc.RotatePasskey(t.Context(), actor(glass, "ses-glass"), glass, old.ID, newPasskey("new"))
+			f.wantRefusal(t, "rotate the passkey of "+row.name, err, mfa.ErrNotFound, mfasvc.ActionRotateRefused)
+			wantCauses(t, f, mfasvc.ActionRotateRefused, notBreakGlassCause)
+
+			wantGlassUnchanged(t, f, old, mfasvc.ActionPasskeyRotated)
+		})
+	}
 }
 
 // serviceOverStore returns a service over store that writes its entries to the

@@ -5,9 +5,22 @@ import (
 	"testing"
 
 	"opendustpan.org/opendustpan/internal/mfasvc"
+	"opendustpan.org/opendustpan/pkg/audit"
 	"opendustpan.org/opendustpan/pkg/mfa"
 	"opendustpan.org/opendustpan/pkg/principal"
 )
+
+// entryCount returns the number of entries of @server, of every action.
+func (f *fixture) entryCount(t *testing.T) int {
+	t.Helper()
+
+	listing, err := f.store.List(t.Context(), audit.ServerScope, audit.Page{Size: audit.MaxPageSize, Before: 0})
+	if err != nil {
+		t.Fatalf("list entries: %v", err)
+	}
+
+	return len(listing.Entries)
+}
 
 // TestNilActorIsRefused proves that each entry point of the service refuses a
 // call with a nil Actor with ErrMissingActor. The HTTP adapter always passes an
@@ -70,8 +83,15 @@ func TestNilActorIsRefused(t *testing.T) {
 
 			f := newBreakGlassFixture(t)
 
+			before := f.entryCount(t)
+
 			if err := tc.call(f); !errors.Is(err, mfasvc.ErrMissingActor) {
 				t.Fatalf("%s with a nil actor = %v, want ErrMissingActor", tc.name, err)
+			}
+
+			// A nil Actor has no entry base, so the refusal writes no entry.
+			if after := f.entryCount(t); after != before {
+				t.Fatalf("%s with a nil actor: entries = %d, want %d (no entry)", tc.name, after, before)
 			}
 		})
 	}

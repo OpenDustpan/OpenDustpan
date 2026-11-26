@@ -142,7 +142,45 @@ type Input struct {
 // It refuses the kind agent: the model connect request makes that record,
 // with its sponsors.
 func (s *Service) CreatePrincipal(ctx context.Context, e audit.Entry, in Input) (Principal, error) {
-	return s.insertPrincipal(ctx, e, in)
+	// Defense in depth: the HTTP create route of the principals refuses the
+	// kind agent too, and a later model connect request makes the agent
+	// record with its sponsors. This check stays so that a caller that skips
+	// the route cannot make an agent without its sponsors through this
+	// method.
+	if in.Kind == KindAgent {
+		return Principal{}, fmt.Errorf(
+			"%w: the kind %q comes from the model connect request, with its sponsors",
+			ErrInvalid, in.Kind,
+		)
+	}
+
+	displayName := in.DisplayName
+	if displayName == "" {
+		displayName = in.Subject
+	}
+
+	at := s.Now()
+	p := Principal{
+		CreatedAt:   at,
+		UpdatedAt:   at,
+		DisabledAt:  time.Time{},
+		ID:          s.newID(principalIDPrefix),
+		Subject:     in.Subject,
+		DisplayName: displayName,
+		Kind:        in.Kind,
+		Source:      SourceLocal,
+		Namespace:   "", GroupCount: 0, BreakGlass: false,
+	}
+
+	if err := p.Validate(); err != nil {
+		return Principal{}, err
+	}
+
+	if err := s.store.CreatePrincipal(ctx, p, change(e, at, Ref(p.ID))); err != nil {
+		return Principal{}, fmt.Errorf("create principal %q: %w", in.Subject, err)
+	}
+
+	return p, nil
 }
 
 // GetPrincipal returns the principal with the ID id.
@@ -182,9 +220,11 @@ func (s *Service) ListPrincipals(ctx context.Context, req PageRequest, kind Kind
 	return pageOf(rows, total, limit, func(p Principal) string { return p.Subject }), nil
 }
 
-// ListBreakGlassAccounts returns each person that is a break-glass account,
-// deleted or not, ordered by subject. The list is small by design: the floor
-// rule covers installations with up to 50 accounts.
+// ListBreakGlassAccounts returns each person of the installation that is a
+// break-glass account, deleted or not, ordered by subject. An account of a
+// namespace is not listed: the list, the rotate route and the working count
+// read the same set. The list is small by design: the floor rule covers
+// installations with up to 50 accounts.
 func (s *Service) ListBreakGlassAccounts(ctx context.Context) ([]Principal, error) {
 	var accounts []Principal
 
@@ -196,7 +236,7 @@ func (s *Service) ListBreakGlassAccounts(ctx context.Context) ([]Principal, erro
 		}
 
 		for i := range page.Items {
-			if p := &page.Items[i]; p.BreakGlass {
+			if p := &page.Items[i]; p.BreakGlass && p.Namespace == "" {
 				accounts = append(accounts, *p)
 			}
 		}
@@ -267,10 +307,9 @@ func (s *Service) UpdatePrincipal(ctx context.Context, e audit.Entry, id string,
 // DeletePrincipal ends the principal with the ID id and its memberships,
 // with the entry e. The store revokes its grants in the same transaction, so
 // the Guard checks that caller holds every action that they give. It
-// returns ErrLastBreakGlass when the principal is the last enabled
-// break-glass account, which wraps ErrNoWorkingBreakGlass. The delete of a
-// principal of a namespace goes to the audit log of the namespace, with its
-// fence.
+// returns ErrNoWorkingBreakGlass when the principal is the last enabled
+// break-glass account. The delete of a principal of a namespace goes to the
+// audit log of the namespace, with its fence.
 func (s *Service) DeletePrincipal(ctx context.Context, e audit.Entry, caller identity.Principal, id string) error {
 	if err := s.checkPrincipal(ctx, caller, id); err != nil {
 		return fmt.Errorf("delete principal %q: %w", id, err)
@@ -292,7 +331,7 @@ func (s *Service) DeletePrincipal(ctx context.Context, e audit.Entry, caller ide
 	}
 
 	if err != nil {
-		return fmt.Errorf("delete principal %q: %w", id, lastBreakGlass(err))
+		return fmt.Errorf("delete principal %q: %w", id, err)
 	}
 
 	return nil
@@ -326,9 +365,9 @@ func (s *Service) EnablePrincipal(
 // caller cannot lock out a principal with more rights than their own. The
 // check is a read and the write works in maintenance mode, as a revocation
 // does. It returns ErrNotFound when no such principal exists, ErrDisabled
-// when it is disabled, and ErrLastBreakGlass when it is the last enabled
+// when it is disabled, and ErrNoWorkingBreakGlass when it is the last enabled
 // break-glass account: the store refuses that in the same transaction as the
-// write, and ErrLastBreakGlass wraps ErrNoWorkingBreakGlass.
+// write.
 func (s *Service) DisablePrincipal(
 	ctx context.Context, e audit.Entry, caller identity.Principal, id string,
 ) error {
@@ -341,7 +380,7 @@ func (s *Service) DisablePrincipal(
 	}
 
 	if err := s.store.DisablePrincipal(ctx, id, change(e, s.Now(), Ref(id))); err != nil {
-		return fmt.Errorf("disable principal %q: %w", id, lastBreakGlass(err))
+		return fmt.Errorf("disable principal %q: %w", id, err)
 	}
 
 	return nil
@@ -980,51 +1019,4 @@ func actsAsChange(groupID string) MemberAudit {
 
 		return []audit.Change{{Key: "actsAs", Old: nil, New: strings.Join(ids, "\n"), Layer: "", TakesEffect: ""}}, nil
 	}
-}
-
-// insertPrincipal validates and stores a new principal, with the entry e.
-// A break-glass account is not made here: the add of a break-glass person
-// stores the person and its first passkey in one store transaction.
-func (s *Service) insertPrincipal(
-	ctx context.Context, e audit.Entry, in Input,
-) (Principal, error) {
-	// Defense in depth: the HTTP create route of the principals refuses the
-	// kind agent too, and a later model connect request makes the agent
-	// record with its sponsors. This check stays so that a caller that skips
-	// the route cannot make an agent without its sponsors through this
-	// method.
-	if in.Kind == KindAgent {
-		return Principal{}, fmt.Errorf(
-			"%w: the kind %q comes from the model connect request, with its sponsors",
-			ErrInvalid, in.Kind,
-		)
-	}
-
-	displayName := in.DisplayName
-	if displayName == "" {
-		displayName = in.Subject
-	}
-
-	at := s.Now()
-	p := Principal{
-		CreatedAt:   at,
-		UpdatedAt:   at,
-		DisabledAt:  time.Time{},
-		ID:          s.newID(principalIDPrefix),
-		Subject:     in.Subject,
-		DisplayName: displayName,
-		Kind:        in.Kind,
-		Source:      SourceLocal,
-		Namespace:   "", GroupCount: 0, BreakGlass: false,
-	}
-
-	if err := p.Validate(); err != nil {
-		return Principal{}, err
-	}
-
-	if err := s.store.CreatePrincipal(ctx, p, change(e, at, Ref(p.ID))); err != nil {
-		return Principal{}, fmt.Errorf("create principal %q: %w", in.Subject, err)
-	}
-
-	return p, nil
 }

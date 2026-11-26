@@ -259,9 +259,11 @@ func (h *Handler) listBreakGlass(w http.ResponseWriter, r *http.Request, p ident
 		return
 	}
 
-	// The accounts of this API are the accounts of the installation: the routes
-	// refuse an account with a namespace (see breakGlassAccount). So the count is
-	// the installation count, not the count of one namespace.
+	// The list holds the accounts of the installation only: an account with a
+	// namespace is not listed (see ListBreakGlassAccounts). The rotate route
+	// reads the same set, and it refuses an account with a namespace (see
+	// breakGlassAccount). So the count is the installation count, the same set
+	// that the list shows, not the count of one namespace.
 	working, err := h.principals.CountWorkingBreakGlass(ctx, h.now())
 	if err != nil {
 		h.writeError(ctx, w, err)

@@ -93,6 +93,14 @@ var ErrMissingDependency = errors.New("mfasvc: missing dependency")
 
 // ErrMissingActor reports a call with a nil Actor. The HTTP adapter always
 // passes one; this error keeps a new caller from reaching a nil dereference.
+//
+// Defense in depth: this refusal writes no audit entry, because the Actor
+// holds the base of every entry (the subject, the source address, the channel
+// and the request ID), and an entry without them names no caller. A nil Actor
+// never comes from a request: the HTTP adapter builds the Actor before it
+// calls the service and writes its own entry for each refusal of the request.
+// This check does not rely on the adapter; it stops the call before any store
+// or audit write.
 var ErrMissingActor = errors.New("mfasvc: missing actor")
 
 // Service is the service of the passkeys.

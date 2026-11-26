@@ -106,6 +106,36 @@ func TestBreakGlassListCountsTheInstallationScope(t *testing.T) {
 	}
 }
 
+// TestBreakGlassListHoldsOnlyInstallationAccounts proves that the list route
+// on @server lists the break-glass accounts of the installation only, the same
+// set that the rotate route reads and that the working count counts. A working
+// account of a namespace is not listed and does not raise the count.
+func TestBreakGlassListHoldsOnlyInstallationAccounts(t *testing.T) {
+	t.Parallel()
+
+	f := newAccessFixture(t)
+	f.seedSessionAdmin(t, "admin")
+	seedNamespaceBreakGlass(t, f, "acme", "bg-acme-1")
+
+	inAcme, err := f.store.CountWorkingBreakGlassInNamespace(t.Context(), "acme", f.sessions.Now())
+	if err != nil || inAcme != 1 {
+		t.Fatalf("working count of acme = %d, %v; want 1", inAcme, err)
+	}
+
+	list := listBreakGlassAs(t, f, "admin")
+
+	for _, a := range list.Accounts {
+		if a.ID == "prn-bg-acme-1" {
+			t.Fatalf("list accounts = %+v, want no account of a namespace", list.Accounts)
+		}
+	}
+
+	if list.Working != 0 || list.Missing != 2 || list.Floor != 2 {
+		t.Fatalf("list counts with one working account in acme = %+v, want 0 working, 2 missing and the floor 2",
+			list)
+	}
+}
+
 // seedNamespaceBreakGlass stores a working break-glass account of ns: the
 // person "prn-<subject>" of ns, one passkey and a grant of admin on ns.
 func seedNamespaceBreakGlass(t *testing.T, f accessFixture, ns namespace.Name, subject string) {

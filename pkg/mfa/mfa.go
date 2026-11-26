@@ -254,6 +254,9 @@ type PasskeyStore interface {
 }
 
 // SignInChallengeStore is the persistence port of the ceremony challenges.
+// It is a separate interface that PasskeyStore embeds because the interfacebloat
+// linter allows at most 8 methods in one interface, and PasskeyStore with the
+// rotation and the add of a break-glass person would have 9.
 type SignInChallengeStore interface {
 	// CreateChallenge deletes the challenges that expired at c.CreatedAt and
 	// stores c keyed by d. It returns ErrInvalid for a value that

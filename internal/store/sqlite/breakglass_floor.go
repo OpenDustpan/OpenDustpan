@@ -43,9 +43,8 @@ func (s *Store) CountWorkingBreakGlassInNamespace(ctx context.Context, ns namesp
 // checkWorkingBreakGlassFloor refuses a change that lowers the working
 // break-glass count and leaves it below the floor.
 func checkWorkingBreakGlassFloor(before, after int64) error {
-	if after < before && after < principal.FloorWorkingPaths {
-		return fmt.Errorf("restore leaves too few working break-glass accounts: %w",
-			principal.ErrNoWorkingBreakGlass)
+	if err := principal.CheckBreakGlassFloor(before, after); err != nil {
+		return fmt.Errorf("restore leaves too few working break-glass accounts: %w", err)
 	}
 
 	return nil

@@ -34,12 +34,12 @@ func TestBreakGlassGuard(t *testing.T) {
 	for _, tc := range []breakGlassGuardCase{
 		{
 			name: "disable the last enabled account is refused", change: disableBreakGlass,
-			accounts: []string{"prn-bg1"}, target: "prn-bg1", want: principal.ErrLastBreakGlass,
+			accounts: []string{"prn-bg1"}, target: "prn-bg1", want: principal.ErrNoWorkingBreakGlass,
 			wantEnabled: 1, wantEntries: 0,
 		},
 		{
 			name: "delete the last enabled account is refused", change: deleteBreakGlass,
-			accounts: []string{"prn-bg1"}, target: "prn-bg1", want: principal.ErrLastBreakGlass,
+			accounts: []string{"prn-bg1"}, target: "prn-bg1", want: principal.ErrNoWorkingBreakGlass,
 			wantEnabled: 1, wantEntries: 0,
 		},
 		{
@@ -191,10 +191,10 @@ func TestBreakGlassGuardRace(t *testing.T) {
 	for i, err := range results {
 		switch {
 		case err == nil:
-		case errors.Is(err, principal.ErrLastBreakGlass):
+		case errors.Is(err, principal.ErrNoWorkingBreakGlass):
 			refused++
 		default:
-			t.Fatalf("disable %q = %v, want nil or %v", ids[i], err, principal.ErrLastBreakGlass)
+			t.Fatalf("disable %q = %v, want nil or %v", ids[i], err, principal.ErrNoWorkingBreakGlass)
 		}
 	}
 

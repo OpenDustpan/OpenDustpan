@@ -67,13 +67,6 @@ var (
 	//
 	// Code rule: docs/reference/code-rules.md lists it.
 	ErrNoWorkingBreakGlass = errors.New("the change leaves too few working break-glass accounts")
-	// ErrLastBreakGlass reports a change that would leave no enabled
-	// break-glass account. It is the narrower case of
-	// ErrNoWorkingBreakGlass: a change that leaves no enabled account also
-	// leaves too few working accounts, so a caller of the older sentinel
-	// still knows the refusal.
-	ErrLastBreakGlass = fmt.Errorf("%w: no enabled break-glass account remains",
-		ErrNoWorkingBreakGlass)
 
 	// ErrBreakGlassUnavailable reports that the store cannot count the
 	// working break-glass accounts. A caller that cannot count refuses the

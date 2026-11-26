@@ -570,6 +570,10 @@ func (s *Store) appendSweepEntries(
 		e := entry(res.At, principal.Ref(id))
 		e.Reason = sweepExemptReason
 
+		// Defense in depth: the entry function of the service builds a server
+		// entry. This check does not rely on it, so that a new caller cannot
+		// write the exemption record to a namespace scope or write an entry
+		// that is not valid.
 		if err := validServerEntry(e); err != nil {
 			return err
 		}
