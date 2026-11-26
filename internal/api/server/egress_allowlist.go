@@ -111,7 +111,8 @@ func readEgressAllowlistInput(in egressAllowlistRequest) (egress.Allowlist, erro
 }
 
 // egressAllowlistRoutes returns the egress allowlist rows of the route table
-// (ADR 17): a read and a change. Nil service means no agent store is
+// (each route declares its action and object): a read and a change. Nil
+// service means no agent store is
 // configured: no route is mounted. Every route needs
 // server:manage-settings on @server.
 func (h *Handler) egressAllowlistRoutes() []Route {

@@ -91,7 +91,8 @@ func agentSecretRef(r *http.Request) (agent.SecretRef, error) {
 }
 
 // agentSecretRoutes returns the secret items rows of the route table
-// (ADR 17): create, list, replace and delete. Nil service means no agent
+// (each route declares its action and object): create, list, replace and
+// delete. Nil service means no agent
 // store is configured: no route is mounted. Every route needs
 // server:manage-agent on @server. No route answers a value.
 func (h *Handler) agentSecretRoutes() []Route {
