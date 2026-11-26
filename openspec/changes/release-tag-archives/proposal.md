@@ -29,7 +29,7 @@ Errors the person may hit, and the one command that helps:
 The upload script, its tests, the maintainer section of the install page and the Makefile line are on main (pull request 3762). This change is the rest: the tag workflow and the test of its structure. It is one pull request, and the managed Droid computer `dustpan` opens it, because the cloud agent cannot push `.github/workflows`.
 
 - The tag workflow gets three changes (a workflow patch, see "Workflow patch" in the design): the jobs `archives-build` and `archives-verify` before the image job, the job `release-draft` after it, and a `permissions` block for each job in place of the block for the whole file.
-- A test of the structure of the workflow. A checker function reads `.github/workflows/release.yml` and returns one finding for each missing guard. A second test runs the checker on mutated copies of the file. The tests run in the Go job of every pull request, so no tag is needed.
+- A test of the structure of the workflow. A checker function reads the workflow file (the design says which of the two paths) and returns one finding for each missing guard. A second test runs the checker on mutated copies of the file. The tests run in the Go job of every pull request, so no tag is needed.
 
 Out of scope:
 
