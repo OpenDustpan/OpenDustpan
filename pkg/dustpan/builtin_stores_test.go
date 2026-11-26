@@ -735,7 +735,7 @@ func TestWithPostgreSQLOpensTheTestDatabase(t *testing.T) {
 		t.Skipf("set %s to run the PostgreSQL case", postgresURLEnv)
 	}
 
-	st, err := dustpan.OpenStore(t.Context(), "postgres:"+isolatedPostgresURL(t, base))
+	st, err := dustpan.OpenStore(t.Context(), isolatedPostgresURL(t, base))
 	if err != nil {
 		t.Fatalf("open the store: %v", err)
 	}
