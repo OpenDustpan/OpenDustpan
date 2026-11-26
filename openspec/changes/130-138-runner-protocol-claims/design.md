@@ -21,7 +21,7 @@ Main has the server side of the runner protocol: poll, heartbeat and claim renew
 
 ## Structure
 
-Package `pkg/runner/client` (NEW) with an unexported `loop` type and the constructor `New(cfg)`. The constructor rejects an empty runner key, a lease below `runner.MinLease` and a base URL that is not http or https. No field holds an expiry that the server did not send. The runner binary in `OpenDustpan/dustpan-runner` calls `New` and `Run`. This repository ships no command for it.
+Package `pkg/runner/client` (NEW) with an exported `Loop` type and the constructor `New(cfg)` that returns `*Loop`. The constructor rejects an empty runner key, a lease below `runner.MinLease` and a base URL that is not http or https. No field holds an expiry that the server did not send. The runner binary in `OpenDustpan/dustpan-runner` calls `New` and `Run`. This repository ships no command for it.
 
 ## Risks
 
