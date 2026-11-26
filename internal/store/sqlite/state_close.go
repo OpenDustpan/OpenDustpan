@@ -76,8 +76,8 @@ func awaitingRows(ctx context.Context, q *db.Queries, ns namespace.Name, unitID 
 func updateJobRow(ctx context.Context, q *db.Queries, r jobstore.Row, prev int64) (bool, error) {
 	n, err := q.UpdateJob(ctx, db.UpdateJobParams{
 		State: string(r.State), Wait: string(r.Wait), CurrentPhase: int64(r.Phase), CurrentChanges: r.Changes,
-		CurrentOperation: r.Operation, Version: r.Version, Body: r.Body, UpdatedAtMs: r.UpdatedMs,
-		StateChangedAtMs: r.StateChangedMs, ID: string(r.ID), PrevVersion: prev,
+		CurrentOperation: r.Operation, ClearKey: r.ClearsKey(), Version: r.Version, Body: r.Body,
+		UpdatedAtMs: r.UpdatedMs, StateChangedAtMs: r.StateChangedMs, ID: string(r.ID), PrevVersion: prev,
 	})
 	if err != nil {
 		return false, jobIndexError("update job", err)

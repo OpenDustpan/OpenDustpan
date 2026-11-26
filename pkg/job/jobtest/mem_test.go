@@ -45,6 +45,7 @@ func TestMemConformance(t *testing.T) {
 
 				db.failAudit = true
 			},
+			AgeJob: nil,
 		}
 	})
 }

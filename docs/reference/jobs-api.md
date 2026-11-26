@@ -113,8 +113,10 @@ The second answer has the same status and the header `Idempotent-Replayed:
 true`. The server compares the whole request: the workspace, the operation,
 the pool, the location and the reason. The same key with another request fails
 with 422 and the code `request.idempotency-key-reused`. A key belongs to its
-caller: the same string from another caller makes another job. The server
-keeps a key as long as it keeps the job.
+caller: the same string from another caller makes another job. A key names its
+job for 24 hours from the start of the job. After that, the same key starts a
+new job. [Job-start idempotency](job-start-idempotency.md) has the retention
+and the retry steps.
 
 ### Answers
 
