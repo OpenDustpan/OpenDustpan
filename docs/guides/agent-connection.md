@@ -134,7 +134,7 @@ code `agent-connection.secret-in-use`, and the item stays. Disconnect with
 
 | Status | Code | Cause and command |
 | --- | --- | --- |
-| 400 | `agent-connection.secret-invalid` | The name, the value or the reference is not valid. Send a name of 1 to 64 bytes, a value that is not empty, and a reference of the form `itm-...` from the item list. |
+| 400 | `agent-connection.secret-invalid` | The name, the value or the reference is not valid. Send a name of 1 to 128 bytes, a value that is not empty, and a reference of the form `itm-...` from the item list. |
 | 400 | `agent-connection.allowlist-invalid` | A host or a CIDR rule is not valid, or a rule starts in an address that no range opens. Send host names and ranges such as `10.0.0.0/8`. |
 | 404 | `agent-connection.secret-not-found` | No item has this reference. List the items with `GET /api/agent/secrets`. |
 | 404 | `agent-connection.not-connected` | The server holds no connection document. The route that writes the document is a later change. |

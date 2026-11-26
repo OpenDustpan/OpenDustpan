@@ -154,6 +154,29 @@ func TestParseConnectionSpec_Hostile(t *testing.T) {
 	}
 }
 
+func TestProviderFields_SizeBound(t *testing.T) {
+	t.Parallel()
+
+	// A valid document under the 32 KiB document limit whose providerFields
+	// is above the 8 KiB bound of the field: only that bound refuses it.
+	raw := strings.Replace(
+		validDocument(),
+		`"tools": { "choice": "auto", "parallel": "on" }`,
+		`"tools": { "choice": "auto", "parallel": "on" },
+  "providerFields": { "options": { "pad": "`+strings.Repeat(" ", 9*1024)+`" } }`,
+		1,
+	)
+
+	_, err := agent.ParseConnectionSpec([]byte(raw))
+	if !errors.Is(err, agent.ErrConnectionInvalid) {
+		t.Fatalf("ParseConnectionSpec() = %v, want ErrConnectionInvalid", err)
+	}
+
+	if !strings.Contains(err.Error(), "providerFields is larger than 8 KiB") {
+		t.Fatalf("ParseConnectionSpec() error = %q, want the providerFields size bound", err)
+	}
+}
+
 func TestForbiddenHeaderNames(t *testing.T) {
 	t.Parallel()
 

@@ -66,6 +66,9 @@ const (
 	maxRateLimitWaitHeaders = 8
 	// maxUserAgentBytes is the largest length of userAgent, in bytes.
 	maxUserAgentBytes = 200
+	// maxProviderFieldsBytes is the largest length of providerFields, in
+	// bytes.
+	maxProviderFieldsBytes = 8 * 1024
 	// firstPrintableRune is the first rune above the ASCII control
 	// characters. A rune below it is a control character.
 	firstPrintableRune = 0x20
@@ -1258,7 +1261,7 @@ func parseProviderFields(raw json.RawMessage) (map[string]any, error) {
 		return nil, fmt.Errorf("%w: providerFields does not parse: %w", ErrConnectionInvalid, err)
 	}
 
-	if len(pf) > 8*1024 {
+	if len(raw) > maxProviderFieldsBytes {
 		return nil, fmt.Errorf("%w: providerFields is larger than 8 KiB", ErrConnectionInvalid)
 	}
 
