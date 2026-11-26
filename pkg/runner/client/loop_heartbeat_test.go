@@ -7,6 +7,7 @@ import (
 	"net/http"
 	"strings"
 	"testing"
+	"time"
 
 	"opendustpan.org/opendustpan/pkg/launcher/session"
 	"opendustpan.org/opendustpan/pkg/runner"
@@ -131,5 +132,94 @@ func TestLoopEndsOnAHeartbeatAnsweredRetiredOrBadProof(t *testing.T) {
 				t.Errorf("the code %s was logged as a code that the loop does not know", tc.code)
 			}
 		})
+	}
+}
+
+// TestHeartbeatRefusalStopsTheWorkAndKeepsTheLoop checks that a heartbeat
+// answered claim-lost or not-found stops the work, records the code of the
+// answer and lets the loop poll again.
+func TestHeartbeatRefusalStopsTheWorkAndKeepsTheLoop(t *testing.T) {
+	t.Parallel()
+
+	for _, tc := range []struct {
+		code   string
+		status int
+		want   error
+	}{
+		{protocol.ErrorClaimLost, http.StatusConflict, client.ErrClaimLost},
+		{protocol.ErrorNotFound, http.StatusNotFound, client.ErrNotFound},
+	} {
+		t.Run(tc.code, func(t *testing.T) {
+			t.Parallel()
+
+			checkHeartbeatRefusalStopsWorkOnly(t, tc.code, tc.status, tc.want)
+		})
+	}
+}
+
+func checkHeartbeatRefusalStopsWorkOnly(t *testing.T, code string, status int, want error) {
+	t.Helper()
+
+	lease := runner.DefaultLease
+	ticks := newFakeTicks()
+	srv := newFakeServer(map[string][]answer{
+		protocol.PathPoll: {
+			ok(work(lease)), ok(work(lease)), noWork(),
+		},
+		protocol.PathHeartbeat: {
+			refusal(status, code, 0),
+			ok(protocol.HeartbeatResponse{Cancel: nil, Lost: nil, RotateKey: false, Draining: false}),
+		},
+	})
+	l, logs := loggedLoop(t, srv, ticks)
+
+	ctx, cancel := context.WithTimeout(t.Context(), 5*time.Second)
+	defer cancel()
+
+	calls := 0
+	var stopped error
+
+	err := l.Run(ctx, func(wctx context.Context, _ protocol.Work) error {
+		calls++
+
+		if calls > 1 {
+			cancel()
+
+			return nil
+		}
+
+		ticks.fire(ctx, t, runner.HeartbeatEvery)
+		<-wctx.Done()
+		stopped = context.Cause(wctx)
+
+		return nil
+	})
+	if err != nil {
+		t.Fatalf("Run = %v, want nil", err)
+	}
+
+	if calls != 2 {
+		t.Fatalf("the handler ran %d times, want 2: the loop did not go on", calls)
+	}
+
+	if !errors.Is(stopped, want) {
+		t.Errorf("work stopped with %v, want %v", stopped, want)
+	}
+
+	if !logs.hasAttrs(refusedMessage, map[string]string{"error.code": code}) {
+		t.Errorf("no refusal record with the code %s", code)
+	}
+
+	checkNoUnknownCodeInRecords(t, logs, code)
+}
+
+func checkNoUnknownCodeInRecords(t *testing.T, logs logCapture, code string) {
+	t.Helper()
+
+	for _, r := range logs.all() {
+		if strings.Contains(r.reason, unknownCodeMessage) ||
+			r.attrs["error.code"] == "unknown" || r.attrs["cause.code"] == "unknown" {
+			t.Errorf("the code %s was logged as unknown in %q", code, r.message)
+		}
 	}
 }

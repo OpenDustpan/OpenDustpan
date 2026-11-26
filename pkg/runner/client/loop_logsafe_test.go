@@ -66,9 +66,9 @@ func TestLoopLogsAnUnknownCodeAsUnknown(t *testing.T) {
 		t.Errorf("Run = %v, want ErrRefused", res.run)
 	}
 
-	// The code is cut to the limit of the log before the error holds it, so
-	// the record names the length of the cut code.
-	want := map[string]string{"error.code": "unknown", "error.code_length": strconv.Itoa(256)}
+	// The record names the length of the code of the server, not the length
+	// of the text that the log cuts.
+	want := map[string]string{"error.code": "unknown", "error.code_length": strconv.Itoa(1 << 20)}
 	if !logs.hasAttrs(refusedMessage, want) {
 		t.Error("no refusal record with the code unknown and its length")
 	}

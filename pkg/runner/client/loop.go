@@ -70,6 +70,7 @@ type Error struct {
 	Code       string
 	Message    string
 	RetryAfter time.Duration
+	codeLength int
 }
 
 // Error returns the status, the code and the message of the answer.
@@ -594,10 +595,11 @@ func answerError(resp session.Response) error {
 
 	e := &Error{
 		Status: resp.Status, Code: "", Message: "the answer has the status " + strconv.Itoa(resp.Status),
-		RetryAfter: resp.RetryAfter,
+		RetryAfter: resp.RetryAfter, codeLength: 0,
 	}
 
 	if json.Unmarshal(resp.Body, &body) == nil && body.Code != "" {
+		e.codeLength = len(body.Code)
 		e.Code, e.Message = logText(body.Code), logText(body.Message)
 	}
 
@@ -899,7 +901,7 @@ func errorAttr(key string, err error) slog.Attr {
 
 	if !isProtocolCode(e.Code) {
 		return slog.GroupAttrs(key, slog.Int("status", e.Status), slog.String("code", unknownCode),
-			slog.Int("code_length", len(e.Code)), message)
+			slog.Int("code_length", e.codeLength), message)
 	}
 
 	return slog.GroupAttrs(key, slog.Int("status", e.Status), slog.String("code", e.Code), message)
@@ -934,6 +936,19 @@ func (l *Loop) now() time.Time {
 	return time.Now()
 }
 
+func stopsWorkOnHeartbeat(err error) bool {
+	return errors.Is(err, ErrClaimLost) || errors.Is(err, ErrNotFound)
+}
+
+func (l *Loop) heartbeatAnswer(ctx context.Context, claims []string, free int) (session.Response, error) {
+	resp, err := l.post(ctx, protocol.PathHeartbeat, protocol.Heartbeat{Claims: claims, Free: free})
+	if err != nil {
+		return resp, err
+	}
+
+	return resp, answerError(resp)
+}
+
 // heartbeats sends a heartbeat every runner.HeartbeatEvery until ctx ends.
 func (l *Loop) heartbeats(ctx context.Context, stop context.CancelCauseFunc) {
 	tick, stopTicker := l.cfg.Ticker(runner.HeartbeatEvery)
@@ -955,9 +970,12 @@ func (l *Loop) heartbeats(ctx context.Context, stop context.CancelCauseFunc) {
 
 		l.mu.Unlock()
 
-		resp, err := l.post(ctx, protocol.PathHeartbeat, protocol.Heartbeat{Claims: claims, Free: free})
-		if err == nil {
-			err = answerError(resp)
+		resp, err := l.heartbeatAnswer(ctx, claims, free)
+		if stopsWorkOnHeartbeat(err) {
+			l.refused(ctx, protocol.PathHeartbeat, "the work stopped", errorAttr("error", err))
+			l.stopCurrentWork(err)
+
+			continue
 		}
 
 		switch {
@@ -991,6 +1009,17 @@ func (l *Loop) heartbeats(ctx context.Context, stop context.CancelCauseFunc) {
 		}
 
 		l.applyHeartbeat(hr)
+	}
+}
+
+// stopCurrentWork stops the work that runs now, if any. The loop goes on.
+func (l *Loop) stopCurrentWork(err error) {
+	l.mu.Lock()
+	stop := l.stopWork
+	l.mu.Unlock()
+
+	if stop != nil {
+		stop(err)
 	}
 }
 
