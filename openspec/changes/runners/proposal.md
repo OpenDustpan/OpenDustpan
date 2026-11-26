@@ -4,6 +4,8 @@ version: 8
 
 Roadmap: `docs/roadmap.md:259` (Runners).
 
+Issue: #4122.
+
 ## Why
 
 **Persona: runner operator.** A runner operator runs one pool for Pulumi jobs and OpenTofu jobs. The operator creates a join token, joins runners, and trusts that a dead runner loses its claim and another runner takes the job while the log stays readable.

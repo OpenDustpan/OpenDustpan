@@ -8,6 +8,22 @@ The SQLite and the PostgreSQL store SHALL implement `mfa.PendingStore`, `mfa.Rec
 - **WHEN** a test reads each row of the three ports
 - **THEN** no row holds a plain code or a plain pending secret
 
+### Requirement: completion-value-rejects-incomplete-parts
+
+The pending sign-in port SHALL take the session, the digest of its secret and the audit entry of a completion as one value, and the only constructor of that value SHALL return `ErrInvalid` for a zero session ID, a zero digest or an entry with no action.
+
+#### Scenario: Zero session ID
+- **WHEN** a caller builds a completion with a session that has no ID
+- **THEN** the constructor returns `ErrInvalid`
+
+#### Scenario: Zero digest
+- **WHEN** a caller builds a completion with a zero digest
+- **THEN** the constructor returns `ErrInvalid`
+
+#### Scenario: Entry with no action
+- **WHEN** a caller builds a completion with an audit entry that has no action
+- **THEN** the constructor returns `ErrInvalid`
+
 ### Requirement: sign-in-step-use-keeps-step-up-counters
 
 The TOTP port SHALL have one method that accepts a time step for a sign-in with the single-use rule of the step-up, and the method SHALL change no step-up counter, lock or disable.
@@ -22,11 +38,15 @@ The TOTP port SHALL have one method that accepts a time step for a sign-in with 
 
 ### Requirement: restore-keeps-second-factor-safe
 
-A restore SHALL NOT make a used recovery code valid again, SHALL NOT end a lock of a TOTP factor or make a used step valid again, and SHALL leave no TOTP attempts row of a factor that the restored data does not have. A backup SHALL carry no recovery code, and a restore that replaces access SHALL empty the recovery codes and write one audit entry that names the reason.
+A restore SHALL NOT make a used recovery code valid again, SHALL NOT end a lock of a TOTP factor or make a used step valid again, and SHALL leave no TOTP attempts row of a factor that the restored data does not have. A backup SHALL carry no recovery code, and a restore that replaces access SHALL empty the recovery codes and, when it removes one or more codes, write one audit entry that names the reason. A restore that removes no recovery code SHALL write no such entry.
 
 #### Scenario: Older backup and a used recovery code
 - **WHEN** a person uses a recovery code and a restore of an older backup replaces access
 - **THEN** the code is refused and the audit log has one entry that names the removal of the recovery codes
+
+#### Scenario: Restore with no recovery code
+- **WHEN** a restore of an older backup replaces access and no recovery code exists
+- **THEN** the audit log has no entry about recovery codes
 
 #### Scenario: Restore during a lock
 - **WHEN** a TOTP factor is locked and a restore of an older backup runs

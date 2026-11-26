@@ -134,7 +134,11 @@ func (s *Service) recordOne(ctx context.Context, source principal.RemovalSource,
 	limits := s.limits(ctx)
 	at := s.cfg.Now()
 
-	_, total, err := s.cfg.Members.ListMembers(ctx, groupID, principal.Query{After: "", Low: "", High: "", Limit: 1})
+	_, total, err := s.cfg.Members.ListMembers(
+		ctx,
+		groupID,
+		principal.Query{After: "", Low: "", High: "", Limit: 1, InstallationOnly: false},
+	)
 	if err != nil {
 		return fmt.Errorf("count the members of group %q: %w", groupID, err)
 	}

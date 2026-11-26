@@ -47,6 +47,8 @@ type Query struct {
 	Low   string
 	High  string
 	Limit int
+	// InstallationOnly keeps only the principals whose namespace is empty.
+	InstallationOnly bool
 }
 
 // query validates req and returns the Query for a store. It asks for one
@@ -74,7 +76,7 @@ func (req PageRequest) query(key func(string) string) (Query, int, error) {
 
 	low := key(req.Prefix)
 
-	return Query{After: after, Low: low, High: prefixEnd(low), Limit: limit + 1}, limit, nil
+	return Query{After: after, Low: low, High: prefixEnd(low), Limit: limit + 1, InstallationOnly: false}, limit, nil
 }
 
 // pageOf trims rows to limit and sets the cursor of the next page from the
