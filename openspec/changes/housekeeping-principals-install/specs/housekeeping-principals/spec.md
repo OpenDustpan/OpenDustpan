@@ -32,6 +32,22 @@ The server SHALL NOT give any role that a housekeeping principal holds on `@serv
 - **WHEN** the roles that the install grants on `@server` are listed
 - **THEN** none of them holds an action of a namespace area
 
+### Requirement: A site administrator can revoke a grant of a built-in principal
+
+The server SHALL allow the revoke of a grant whose holder has the source `builtin` to a caller that holds `server:manage-access` on `@server` (for a grant on a namespace: `namespace:manage-access` on that namespace), and SHALL NOT apply `checkEscalation` to that revoke. The server SHALL deny the revoke to any other caller, fail closed, and write the denial to the audit log. A create and a change of a grant SHALL keep `checkEscalation`.
+
+#### Scenario: Site administrator revokes a housekeeping grant
+- **WHEN** a site administrator that is not the bootstrap administrator revokes the grant of `housekeeping-history-retention` on a namespace
+- **THEN** the revoke succeeds, the grant is revoked and the audit log has an entry for it
+
+#### Scenario: Caller with no manage-access action
+- **WHEN** a caller that does not hold `server:manage-access` revokes a grant of a housekeeping principal on `@server`
+- **THEN** the server answers 403 and writes the denial to the audit log
+
+#### Scenario: Holder that is not built in
+- **WHEN** a caller revokes a grant of a principal with another source and does not hold every action of that grant
+- **THEN** the server answers 403 with `ErrEscalation`, as before
+
 ### Requirement: Each sweep has its own narrow action
 
 The server SHALL define one action for each of the sweeps of artifacts, blobs, checkpoints, name locks, temporary administrators and agent reveals, and the role of each purpose SHALL hold only the action of its sweep.
