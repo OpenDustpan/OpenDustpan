@@ -113,12 +113,22 @@ func createWorkspaceRows(ctx context.Context, q *db.Queries, w workspace.Workspa
 		return workspace.ErrAlreadyExists
 	}
 
-	return publishWorkspaceInventory(
+	err = publishWorkspaceInventory(
 		ctx,
 		q,
 		w.Ref,
 		unitWrite{unitID: row.ID, atMs: row.UpdatedAtMs, kind: inventory.ChangeCreated},
 	)
+	if err != nil {
+		return err
+	}
+
+	// The first rule of the new workspace commits with the workspace, or
+	// neither does.
+	return writeNewUnitRule(ctx, q, newUnit{
+		At: w.CreatedAt, Namespace: w.Ref.Namespace, Tool: workspace.InventoryTool, Name: w.Ref.Name.String(),
+		ID: row.ID,
+	})
 }
 
 // GetWorkspace implements workspace.Store.

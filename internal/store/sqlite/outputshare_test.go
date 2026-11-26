@@ -97,7 +97,37 @@ func outputShareHarness(t *testing.T) outputsharetest.Harness {
 		},
 	}
 
-	return outputsharetest.WithUnits(h, s)
+	h = outputsharetest.WithUnits(h, s)
+
+	return outputsharetest.WithUnitFault(h, s, func(t *testing.T) func() {
+		t.Helper()
+
+		return armAuditFault(t, path)
+	})
+}
+
+// armAuditFault makes each insert of an audit entry fail, as a fault after the
+// write of the first rule of a new unit and before the commit. The function
+// that it returns removes the fault.
+func armAuditFault(t *testing.T, path string) func() {
+	t.Helper()
+
+	conn := rawSettingDB(t, path)
+
+	const arm = `CREATE TRIGGER inject_audit_fault BEFORE INSERT ON audit_entries
+		BEGIN SELECT RAISE(ABORT, 'injected fault'); END`
+
+	if _, err := conn.ExecContext(t.Context(), arm); err != nil {
+		t.Fatalf("arm the audit fault: %v", err)
+	}
+
+	return func() {
+		ctx := context.WithoutCancel(t.Context())
+
+		if _, err := conn.ExecContext(ctx, `DROP TRIGGER inject_audit_fault`); err != nil {
+			t.Errorf("remove the audit fault: %v", err)
+		}
+	}
 }
 
 // plantRuleRow writes the rule r as a row with direct SQL and the CHECK

@@ -231,11 +231,11 @@ func storeCases() []suiteCase {
 // makes a unit.
 func newUnitCases() []suiteCase {
 	return []suiteCase{
-		{nil, "new unit: nobody gives no rule"},
-		{nil, "new unit: namespace gives one rule that names the namespace of the unit"},
-		{nil, "new unit: the rule has its audit entry in the namespace of the unit"},
-		{nil, "new unit: a fault before the commit leaves no unit, no rule and no audit entry"},
-		{nil, "new unit: a setting that fails Validate refuses the create and writes nothing"},
+		{testNewUnitNobody, "new unit: nobody gives no rule"},
+		{testNewUnitNamespace, "new unit: namespace gives one rule that names the namespace of the unit"},
+		{testNewUnitAudit, "new unit: the rule has its audit entry in the namespace of the unit"},
+		{testNewUnitFault, "new unit: a fault before the commit leaves no unit, no rule and no audit entry"},
+		{testNewUnitInvalidSetting, "new unit: a setting that fails Validate refuses the create and writes nothing"},
 	}
 }
 

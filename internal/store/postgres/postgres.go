@@ -497,16 +497,24 @@ func createStackRows(ctx context.Context, q *db.Queries, st stack.Stack) error {
 		return stack.ErrAlreadyExists
 	}
 
-	if err := insertStackTags(ctx, q, row.ID, st.Tags); err != nil {
-		return err
+	if tagsErr := insertStackTags(ctx, q, row.ID, st.Tags); tagsErr != nil {
+		return tagsErr
 	}
 
-	return publishStackInventory(
+	err = publishStackInventory(
 		ctx,
 		q,
 		st.Ref,
 		unitWrite{unitID: row.ID, atMs: row.UpdatedAtMs, kind: inventory.ChangeCreated},
 	)
+	if err != nil {
+		return err
+	}
+
+	// The first rule of the new stack commits with the stack, or neither does.
+	return writeNewUnitRule(ctx, q, newUnit{
+		At: st.CreatedAt, Namespace: st.Ref.Namespace, Tool: inventoryTool, Name: stackUnitName(st.Ref), ID: row.ID,
+	})
 }
 
 // GetStack implements stack.Store. One statement reads the stack and its

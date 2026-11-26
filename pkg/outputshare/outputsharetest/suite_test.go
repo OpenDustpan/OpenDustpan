@@ -25,7 +25,7 @@ func TestSuiteOverAMemorySettingsStore(t *testing.T) {
 				return newMemSettings().harness()
 			}
 
-			for _, prefix := range []string{"checker:", "latest:", "client-encrypted:", "states:", "outputs:"} {
+			for _, prefix := range []string{"new_unit:", "checker:", "latest:", "client-encrypted:", "states:", "outputs:"} {
 				if strings.HasPrefix(strings.TrimPrefix(t.Name(), "TestSuiteOverAMemorySettingsStore/"), prefix) {
 					t.Skip("the case needs the stores of the tools")
 				}
