@@ -633,9 +633,10 @@ func (l *Loop) refused(ctx context.Context, path, reason string, attrs ...slog.A
 }
 
 // answerError returns nil when resp is an answer that the loop accepts, and
-// an *Error otherwise. A poll accepts a 200 with work and a 204 with no work;
-// a renewal and a heartbeat accept a 200. Any other status is an error, and
-// the loop fails closed.
+// an error otherwise. A 200 with work is a success; a 204 is a success only
+// for the poll, which checks it before calling answerError. A renewal and a
+// heartbeat accept a 200. Any other status is an error, and the loop fails
+// closed.
 func answerError(resp session.Response) error {
 	var body protocol.Error
 
@@ -653,8 +654,14 @@ func answerError(resp session.Response) error {
 
 	switch {
 	case resp.Status == statusNoContent:
-		// A poll with a 204 has no work.
-		return nil
+		// A 204 is a success only for the poll, which checks it before
+		// calling answerError. A renewal or a heartbeat that gets a 204
+		// fails closed with ErrInvalid.
+		// Defense in depth: renewed and the heartbeat path also refuse an
+		// undecodable body, so a 204 without this guard still ends with
+		// ErrInvalid but with the wrong reason; this guard keeps the status
+		// in the reason and the error.
+		return fmt.Errorf("%w: the status %d is not valid: only a poll accepts 204", ErrInvalid, resp.Status)
 	case resp.Status == statusOK:
 		// A 200 is a success: with a code, a refusal; without, the answer.
 		if e.Code == "" {
@@ -707,6 +714,12 @@ func (l *Loop) poll(ctx context.Context) (protocol.Work, bool, error) {
 		return none, false, err
 	}
 
+	// A 204 is a success only for the poll: the poll checks it here, before
+	// answerError, which refuses a 204 for any other call.
+	if resp.Status == statusNoContent {
+		return none, false, nil
+	}
+
 	if aerr := answerError(resp); aerr != nil {
 		if errors.Is(aerr, ErrRefused) {
 			// Fail closed: a code that the loop does not know ends the poll with an error.
@@ -714,10 +727,6 @@ func (l *Loop) poll(ctx context.Context) (protocol.Work, bool, error) {
 		}
 
 		return none, false, aerr
-	}
-
-	if resp.Status == statusNoContent {
-		return none, false, nil
 	}
 
 	var w protocol.Work
@@ -863,6 +872,12 @@ func (l *Loop) renew(
 	case ctx.Err() != nil:
 		return expires, true
 	case errors.Is(err, ErrRetired), errors.Is(err, ErrBadProof), errors.Is(err, ErrInvalid):
+		if resp.Status == statusNoContent {
+			l.refused(ctx, path,
+				fmt.Sprintf("the status %d is not valid for a renewal: only a poll accepts 204", resp.Status),
+				slog.String("operation", op), errorAttr("error", err))
+		}
+
 		stop(err)
 		stopWork(err)
 
@@ -1073,8 +1088,7 @@ func (l *Loop) heartbeats(ctx context.Context, stop context.CancelCauseFunc) {
 
 			continue
 		case errors.Is(err, ErrRetired), errors.Is(err, ErrBadProof), errors.Is(err, ErrInvalid):
-			l.log.WarnContext(ctx, "the server does not accept the runner: the loop ends", errorAttr("error", err))
-			stop(err)
+			l.stopLoopOnTerminal(ctx, resp, err, stop)
 
 			return
 		default:
@@ -1096,6 +1110,25 @@ func (l *Loop) heartbeats(ctx context.Context, stop context.CancelCauseFunc) {
 
 		l.applyHeartbeat(hr)
 	}
+}
+
+// stopLoopOnTerminal ends the loop for a heartbeat answered retired,
+// bad-proof or invalid. A 204 gets a refusal record that names the status:
+// only a poll accepts 204.
+func (l *Loop) stopLoopOnTerminal(
+	ctx context.Context, resp session.Response, err error, stop context.CancelCauseFunc,
+) {
+	if resp.Status == statusNoContent {
+		l.refused(ctx, protocol.PathHeartbeat,
+			fmt.Sprintf("the status %d is not valid for a heartbeat: only a poll accepts 204", resp.Status),
+			errorAttr("error", err))
+		stop(err)
+
+		return
+	}
+
+	l.log.WarnContext(ctx, "the server does not accept the runner: the loop ends", errorAttr("error", err))
+	stop(err)
 }
 
 // stopNamedClaim stops the work of the claim that the heartbeat named, and only

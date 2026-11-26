@@ -214,6 +214,79 @@ func TestLoopRefusesANon200Success(t *testing.T) {
 	}
 }
 
+// TestLoopRefusesA204OnRenewalAndHeartbeat checks that a 204 is a success
+// only for the poll. A renewal or a heartbeat that gets a 204 fails closed
+// with ErrInvalid and a refusal record that names the status. Each row fails
+// when the 204 guard in answerError is removed: without it the loop ends with
+// ErrInvalid but with the reason "the answer is not a renewal" or "the answer
+// is not a heartbeat answer", which does not name 204.
+func TestLoopRefusesA204OnRenewalAndHeartbeat(t *testing.T) {
+	t.Parallel()
+
+	t.Run("renew", func(t *testing.T) {
+		t.Parallel()
+
+		lease := runner.DefaultLease
+		ticks := newFakeTicks()
+		srv := newFakeServer(map[string][]answer{
+			protocol.PathPoll:       {ok(work(lease))},
+			protocol.PathClaimRenew: {noWork()},
+		})
+		l, logs := loggedLoop(t, srv, ticks)
+
+		done := make(chan error, 1)
+		go func() {
+			done <- ticks.fireErr(t.Context(), runner.RenewEvery(lease))
+		}()
+
+		res := boundedRun(t, l)
+		if err := <-done; err != nil {
+			t.Fatal(err)
+		}
+
+		if !errors.Is(res.run, client.ErrInvalid) {
+			t.Errorf("Run = %v, want ErrInvalid", res.run)
+		}
+
+		if !errors.Is(res.stopped, client.ErrInvalid) {
+			t.Errorf("work stopped with %v, want ErrInvalid", res.stopped)
+		}
+
+		if !logs.has(slog.LevelWarn, refusedMessage, "only a poll accepts 204") {
+			t.Errorf("no refusal record naming 204; records: %+v", logs.all())
+		}
+	})
+
+	t.Run("heartbeat", func(t *testing.T) {
+		t.Parallel()
+
+		ticks := newFakeTicks()
+		srv := newFakeServer(map[string][]answer{
+			protocol.PathPoll:      {noWork()},
+			protocol.PathHeartbeat: {noWork()},
+		})
+		l, logs := loggedLoop(t, srv, ticks)
+
+		done := make(chan error, 1)
+		go func() {
+			done <- ticks.fireErr(t.Context(), runner.HeartbeatEvery)
+		}()
+
+		res := boundedRun(t, l)
+		if err := <-done; err != nil {
+			t.Fatal(err)
+		}
+
+		if !errors.Is(res.run, client.ErrInvalid) {
+			t.Errorf("Run = %v, want ErrInvalid", res.run)
+		}
+
+		if !logs.has(slog.LevelWarn, refusedMessage, "only a poll accepts 204") {
+			t.Errorf("no refusal record naming 204; records: %+v", logs.all())
+		}
+	})
+}
+
 // endless is a body stream that never ends. It counts the bytes that the
 // reader takes.
 type endless struct {
