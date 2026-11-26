@@ -107,11 +107,23 @@ func TestCreateKeyRetentionClearIsAudited(t *testing.T) {
 	old.CreatedAt = clock.Add(-idempotency.MinRetention - time.Millisecond)
 	tx.put(t, &old)
 
-	j := testJob(unit, clock)
+	// The key is unique in the namespace, so the new start can name another
+	// unit. The clear entry must name the unit of the old job, not that one.
+	nextUnit, err := identity.UnitObject("opentofu", testNamespace, "other")
+	if err != nil {
+		t.Fatalf("unit object: %v", err)
+	}
+
+	nextUnit = nextUnit.WithUnitID("unt-2")
+
+	j := testJob(nextUnit, clock)
 	j.ID = "job-new"
 	j.IdempotencyKey = "start-1"
 
-	start := startEntry(unit, clock)
+	start := startEntry(nextUnit, clock)
+	start.TokenID, start.IDPSubject = "tok-1", "idp-1"
+	start.SourceIP, start.UserAgent, start.RequestID = "192.0.2.1", "test-agent", "req-1"
+	start.PrincipalKind = audit.PrincipalKindPerson
 
 	if _, _, err := s.Create(t.Context(), j, nil, testFence(), []audit.Entry{start}); err != nil {
 		t.Fatalf("Create past the retention: %v", err)
@@ -128,8 +140,38 @@ func TestCreateKeyRetentionClearIsAudited(t *testing.T) {
 			got.Action, got.JobID, got.Subject, got.Reason, jobstore.KeyExpiredAction, old.ID, start.Subject)
 	}
 
+	if got.Object != unit.String() || got.ObjectID != unit.UnitID() {
+		t.Errorf("clear entry names object %q with ID %q, want the unit of the old job %q with ID %q",
+			got.Object, got.ObjectID, unit.String(), unit.UnitID())
+	}
+
+	checkClearEntryActor(t, *got, start)
+
 	if err := got.Validate(); err != nil {
 		t.Errorf("clear entry is not valid: %v", err)
+	}
+}
+
+// checkClearEntryActor checks that the clear entry carries the actor fields of
+// the start entry and no other data of the start.
+func checkClearEntryActor(t *testing.T, got, start audit.Entry) {
+	t.Helper()
+
+	for _, f := range []struct {
+		name, got, want string
+	}{
+		{"namespace", string(got.Namespace), string(start.Namespace)},
+		{"IDP subject", got.IDPSubject, start.IDPSubject},
+		{"token", got.TokenID, start.TokenID},
+		{"source IP", got.SourceIP, start.SourceIP},
+		{"user agent", got.UserAgent, start.UserAgent},
+		{"channel", string(got.Channel), string(start.Channel)},
+		{"request", got.RequestID, start.RequestID},
+		{"principal kind", got.PrincipalKind, start.PrincipalKind},
+	} {
+		if f.got != f.want {
+			t.Errorf("clear entry %s = %q, want the actor of the start %q", f.name, f.got, f.want)
+		}
 	}
 }
 

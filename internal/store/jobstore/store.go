@@ -557,7 +557,7 @@ func checkEntries(e []audit.Entry, fence namespace.Fence) error {
 // job.ErrKeyConflict when the key names a live job with another spec. A job
 // that is older than the retention at now is expired: sameKey clears its key in
 // this transaction, appends an audit entry for the clear, and the new job takes
-// the key. The entry copies the actor of e[0], the entry of the new start.
+// the key. The entry copies the actor fields of e[0], the entry of the new start.
 func (s *Store) sameKey(ctx context.Context, tx Tx, j *job.Job, now time.Time,
 	e []audit.Entry,
 ) (job.Job, bool, error) {
@@ -630,14 +630,41 @@ func clearExpiredKey(ctx context.Context, tx Tx, old *job.Job, now time.Time, e 
 }
 
 // keyExpiredEntries returns the audit entry of the clear of the key of the
-// expired job old: it has the actor of the entry of the new start, the ID of
-// old and the reason for the clear. clearExpiredKey refuses a start with no
-// entry, so e holds at least one.
+// expired job old: it has the actor fields of the entry of the new start, the
+// unit and the ID of old, and the reason for the clear. clearExpiredKey
+// refuses a start with no entry, so e holds at least one.
 func keyExpiredEntries(e []audit.Entry, old *job.Job, now time.Time) []audit.Entry {
-	entry := e[0]
-	entry.At, entry.Action, entry.Changes = now.UTC(), KeyExpiredAction, nil
-	entry.JobID, entry.Version, entry.PrevHash, entry.Hash, entry.Sequence = string(old.ID), "", "", "", 0
-	entry.Reason = fmt.Sprintf("the idempotency key of job %s is older than the key retention", old.ID)
+	start := e[0]
+	unit := old.Spec.Unit
+
+	entry := audit.Entry{
+		At:            now.UTC(),
+		Namespace:     start.Namespace,
+		Subject:       start.Subject,
+		IDPSubject:    start.IDPSubject,
+		TokenID:       start.TokenID,
+		Action:        KeyExpiredAction,
+		Object:        unit.String(),
+		Version:       "",
+		ValuePath:     "",
+		ValueCount:    nil,
+		Changes:       nil,
+		SourceIP:      start.SourceIP,
+		UserAgent:     start.UserAgent,
+		Channel:       start.Channel,
+		Kind:          audit.KindChange,
+		Outcome:       audit.OutcomeSuccess,
+		RequestID:     start.RequestID,
+		ObjectID:      unit.UnitID(),
+		PrevHash:      "",
+		Hash:          "",
+		Sequence:      0,
+		FenceVersion:  0,
+		PrincipalKind: start.PrincipalKind,
+		JobID:         string(old.ID),
+		Reason:        fmt.Sprintf("the idempotency key of job %s is older than the key retention", old.ID),
+		Origin:        start.Origin,
+	}
 
 	return []audit.Entry{entry}
 }
