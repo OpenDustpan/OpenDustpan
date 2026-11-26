@@ -229,7 +229,7 @@ func (f *fixture) entries(t *testing.T, action string) []audit.Entry {
 		t.Fatalf("list entries: %v", err)
 	}
 
-	var out []audit.Entry
+	out := []audit.Entry{}
 
 	for i := range listing.Entries {
 		if listing.Entries[i].Action == action {
