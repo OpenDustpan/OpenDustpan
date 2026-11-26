@@ -1029,9 +1029,11 @@ func TestRedeemIgnoresFreshAuthEnabled(t *testing.T) {
 // as before: a stale sign-in is refused with mfa.fresh-step-required, and a
 // recent sign-in passes. The source of the route asks neither the policy nor
 // a gated freshness check, so a later owner decision moves the route
-// deliberately. The other steps that stay (the factor change and reset, the
-// enrollment code and the break-glass proof) are not in this package: their
-// tests are in the packages that hold them.
+// deliberately. The factor change and reset have their tests in this package
+// (localusers.go, checked below). The code has no route that issues an
+// enrollment code, and no fresh step on the break-glass proof (the code of the
+// proof is in internal/mfasvc/breakglass.go and has no freshness check), so
+// no row of this test can cover them until the owner decides the question.
 func TestStepsThatStayAreNotGated(t *testing.T) {
 	t.Parallel()
 

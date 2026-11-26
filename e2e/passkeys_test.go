@@ -98,8 +98,10 @@ func runPasskeysOnStore(t *testing.T, env *e2e.Env) {
 	}
 
 	// The removal of a passkey with a token always needs a step: the check does
-	// not follow the setting freshAuthEnabled. With the default off, the token is
-	// refused with mfa.fresh-step-required.
+	// not follow the setting freshAuthEnabled. The setting is set off and read
+	// back first, and the token is still refused with mfa.fresh-step-required.
+	passkeysSetFreshAuthOff(t, env)
+
 	c.send(t, http.MethodDelete, "/api/dustpan/v1/me/passkeys/"+key.ID, "", asAdmin()).
 		want(t, "remove with a token", http.StatusForbidden, "mfa.fresh-step-required")
 
@@ -115,6 +117,75 @@ func runPasskeysOnStore(t *testing.T, env *e2e.Env) {
 	if !strings.Contains(gone.body, `"passkeys":[]`) {
 		t.Fatalf("list = %s, want no passkey", gone.body)
 	}
+}
+
+// passkeysSetting is one entry of the installation settings document.
+type passkeysSetting struct {
+	Key   string `json:"key"`
+	Value any    `json:"value"`
+}
+
+// passkeysSetFreshAuthOff sets freshAuthEnabled to false with the administrator
+// token and reads the effective value back. With the setting off, the token
+// makes the change: it needs no fresh step.
+func passkeysSetFreshAuthOff(t *testing.T, env *e2e.Env) {
+	t.Helper()
+
+	_, tag := passkeysReadFreshAuth(t, env)
+
+	resp, err := env.ServerAPIStatusKeyed(t.Context(), e2e.TypedRequest{
+		Token: env.AdminToken(), Method: http.MethodPatch, Path: installSettingsRoute,
+		ContentType: "application/merge-patch+json", Body: `{"freshAuthEnabled":false}`, IfMatch: tag,
+	}, e2e.NewIdempotencyKey())
+	if err != nil || resp.Status != http.StatusOK {
+		t.Fatalf("PATCH %s = %d, %v: %s", installSettingsRoute, resp.Status, err, resp.Body)
+	}
+
+	if on, _ := passkeysReadFreshAuth(t, env); on {
+		t.Fatal("freshAuthEnabled = true after the change to false")
+	}
+}
+
+// installSettingsRoute is the route of the installation settings.
+const installSettingsRoute = "/api/dustpan/v1/settings"
+
+// passkeysReadFreshAuth reads the effective value of freshAuthEnabled and the
+// ETag of the settings with the administrator token.
+func passkeysReadFreshAuth(t *testing.T, env *e2e.Env) (bool, string) {
+	t.Helper()
+
+	resp, err := env.ServerAPIStatusTyped(t.Context(), e2e.TypedRequest{
+		Token: env.AdminToken(), Method: http.MethodGet, Path: installSettingsRoute,
+		ContentType: "", Body: "", IfMatch: "",
+	})
+	if err != nil || resp.Status != http.StatusOK {
+		t.Fatalf("GET %s = %d, %v: %s", installSettingsRoute, resp.Status, err, resp.Body)
+	}
+
+	var doc struct {
+		Settings []passkeysSetting `json:"settings"`
+	}
+
+	if err := json.Unmarshal([]byte(resp.Body), &doc); err != nil {
+		t.Fatalf("decode the settings: %v", err)
+	}
+
+	for _, s := range doc.Settings {
+		if s.Key != "freshAuthEnabled" {
+			continue
+		}
+
+		on, ok := s.Value.(bool)
+		if !ok {
+			t.Fatalf("freshAuthEnabled is not a boolean: %s", resp.Body)
+		}
+
+		return on, resp.Header.Get("ETag")
+	}
+
+	t.Fatalf("the settings have no freshAuthEnabled: %s", resp.Body)
+
+	return false, ""
 }
 
 // addPasskey runs a register ceremony of the person with the credential cred,

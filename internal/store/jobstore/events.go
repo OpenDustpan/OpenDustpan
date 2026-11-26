@@ -61,20 +61,23 @@ func change(ctx context.Context, tx Tx, next *job.Job, c *job.Change, rules writ
 // signature write. A rejection needs no fresh step. When the installation
 // requires no fresh step (the setting freshAuthEnabled is off), an approval
 // of a person that records the authentication none needs no proof. An agent
-// is refused in each case, and so is an approval of the authentication none
-// by a principal that is not a person.
+// is refused in each case. The authentication none is refused for any change
+// that is not an approval of a destroy, and for a principal that is not a
+// person.
 func checkDestroyProof(j *job.Job, ap *job.Approval, rules writeRules) error {
-	if j.Spec.Operation != job.OperationDestroy || ap == nil || ap.Verdict == job.VerdictReject {
+	if ap == nil {
+		return nil
+	}
+
+	if err := checkNoneAuth(j, ap, rules); err != nil {
+		return err
+	}
+
+	if j.Spec.Operation != job.OperationDestroy || ap.Verdict == job.VerdictReject {
 		return nil
 	}
 
 	if ap.Verdict != job.VerdictApprove || ap.Agent != "" {
-		return job.ErrAuthStale
-	}
-
-	// Defense in depth: the handler and the service check the same kind; this
-	// check stays so that a new caller of the store cannot skip it.
-	if ap.Auth == job.ConfirmAuthNone && (!rules.approverFound || rules.approverKind != identity.KindPerson) {
 		return job.ErrAuthStale
 	}
 
@@ -83,6 +86,27 @@ func checkDestroyProof(j *job.Job, ap *job.Approval, rules writeRules) error {
 	}
 
 	return checkProofAge(ap, rules.now)
+}
+
+// checkNoneAuth refuses the authentication none for a change that is not an
+// approval of a destroy, and for a principal that is not a person. It checks
+// any approval with the authentication none, so the kind of the approver is
+// read for each of them, in the transaction of the write.
+//
+// Defense in depth: the service records the authentication none only for an
+// approval of a destroy by a person, and the handler and the service check the
+// kind too. This check stays so that a new caller of the store cannot record it
+// for another operation, or for a principal that is not a person.
+func checkNoneAuth(j *job.Job, ap *job.Approval, rules writeRules) error {
+	if ap.Auth != job.ConfirmAuthNone {
+		return nil
+	}
+
+	if j.Spec.Operation != job.OperationDestroy || !rules.approverFound || rules.approverKind != identity.KindPerson {
+		return job.ErrAuthStale
+	}
+
+	return nil
 }
 
 // checkProofAge refuses an approval with no MFA proof, or with a proof that
