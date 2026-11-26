@@ -31,4 +31,4 @@
 
 Tasks 4.1 and 4.2 moved to `openspec/changes/person-steps`: they need passkey sign-in for local users, which is not on main.
 
-- [ ] 4.3 Check the wiring, the route actions, the audit entries and the usability walk-through. Check: `make check` passes with zero findings. Confirmed by: CI (the agent runs the fast checks only)
+- [x] 4.3 Check the wiring, the route actions, the audit entries and the usability walk-through. Check: `make check` passes with zero findings. Confirmed by: CI (the agent runs the fast checks only)
