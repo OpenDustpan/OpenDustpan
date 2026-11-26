@@ -11,6 +11,10 @@ import (
 	"opendustpan.org/opendustpan/pkg/identity"
 )
 
+// errAuditWrite is the error that the fake transaction gives when its audit
+// write fails.
+var errAuditWrite = errors.New("audit chain is down")
+
 // startEntry returns the audit entry of a start of a job of unit, as the
 // service gives it to Create.
 func startEntry(unit identity.Object, at time.Time) audit.Entry {
@@ -326,6 +330,52 @@ func TestCreateKeyRetentionClearNeedsAudit(t *testing.T) {
 	_, _, err := s.Create(t.Context(), j, nil, testFence(), nil)
 	if !errors.Is(err, audit.ErrInvalidEntry) {
 		t.Fatalf("Create with an expired key and no audit entry = %v, want ErrInvalidEntry", err)
+	}
+
+	row, ok, getErr := tx.Job(t.Context(), old.ID)
+	if getErr != nil || !ok {
+		t.Fatalf("get the old job: ok %t, error %v", ok, getErr)
+	}
+
+	if row.Key != old.IdempotencyKey {
+		t.Errorf("the old job key = %q, want %q", row.Key, old.IdempotencyKey)
+	}
+
+	if len(tx.audits) != 0 {
+		t.Errorf("Create appended %d audit entries, want 0", len(tx.audits))
+	}
+
+	if _, ok, getErr := tx.Job(t.Context(), j.ID); getErr != nil || ok {
+		t.Fatalf("Create stored job %s: ok %t, error %v; want no job", j.ID, ok, getErr)
+	}
+}
+
+// TestCreateKeyRetentionClearAuditFails proves that a start whose clear
+// entry cannot be written fails, and that the clear is rolled back with it:
+// the old job keeps its key and no job is stored.
+func TestCreateKeyRetentionClearAuditFails(t *testing.T) {
+	t.Parallel()
+
+	clock := time.UnixMilli(testClockMs).UTC()
+	unit := testUnit(t)
+	tx := newFakeTx(clock)
+	s := jobstore.New(fakeRunner{tx: tx}, idempotency.JobStartRetention())
+
+	old := testJob(unit, clock)
+	old.ID = "job-old"
+	old.IdempotencyKey = "start-1"
+	old.CreatedAt = clock.Add(-idempotency.MinRetention - time.Millisecond)
+	tx.put(t, &old)
+
+	j := testJob(unit, clock)
+	j.ID = "job-new"
+	j.IdempotencyKey = "start-1"
+
+	tx.auditErr = errAuditWrite
+
+	_, _, err := s.Create(t.Context(), j, nil, testFence(), []audit.Entry{startEntry(unit, clock)})
+	if !errors.Is(err, errAuditWrite) {
+		t.Fatalf("Create with a failed audit write = %v, want %v", err, errAuditWrite)
 	}
 
 	row, ok, getErr := tx.Job(t.Context(), old.ID)

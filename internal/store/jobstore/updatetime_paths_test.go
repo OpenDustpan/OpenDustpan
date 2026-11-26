@@ -4,6 +4,8 @@ import (
 	"context"
 	"fmt"
 	"log/slog"
+	"maps"
+	"slices"
 	"testing"
 	"time"
 
@@ -323,11 +325,16 @@ type fakeTx struct {
 	keyRead *jobstore.Row
 	// audits holds the entries that AppendAudit received, in order.
 	audits []audit.Entry
+	// auditErr, when set, fails the next call of AppendAudit, so that a test
+	// shows a start whose record fails.
+	auditErr error
 }
 
 // newFakeTx returns a transaction over no rows, on the clock time now.
 func newFakeTx(now time.Time) *fakeTx {
-	return &fakeTx{Tx: nil, now: now, rows: map[job.ID]jobstore.Row{}, order: nil, keyRead: nil, audits: nil}
+	return &fakeTx{
+		Tx: nil, now: now, rows: map[job.ID]jobstore.Row{}, order: nil, keyRead: nil, audits: nil, auditErr: nil,
+	}
 }
 
 // Now implements jobstore.Tx.
@@ -436,6 +443,13 @@ func (f *fakeTx) CheckClaim(context.Context, durable.Claim) error { return nil }
 
 // AppendAudit implements jobstore.Tx.
 func (f *fakeTx) AppendAudit(_ context.Context, e []audit.Entry) error {
+	if f.auditErr != nil {
+		err := f.auditErr
+		f.auditErr = nil
+
+		return err
+	}
+
 	f.audits = append(f.audits, e...)
 
 	return nil
@@ -473,9 +487,20 @@ type fakeRunner struct {
 	tx *fakeTx
 }
 
-// Write implements jobstore.Runner.
+// Write implements jobstore.Runner. It runs the write on the one fake
+// transaction, and restores it when the write fails, as an adapter rolls its
+// transaction back.
 func (r fakeRunner) Write(_ context.Context, _ namespace.Fence, fn func(jobstore.Tx) error) error {
-	return fn(r.tx)
+	rows := maps.Clone(r.tx.rows)
+	order := slices.Clone(r.tx.order)
+	audits := slices.Clone(r.tx.audits)
+
+	err := fn(r.tx)
+	if err != nil {
+		r.tx.rows, r.tx.order, r.tx.audits = rows, order, audits
+	}
+
+	return err
 }
 
 // Read implements jobstore.Runner.

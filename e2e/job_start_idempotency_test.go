@@ -17,8 +17,8 @@ import (
 // starts a job with an Idempotency-Key gets the stored job when it sends the
 // same key again after the real server binary restarted. The job conformance
 // suite has the cases past the retention age, "a key of a job older than the
-// retention starts a new job" and "a retry after the new job replays the new
-// job".
+// retention starts a new job that holds the key" and "a retry after the new
+// job replays the new job".
 func TestJobStartIdempotencyAfterRestart(t *testing.T) {
 	t.Parallel()
 
