@@ -745,7 +745,7 @@ func (s *Service) principalReviewScope(ctx context.Context, obj identity.Object)
 
 	reaches, reachErr := s.authz.GrantsReachNamespaces(ctx)
 	if reachErr != nil {
-		reaches = false
+		return scope, reachErr
 	}
 
 	if p.Namespace == "" || reaches {

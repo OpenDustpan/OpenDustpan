@@ -1,6 +1,7 @@
 package access_test
 
 import (
+	"slices"
 	"testing"
 	"time"
 
@@ -20,21 +21,6 @@ func reviewPrincipal(at time.Time, id, subject, ns string) principal.Principal {
 	}
 }
 
-// createInstallationPrincipal stores a service principal of the installation.
-func createInstallationPrincipal(t *testing.T, f *fixture, at time.Time) {
-	t.Helper()
-
-	pInst := reviewPrincipal(at, "prn-inst", "inst", "")
-	createErr := f.store.CreatePrincipal(
-		t.Context(),
-		pInst,
-		storetest.ServerChange(at, "principal:prn-inst"),
-	)
-	if createErr != nil {
-		t.Fatalf("create principal: %v", createErr)
-	}
-}
-
 // createNamespacePrincipal stores a service principal in the namespace acme
 // that the fixture already holds.
 func createNamespacePrincipal(t *testing.T, f *fixture, at time.Time) {
@@ -48,17 +34,13 @@ func createNamespacePrincipal(t *testing.T, f *fixture, at time.Time) {
 	}
 }
 
-// checkNoServerHolder fails when a holder of a grant on @server is named.
-func checkNoServerHolder(t *testing.T, mgrs []string) {
+// checkNoInstallationHolder fails when a holder of a grant on @server is
+// named.
+func checkNoInstallationHolder(t *testing.T, mgrs []string) {
 	t.Helper()
 
-	for _, m := range mgrs {
-		if m == "prn-holder" || m == "holder" {
-			t.Fatalf(
-				"TokenManagers of namespace principal with false names holder of @server grant: %v",
-				mgrs,
-			)
-		}
+	if slices.Contains(mgrs, "principal:prn-holder") {
+		t.Fatalf("TokenManagers of namespace principal with false names holder of @server grant: %v", mgrs)
 	}
 }
 
@@ -67,33 +49,27 @@ func checkNoServerHolder(t *testing.T, mgrs []string) {
 func managersOfNamespacePrincipal(t *testing.T, reaches bool) []string {
 	t.Helper()
 
-	settings := access.FixedSettings(reaches)
-	f := newFixtureWithSettings(t, nil, settings)
+	f := newFixtureWithSettings(t, nil, access.FixedSettings(reaches))
 
 	at := time.Unix(0, 0)
 
-	createInstallationPrincipal(t, f, at)
-	f.grant(t, prn("holder"), access.RoleViewer, identity.ServerObject())
-
-	mgrs, mgrErr := f.svc.TokenManagers(t.Context(), "prn-inst")
-	if mgrErr != nil {
-		t.Fatalf("TokenManagers: %v", mgrErr)
-	}
-	_ = mgrs
+	f.person(t, "holder")
+	f.grant(t, prn("holder"), access.RoleTokenManager, identity.ServerObject())
 
 	createNamespacePrincipal(t, f, at)
 
-	mgrsNs, nsErr := f.svc.TokenManagers(t.Context(), "prn-ns")
-	if nsErr != nil {
-		t.Fatalf("TokenManagers: %v", nsErr)
+	mgrs, mgrErr := f.svc.TokenManagers(t.Context(), "prn-ns")
+	if mgrErr != nil {
+		t.Fatalf("TokenManagers: %v", mgrErr)
 	}
 
-	return mgrsNs
+	return mgrs
 }
 
-// TestPrincipalReviewScopeInstallationReach checks the token managers of a
-// service principal for each value of the setting.
-func TestPrincipalReviewScopeInstallationReach(t *testing.T) {
+// TestPrincipalTokenManagersInstallationReach checks the token managers of a
+// service principal of a namespace for each value of the setting: with true,
+// a holder of a grant on the installation is named; with false, it is not.
+func TestPrincipalTokenManagersInstallationReach(t *testing.T) {
 	t.Parallel()
 
 	for _, tc := range []struct {
@@ -106,9 +82,15 @@ func TestPrincipalReviewScopeInstallationReach(t *testing.T) {
 		t.Run(tc.name, func(t *testing.T) {
 			t.Parallel()
 
-			mgrsNs := managersOfNamespacePrincipal(t, tc.reaches)
+			mgrs := managersOfNamespacePrincipal(t, tc.reaches)
 			if !tc.reaches {
-				checkNoServerHolder(t, mgrsNs)
+				checkNoInstallationHolder(t, mgrs)
+
+				return
+			}
+
+			if !slices.Contains(mgrs, "principal:prn-holder") {
+				t.Fatalf("TokenManagers with true = %v, want principal:prn-holder", mgrs)
 			}
 		})
 	}

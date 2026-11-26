@@ -1528,12 +1528,18 @@ const claimReadTrips = 4
 
 // reachSettingReadTrips is the number of round trips of one read of a setting
 // through pkg/setting/service.go: ListSettings (Effective, :65) and then
-// GetSettingsState (Get, :54), two statements. A restore swap reads the restore
-// access setting twice in swapDecision: readAccessSetting
-// (restore_access_setting.go:139, settings_resource.go:167) and the static
-// reader (restore_access_setting.go:158, settings_resource.go:147), so one swap
-// attempt costs 2*reachSettingReadTrips. The backup path counts no settings
-// statement. No counted read comes from pkg/access.
+// GetSettingsState (Get, :54), two statements.
+//
+// The fixed part of restoreModel counts one such read for a restore: the read
+// of the restore access setting that readAccessSetting makes
+// (restore_access_setting.go:139, settings_resource.go:167), which the
+// measured runs show as 2 round trips more than a flow without a settings
+// service. A failed swap attempt reads the setting twice, through
+// readAccessSetting and the static reader (restore_access_setting.go:158,
+// settings_resource.go:147), and its reads come before the first statement of
+// the attempt, so withoutSwapRetries keeps them: swapRetryTrips counts
+// 2*reachSettingReadTrips for each failed attempt. The backup path counts no
+// settings statement. No counted read comes from pkg/access.
 const reachSettingReadTrips = 2
 
 // attemptClaimTrips is the number of round trips that the reads of the claim

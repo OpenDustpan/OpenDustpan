@@ -2,13 +2,26 @@ package access
 
 import (
 	"context"
+	"errors"
 	"testing"
 	"time"
 
 	"opendustpan.org/opendustpan/pkg/identity"
 	"opendustpan.org/opendustpan/pkg/namespace"
 	"opendustpan.org/opendustpan/pkg/principal"
+	"opendustpan.org/opendustpan/pkg/setting"
 )
+
+// errReviewReachRead is the failure of the read of the reach setting in the
+// review scope of a test.
+var errReviewReachRead = errors.New("reach setting read failed")
+
+// failingReviewSettings is a Settings port whose read fails.
+type failingReviewSettings struct{}
+
+func (failingReviewSettings) Effective(context.Context, setting.Scope, string) (setting.Item, error) {
+	return setting.Item{}, errReviewReachRead
+}
 
 // emptyReviewStore is a Store that holds no custom role. principalReviewScope
 // only lists roles, so no other method is used.
@@ -90,6 +103,14 @@ type reviewScopeFixture struct {
 func reviewScopeService(tb testing.TB, reaches bool) reviewScopeFixture {
 	tb.Helper()
 
+	return reviewScopeServiceWithSettings(tb, FixedSettings(reaches))
+}
+
+// reviewScopeServiceWithSettings builds the fixture with settings as the reach
+// port.
+func reviewScopeServiceWithSettings(tb testing.TB, settings Settings) reviewScopeFixture {
+	tb.Helper()
+
 	at := time.Unix(0, 0)
 	nsPrincipal := principal.Principal{
 		CreatedAt: at, UpdatedAt: at, DisabledAt: time.Time{}, ID: "prn-svc", Subject: "svc",
@@ -102,7 +123,6 @@ func reviewScopeService(tb testing.TB, reaches bool) reviewScopeFixture {
 		Namespace: "", GroupCount: 0, BreakGlass: false,
 	}
 
-	settings := FixedSettings(reaches)
 	authz, err := NewAuthorizer(AuthorizerConfig{
 		Store: emptyReviewStore{Store: nil}, Callers: emptyReviewCallers{}, Collections: nil,
 		Units: nil, Principals: emptyReviewPrincipals{},
@@ -209,5 +229,22 @@ func TestPrincipalReviewScopeInstallationReach(t *testing.T) {
 			}
 			checkInstallationScope(t, fx.svc, fx.inst.ID)
 		})
+	}
+}
+
+// TestPrincipalReviewScopeFailedRead checks that a failed read of the reach
+// setting returns the error and does not narrow the scope.
+func TestPrincipalReviewScopeFailedRead(t *testing.T) {
+	t.Parallel()
+
+	fx := reviewScopeServiceWithSettings(t, failingReviewSettings{})
+
+	scope, err := fx.svc.principalReviewScope(t.Context(), identity.PrincipalObject(fx.ns.ID))
+	if !errors.Is(err, errReviewReachRead) {
+		t.Fatalf("principalReviewScope error = %v, want errReviewReachRead", err)
+	}
+
+	if scope.Containers != nil {
+		t.Fatalf("scope containers = %v, want nil", scope.Containers)
 	}
 }

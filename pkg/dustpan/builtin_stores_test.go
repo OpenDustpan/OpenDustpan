@@ -721,9 +721,12 @@ func TestNewServerClosesTheBuiltinStoreWhenItFails(t *testing.T) {
 	checkOpenStoreOpens(t, "sqlite:"+path)
 }
 
-// TestWithPostgreSQLOpensTheTestDatabase proves that WithPostgreSQL opens the
-// store of the test database and sets its store options, so that
-// postgresStoreOptions runs. The test skips without the test database.
+// TestWithPostgreSQLOpensTheTestDatabase proves that the PostgreSQL store of
+// the test database opens and sets its store options, so that
+// postgresStoreOptions runs. WithPostgreSQL opens the store inside NewServer,
+// so the caller cannot give WithSettings; the test uses OpenStore,
+// WithBuiltinStore and WithSettings, the form that the settings check
+// requires. The test skips without the test database.
 func TestWithPostgreSQLOpensTheTestDatabase(t *testing.T) {
 	t.Parallel()
 
@@ -732,16 +735,48 @@ func TestWithPostgreSQLOpensTheTestDatabase(t *testing.T) {
 		t.Skipf("set %s to run the PostgreSQL case", postgresURLEnv)
 	}
 
-	opts := builtinServerOptions(t)
-	opts = append(opts, dustpan.WithPostgreSQL(isolatedPostgresURL(t, base)))
-
-	srv, err := dustpan.NewServer(opts...)
+	st, err := dustpan.OpenStore(t.Context(), "postgres:"+isolatedPostgresURL(t, base))
 	if err != nil {
-		t.Fatalf("new server: %v", err)
+		t.Fatalf("open the store: %v", err)
 	}
+
+	t.Cleanup(func() {
+		if closeErr := st.Close(); closeErr != nil {
+			t.Errorf("close the store: %v", closeErr)
+		}
+	})
+
+	srv := newAdoptingServer(t, st)
 
 	if closeErr := srv.Close(); closeErr != nil {
 		t.Fatalf("close the server: %v", closeErr)
+	}
+}
+
+// TestWithPostgreSQLWithoutSettingsRefused proves that WithPostgreSQL alone
+// answers ErrMissingOption that names WithSettings. WithPostgreSQL opens the
+// store inside NewServer, so the caller cannot give WithSettings; the error
+// names the form that works. The test skips without the test database because
+// the settings check runs after the store opens.
+func TestWithPostgreSQLWithoutSettingsRefused(t *testing.T) {
+	t.Parallel()
+
+	base := os.Getenv(postgresURLEnv)
+	if base == "" {
+		t.Skipf("set %s to run the PostgreSQL case", postgresURLEnv)
+	}
+
+	_, err := dustpan.NewServer(dustpan.WithPostgreSQL(isolatedPostgresURL(t, base)))
+	if err == nil {
+		t.Fatal("NewServer(WithPostgreSQL) succeeded, want an error")
+	}
+
+	if !errors.Is(err, dustpan.ErrMissingOption) {
+		t.Fatalf("NewServer error = %v, want ErrMissingOption", err)
+	}
+
+	if !strings.Contains(err.Error(), "WithSettings") {
+		t.Fatalf("NewServer error = %v, want it to name WithSettings", err)
 	}
 }
 

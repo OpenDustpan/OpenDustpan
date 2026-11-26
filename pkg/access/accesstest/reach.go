@@ -1792,7 +1792,7 @@ func testInstallationReachNamespaceGrant(t *testing.T, s access.Store) {
 	})
 }
 
-// authorizeInstallationGrant stores the callers of the installation cases: a
+// installationCallers stores the callers of the installation cases: a
 // person with a viewer grant on the installation, a token manager of the
 // installation, and a service principal of the namespace acme.
 func installationCallers(t *testing.T, rs reachStore) {

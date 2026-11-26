@@ -526,7 +526,8 @@ func testExpireEndsAllAccess(t *testing.T, s Store) {
 	checkGrantsGone(t, s, alicePrincipalID)
 
 	groups, total, err := s.ListGroupsOf(t.Context(), alicePrincipalID, principal.Query{
-		After: "", Low: "", High: "", Limit: groupPageLimit, InstallationOnly: false,
+		After: "", Low: "", High: "", Limit: groupPageLimit,
+		InstallationOnly: false,
 	})
 	if err != nil {
 		t.Fatalf("groups after expiry: %v", err)

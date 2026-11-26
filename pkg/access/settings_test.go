@@ -412,6 +412,51 @@ func TestInstallationReachReadOncePerRequest(t *testing.T) {
 	}
 }
 
+// TestInstallationReachReadOnceWithDecisions proves that a request with two
+// authorizations and one list reads the reach setting once, and that the next
+// request reads the value again, so a change takes effect.
+func TestInstallationReachReadOnceWithDecisions(t *testing.T) {
+	t.Parallel()
+
+	port := &countingReach{value: "true", reads: 0}
+	f := newFixtureWithSettings(t, nil, port)
+
+	holder := f.person(t, "holder")
+	f.grant(t, prn("holder"), access.RoleViewer, identity.ServerObject())
+
+	acme := identity.NamespaceObject("acme")
+
+	first := access.WithRequestCache(t.Context())
+	for range 2 {
+		if err := f.authz.Authorize(first, holder, identity.ActionNamespaceRead, acme); err != nil {
+			t.Fatalf("authorize in one request: %v", err)
+		}
+	}
+
+	// The list reads the same setting through the scope of the caller.
+	if _, err := f.authz.ListObjects(first, holder, identity.ActionUnitRead); err != nil {
+		t.Fatalf("list in one request: %v", err)
+	}
+
+	if port.reads != 1 {
+		t.Fatalf("reads in one request = %d, want 1", port.reads)
+	}
+
+	// The next request reads the value again, so the change applies.
+	port.value = "false"
+
+	second := access.WithRequestCache(t.Context())
+
+	err := f.authz.Authorize(second, holder, identity.ActionNamespaceRead, acme)
+	if !errors.Is(err, identity.ErrDenied) {
+		t.Fatalf("authorize with the new value = %v, want identity.ErrDenied", err)
+	}
+
+	if port.reads != 2 {
+		t.Fatalf("reads after the next request = %d, want 2", port.reads)
+	}
+}
+
 // countingReach answers the reach setting and counts the reads. A test that
 // uses it does not run its calls in parallel.
 type countingReach struct {

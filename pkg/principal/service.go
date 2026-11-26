@@ -225,7 +225,11 @@ func (s *Service) ListPrincipals(ctx context.Context, req PageRequest, kind Kind
 	}
 
 	reaches, reachErr := s.grantsReachNamespaces(ctx)
-	if reachErr != nil || !reaches {
+	if reachErr != nil {
+		return Page[Principal]{}, fmt.Errorf("list principals: %w", reachErr)
+	}
+
+	if !reaches {
 		q.InstallationOnly = true
 	}
 
