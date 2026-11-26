@@ -54,6 +54,7 @@ Out of scope:
 Depends on:
 
 - add-output-sharing-setting-new
+- add-output-sharing-rules-api
 
 ## Usability
 
@@ -102,7 +103,7 @@ Questions considered and answered:
 - Who decides that a job of another unit reads outputs? ADR 273 decision 2 answers it: the producer decides alone, a rule gives a job of a consumer unit the right to read and gives a person nothing.
 - What checks govern a cross-tool read of outputs? ADR 273 decisions 1 and 5 answer it: a naming rule plus unit:read-outputs of the starter at each read, plus unit:read-secrets for a secret output.
 - Which routes serve cross-tool output reads? ADR 273 decisions 7 and 8 answer it: the tool-neutral outputs route, the named TFE-compatible output routes, and the Pulumi read of OpenTofu outputs through terraform_remote_state for e2e-driven versions.
-- Where does sharing-rule management live? Rule storage, validation, list and delete live in add-output-sharing-setting-new; this change only reads stored rules by stable ID at check time.
+- Where does sharing-rule management live? Rule storage lives in add-output-sharing-setting-new, and validation, list and delete live in add-output-sharing-rules-api; this change only reads stored rules by stable ID at check time.
 - What happens when the audit write fails during a read or denial? Fail closed per project security rule. If the audit write fails the read fails with 500 and no outputs leave the server.
 
 Drafted by the spec factory of the spec compiler from the roadmap, the issues and the ADRs. Every quote, path and ADR citation was checked by code.

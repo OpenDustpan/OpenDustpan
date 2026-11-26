@@ -1,4 +1,5 @@
 Roadmap: `docs/roadmap.md:643` (A runner job with an overlapping claim is refused).
+Issue: #4109
 
 ## Why
 
@@ -62,7 +63,7 @@ Where the path still costs the person time or surprises them:
 Each fact names its file, line and function on main. The change specifies only the difference.
 
 - The claim gate e2e step exists and is the baseline for claim behavior. (`e2e/claim_gate_test.go:49 (aGateStopsAClaim)`)
-- The runner protocol HTTP adapter exists. (`internal/api/runnerapi/runnerapi.go:193 (NewHandler)`)
+- The runner protocol HTTP adapter exists. (`internal/api/runnerapi/runnerapi.go:262 (NewHandler)`)
 
 ## ADR check
 
