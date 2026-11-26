@@ -142,23 +142,7 @@ type Input struct {
 // It refuses the kind agent: the model connect request makes that record,
 // with its sponsors.
 func (s *Service) CreatePrincipal(ctx context.Context, e audit.Entry, in Input) (Principal, error) {
-	return s.insertPrincipal(ctx, e, in, false)
-}
-
-// CreateBreakGlassAccount validates and stores a new person as a break-glass
-// account, with the entry e. It accepts the add whatever the current count.
-// The passkey that makes the account working is a separate write of the
-// passkey store.
-func (s *Service) CreateBreakGlassAccount(
-	ctx context.Context, e audit.Entry, in Input,
-) (Principal, error) {
-	if in.Kind != "" && in.Kind != KindPerson {
-		return Principal{}, fmt.Errorf("%w: a break-glass account is a person, not a %s", ErrBreakGlassKind, in.Kind)
-	}
-
-	in.Kind = KindPerson
-
-	return s.insertPrincipal(ctx, e, in, true)
+	return s.insertPrincipal(ctx, e, in)
 }
 
 // GetPrincipal returns the principal with the ID id.
@@ -999,9 +983,10 @@ func actsAsChange(groupID string) MemberAudit {
 }
 
 // insertPrincipal validates and stores a new principal, with the entry e.
-// breakGlass marks the record as a break-glass account.
+// A break-glass account is not made here: the add of a break-glass person
+// stores the person and its first passkey in one store transaction.
 func (s *Service) insertPrincipal(
-	ctx context.Context, e audit.Entry, in Input, breakGlass bool,
+	ctx context.Context, e audit.Entry, in Input,
 ) (Principal, error) {
 	// Defense in depth: the HTTP create route of the principals refuses the
 	// kind agent too, and a later model connect request makes the agent
@@ -1030,7 +1015,7 @@ func (s *Service) insertPrincipal(
 		DisplayName: displayName,
 		Kind:        in.Kind,
 		Source:      SourceLocal,
-		Namespace:   "", GroupCount: 0, BreakGlass: breakGlass,
+		Namespace:   "", GroupCount: 0, BreakGlass: false,
 	}
 
 	if err := p.Validate(); err != nil {

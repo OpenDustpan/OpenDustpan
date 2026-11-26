@@ -50,7 +50,7 @@ func (tc passkeyWiringCase) run(t *testing.T, st *sqlite.Store) {
 	log := slog.New(slog.NewTextHandler(&out, nil))
 
 	got, err := newPasskeyService(store, tc.url, time.Now, log,
-		passkeyAccess{entries: st, authz: identity.AdminOnly{}, guard: principal.AdminOnlyGuard{}})
+		passkeyAccess{entries: st, authz: identity.AdminOnly{}, guard: principal.AdminOnlyGuard{}, window: nil})
 	if err != nil {
 		t.Fatalf("newPasskeyService: %v", err)
 	}

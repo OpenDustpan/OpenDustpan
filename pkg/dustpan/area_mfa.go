@@ -1,6 +1,7 @@
 package dustpan
 
 import (
+	"context"
 	"fmt"
 	"log/slog"
 	"strings"
@@ -31,6 +32,9 @@ type passkeyAccess struct {
 	entries mfasvc.Auditor
 	authz   identity.Authorizer
 	guard   principal.Guard
+	// window returns the token freshness window of the session policy. Nil
+	// means that no sign-in is fresh.
+	window func(ctx context.Context) time.Duration
 }
 
 // watchBreakGlass makes svc alert the administrators after failed assertions
@@ -88,7 +92,7 @@ func newPasskeyService(
 
 	svc, err := mfasvc.New(mfasvc.Config{
 		Store: passkeys, RP: rp, Audit: access.entries, Now: now, Log: log,
-		Authorizer: access.authz, Guard: access.guard,
+		Authorizer: access.authz, Guard: access.guard, FreshWindow: access.window,
 	})
 	if err != nil {
 		return none, fmt.Errorf("passkeys: %w", err)

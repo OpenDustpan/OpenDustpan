@@ -102,6 +102,11 @@ func passkeyCases() []passkeyCase {
 			name: "an add of a hostile principal or passkey is refused and stores nothing",
 			test: testAddBreakGlassPersonGuards,
 		},
+		{
+			name: "an add of a break-glass person with an invalid principal or passkey entry is refused and " +
+				"stores nothing",
+			test: testAddBreakGlassPersonInvalidEntry,
+		},
 		{name: "a rotation ends the old passkey and stores the new one", test: testRotate},
 		{
 			name: "a rotation whose insert fails keeps the old passkey",
@@ -128,6 +133,11 @@ func passkeyCases() []passkeyCase {
 		{
 			name: "a rotation of a suspended passkey fails with ErrSuspended and keeps the suspension",
 			test: testRotateSuspended,
+		},
+		{
+			name: "a rotation to an invalid new passkey fails with ErrInvalid, keeps the old passkey and " +
+				"stores nothing",
+			test: testRotateInvalid,
 		},
 		{name: "a challenge works once", test: testChallengeOnce},
 		{
@@ -1236,6 +1246,89 @@ func checkBreakGlassPersonGuard(t *testing.T, s PasskeyStore, tc breakGlassPerso
 
 	wantEntries(t, s, principal.Ref(p.ID), 0)
 	wantEntries(t, s, passkeyObject(1), 0)
+}
+
+// testAddBreakGlassPersonInvalidEntry sends an invalid principal entry and an
+// invalid passkey entry to the store alone. Each refusal stores no person, no
+// passkey and no entry.
+func testAddBreakGlassPersonInvalidEntry(t *testing.T, s PasskeyStore) {
+	t.Helper()
+
+	p := breakGlassPrincipal()
+	cases := []struct {
+		name           string
+		principalEntry audit.Entry
+		passkeyEntry   audit.Entry
+		wantErr        error
+	}{
+		{
+			name:           "a principal entry with no subject",
+			principalEntry: refused(principal.Ref(p.ID), at(0)),
+			passkeyEntry:   entry(passkeyObject(1), at(11)),
+			wantErr:        audit.ErrInvalidEntry,
+		},
+		{
+			name:           "a principal entry of a namespace",
+			principalEntry: otherScope(principal.Ref(p.ID), at(0)),
+			passkeyEntry:   entry(passkeyObject(1), at(11)),
+			wantErr:        audit.ErrInvalidEntry,
+		},
+		{
+			name:           "a passkey entry with no subject",
+			principalEntry: entry(principal.Ref(p.ID), at(0)),
+			passkeyEntry:   refused(passkeyObject(1), at(11)),
+			wantErr:        audit.ErrInvalidEntry,
+		},
+		{
+			name:           "a passkey entry of a namespace",
+			principalEntry: entry(principal.Ref(p.ID), at(0)),
+			passkeyEntry:   otherScope(passkeyObject(1), at(11)),
+			wantErr:        audit.ErrInvalidEntry,
+		},
+	}
+
+	for i := range cases {
+		tc := &cases[i]
+		err := s.AddBreakGlassPerson(t.Context(), p, passkeyOf(1, p.ID), tc.principalEntry, tc.passkeyEntry)
+		wantErr(t, "add with "+tc.name, err, tc.wantErr)
+
+		if _, err := s.GetPrincipal(t.Context(), p.ID); !errors.Is(err, principal.ErrNotFound) {
+			t.Fatalf("%s: principal after the refused add: err = %v, want ErrNotFound", tc.name, err)
+		}
+
+		if _, err := s.PasskeyByCredentialID(t.Context(), credential(1)); !errors.Is(err, mfa.ErrNotFound) {
+			t.Fatalf("%s: passkey after the refused add: err = %v, want ErrNotFound", tc.name, err)
+		}
+
+		wantEntries(t, s, principal.Ref(p.ID), 0)
+		wantEntries(t, s, passkeyObject(1), 0)
+	}
+}
+
+// testRotateInvalid proves that a rotation to an invalid new passkey fails
+// with ErrInvalid before the transaction: the old passkey stays, no new one
+// is stored and no entry is appended.
+func testRotateInvalid(t *testing.T, s PasskeyStore) {
+	t.Helper()
+
+	pid := mustBreakGlass(t, s, 1)
+	mustAdd(t, s, 1, pid)
+
+	next := passkeyOf(2, pid)
+	next.CredentialID = nil
+
+	err := s.RotatePasskey(t.Context(), pid, "pky-1", next, entry(passkeyObject(2), at(60)))
+	wantErr(t, "rotate to a passkey with no credential ID", err, mfa.ErrInvalid)
+
+	if _, err := s.PasskeyByCredentialID(t.Context(), credential(1)); err != nil {
+		t.Fatalf("old passkey after the refused rotation: %v", err)
+	}
+
+	if n := count(t, s, pid); n != 1 {
+		t.Fatalf("passkeys = %d, want 1", n)
+	}
+
+	wantEntries(t, s, passkeyObject(2), 0)
 }
 
 // testRotate proves that one rotation ends the old passkey and stores the

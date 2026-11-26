@@ -701,7 +701,7 @@ func TestPasskeySignInChallengeCap(t *testing.T) {
 
 			svc, err := mfasvc.New(mfasvc.Config{
 				Store: capped, RP: rp, Audit: st, Now: nil, Log: slog.New(slog.DiscardHandler),
-				Authorizer: nil, Guard: nil,
+				Authorizer: nil, Guard: nil, FreshWindow: nil,
 			})
 			if err != nil {
 				t.Fatalf("passkey service: %v", err)

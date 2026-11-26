@@ -73,7 +73,12 @@ func newServerExtras(cfg *settings, deps installationDeps, principals *principal
 
 	passkeys, err := newPasskeyService(
 		cfg.namespaceStore, cfg.publicURL, cfg.now, cfg.logger,
-		passkeyAccess{entries: serverAudit, authz: cfg.authorizer, guard: guard},
+		passkeyAccess{
+			entries: serverAudit, authz: cfg.authorizer, guard: guard,
+			window: func(ctx context.Context) time.Duration {
+				return freshnessWindowOf(ctx, deps.policies, cfg.logger)
+			},
+		},
 	)
 	if err != nil {
 		return none, err

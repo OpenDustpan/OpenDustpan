@@ -73,7 +73,7 @@ func guardedServiceOn(
 
 	svc, err := mfasvc.New(mfasvc.Config{
 		Store: store, RP: rp, Audit: f.store, Now: f.clock.now, Log: nil,
-		Authorizer: authz, Guard: guard,
+		Authorizer: authz, Guard: guard, FreshWindow: testFreshWindow,
 	})
 	if err != nil {
 		t.Fatalf("service: %v", err)

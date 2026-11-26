@@ -23,6 +23,7 @@ import (
 	"opendustpan.org/opendustpan/pkg/mfa"
 	"opendustpan.org/opendustpan/pkg/mfa/gowebauthn"
 	"opendustpan.org/opendustpan/pkg/principal"
+	"opendustpan.org/opendustpan/pkg/session"
 )
 
 // The relying party and the routes of the passkey route tests.
@@ -34,6 +35,10 @@ const (
 	beginTarget  = ownKeysTarget + "/register/begin"
 	finishTarget = ownKeysTarget + "/register/finish"
 )
+
+// testFreshWindow is the freshness window of the passkey services of the route
+// tests: the default of the session policy.
+func testFreshWindow(context.Context) time.Duration { return session.DefaultTokenFreshness }
 
 // newRoutePasskeys returns the passkey service of the route tests, over st,
 // with no authorizer and no guard: only an administrator of the identity
@@ -49,7 +54,7 @@ func newRoutePasskeys(t *testing.T, st *sqlite.Store) *mfasvc.Service {
 
 	svc, err := mfasvc.New(mfasvc.Config{
 		Store: st, RP: rp, Audit: st, Now: nil, Log: slog.New(slog.DiscardHandler),
-		Authorizer: nil, Guard: nil,
+		Authorizer: nil, Guard: nil, FreshWindow: testFreshWindow,
 	})
 	if err != nil {
 		t.Fatalf("passkey service: %v", err)
@@ -72,7 +77,7 @@ func newRoutePasskeysGuarded(
 
 	svc, err := mfasvc.New(mfasvc.Config{
 		Store: st, RP: rp, Audit: st, Now: nil, Log: slog.New(slog.DiscardHandler),
-		Authorizer: authz, Guard: guard,
+		Authorizer: authz, Guard: guard, FreshWindow: testFreshWindow,
 	})
 	if err != nil {
 		t.Fatalf("passkey service: %v", err)

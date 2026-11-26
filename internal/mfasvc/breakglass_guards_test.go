@@ -176,6 +176,7 @@ func serviceOverStore(t *testing.T, f *fixture, store mfa.PasskeyStore) *mfasvc.
 
 	svc, err := mfasvc.New(mfasvc.Config{
 		Store: store, RP: rp, Audit: f.store, Now: f.clock.now, Log: nil, Authorizer: nil, Guard: nil,
+		FreshWindow: testFreshWindow,
 	})
 	if err != nil {
 		t.Fatalf("service: %v", err)

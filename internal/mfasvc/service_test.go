@@ -27,6 +27,10 @@ const (
 	bob         = "prn-bob"
 )
 
+// testFreshWindow is the freshness window of the services of the tests that
+// change a break-glass account: 15 minutes, the default of the session policy.
+func testFreshWindow(context.Context) time.Duration { return 15 * time.Minute }
+
 // clockStart returns the time the clock of a fixture starts at. The actor helper
 // signs its session in at it, so the fresh check of a rotation passes while
 // the clock of the test has not moved.
@@ -98,6 +102,7 @@ func newFixture(t *testing.T) *fixture {
 
 	svc, err := mfasvc.New(mfasvc.Config{
 		Store: st, RP: rp, Audit: st, Now: c.now, Log: nil, Authorizer: nil, Guard: nil,
+		FreshWindow: testFreshWindow,
 	})
 	if err != nil {
 		t.Fatalf("service: %v", err)
@@ -310,9 +315,9 @@ func TestNewNeedsEachDependency(t *testing.T) {
 	}
 
 	cases := []mfasvc.Config{
-		{Store: nil, RP: rp, Audit: f.store, Now: nil, Log: nil, Authorizer: nil, Guard: nil},
-		{Store: f.store, RP: nil, Audit: f.store, Now: nil, Log: nil, Authorizer: nil, Guard: nil},
-		{Store: f.store, RP: rp, Audit: nil, Now: nil, Log: nil, Authorizer: nil, Guard: nil},
+		{Store: nil, RP: rp, Audit: f.store, Now: nil, Log: nil, Authorizer: nil, Guard: nil, FreshWindow: nil},
+		{Store: f.store, RP: nil, Audit: f.store, Now: nil, Log: nil, Authorizer: nil, Guard: nil, FreshWindow: nil},
+		{Store: f.store, RP: rp, Audit: nil, Now: nil, Log: nil, Authorizer: nil, Guard: nil, FreshWindow: nil},
 	}
 
 	for i, c := range cases {
@@ -757,6 +762,7 @@ func TestFailsClosed(t *testing.T) {
 
 	svc, err := mfasvc.New(mfasvc.Config{
 		Store: failingStore{f.store}, RP: rp, Audit: f.store, Now: nil, Log: nil, Authorizer: nil, Guard: nil,
+		FreshWindow: nil,
 	})
 	if err != nil {
 		t.Fatalf("service: %v", err)
@@ -783,6 +789,7 @@ func TestFailsClosed(t *testing.T) {
 
 	quiet, err := mfasvc.New(mfasvc.Config{
 		Store: f.store, RP: rp, Audit: failingAuditor{}, Now: nil, Log: nil, Authorizer: nil, Guard: nil,
+		FreshWindow: nil,
 	})
 	if err != nil {
 		t.Fatalf("service: %v", err)

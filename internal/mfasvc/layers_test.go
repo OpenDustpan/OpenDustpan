@@ -49,6 +49,7 @@ func (f *fixture) withRP(t *testing.T, rp mfa.RelyingParty) *mfasvc.Service {
 
 	svc, err := mfasvc.New(mfasvc.Config{
 		Store: f.store, RP: rp, Audit: f.store, Now: f.clock.now, Log: nil, Authorizer: nil, Guard: nil,
+		FreshWindow: testFreshWindow,
 	})
 	if err != nil {
 		t.Fatalf("service: %v", err)
@@ -135,6 +136,7 @@ func TestRegistrationRefusesEmptyIDs(t *testing.T) {
 
 	svc, err := mfasvc.New(mfasvc.Config{
 		Store: emptyStore{f.store}, RP: rp, Audit: f.store, Now: nil, Log: nil, Authorizer: nil, Guard: nil,
+		FreshWindow: nil,
 	})
 	if err != nil {
 		t.Fatalf("service: %v", err)

@@ -150,6 +150,8 @@ func checkGuardAuditEntry(t *testing.T, svc breakGlassService, tc breakGlassGuar
 		}
 	}
 
+	// A refused write adds no entry at this layer. The HTTP handler writes the
+	// denial entry of a refusal; internal/api/server tests that entry.
 	if len(entries) != tc.wantEntries {
 		t.Fatalf("entries on %s = %d, want %d", object, len(entries), tc.wantEntries)
 	}

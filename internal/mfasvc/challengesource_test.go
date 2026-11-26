@@ -79,6 +79,7 @@ func TestSignInChallengeSource(t *testing.T) {
 
 			svc, err := mfasvc.New(mfasvc.Config{
 				Store: rec, RP: rp, Audit: f.store, Now: f.clock.now, Log: nil, Authorizer: nil, Guard: nil,
+				FreshWindow: nil,
 			})
 			if err != nil {
 				t.Fatalf("service: %v", err)

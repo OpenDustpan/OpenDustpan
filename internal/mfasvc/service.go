@@ -30,7 +30,6 @@ import (
 	"opendustpan.org/opendustpan/pkg/identity"
 	"opendustpan.org/opendustpan/pkg/mfa"
 	"opendustpan.org/opendustpan/pkg/principal"
-	"opendustpan.org/opendustpan/pkg/session"
 )
 
 // Audit actions of the passkeys. They are not authorization actions.
@@ -81,6 +80,11 @@ type Config struct {
 	// AdminOnlyGuard: only an administrator passes the check. This fails
 	// closed.
 	Guard principal.Guard
+	// FreshWindow returns the token freshness window of the session policy: the
+	// oldest console sign-in that a change of a break-glass account accepts.
+	// Nil, or a window of 0, means that no sign-in is fresh: the service fails
+	// closed.
+	FreshWindow func(ctx context.Context) time.Duration
 }
 
 // ErrMissingDependency reports a Config with a required field that is nil.
@@ -103,6 +107,8 @@ type Service struct {
 	// guard checks that the caller holds the actions that the grants of the
 	// target account give. Nil means the AdminOnlyGuard.
 	guard principal.Guard
+	// freshWindow returns the freshness window. Nil means a window of 0.
+	freshWindow func(ctx context.Context) time.Duration
 	// watch counts the failed assertions for break-glass accounts. Nil
 	// counts nothing.
 	watch *breakGlassWatch
@@ -132,7 +138,7 @@ func New(cfg Config) (*Service, error) {
 
 	return &Service{
 		store: cfg.Store, rp: cfg.RP, audit: cfg.Audit, now: now, log: log,
-		authz: cfg.Authorizer, guard: cfg.Guard, watch: nil,
+		authz: cfg.Authorizer, guard: cfg.Guard, freshWindow: cfg.FreshWindow, watch: nil,
 	}, nil
 }
 
@@ -646,21 +652,8 @@ func (s *Service) RemovePasskey(ctx context.Context, a *Actor, id string) error 
 func (s *Service) AddBreakGlassPerson(
 	ctx context.Context, a *Actor, in principal.Input, first mfa.Passkey,
 ) (principal.Principal, mfa.Passkey, error) {
-	if a == nil {
-		return principal.Principal{}, mfa.Passkey{}, ErrMissingActor
-	}
-	if a.PrincipalID == "" {
-		return principal.Principal{}, mfa.Passkey{},
-			s.refuse(ctx, a.Entry, on(ActionAddRefused, unknownObject), "no caller", mfa.ErrWrongPerson)
-	}
-
-	// Defense in depth: the HTTP adapter sends a person only. This check stays
-	// so that no caller makes another kind of principal a break-glass account.
-	if in.Kind != "" && in.Kind != principal.KindPerson {
-		return principal.Principal{}, mfa.Passkey{}, s.refuse(
-			ctx, a.Entry, on(ActionAddRefused, unknownObject), "a break-glass account is a person",
-			fmt.Errorf("%w: a break-glass account is a person, not a %s", principal.ErrBreakGlassKind, in.Kind),
-		)
+	if err := s.checkAddCaller(ctx, a, in.Kind); err != nil {
+		return principal.Principal{}, mfa.Passkey{}, err
 	}
 
 	displayName := in.DisplayName
@@ -752,11 +745,11 @@ func (s *Service) RotatePasskey(ctx context.Context, a *Actor, personID, oldID s
 	// cannot skip one. The reach check is the check that the disable of a
 	// principal runs: a caller must hold every action that the grants of the
 	// account give, or the rotation would hand the caller the account.
-	if err := s.checkManagePrincipals(ctx, a, object); err != nil {
+	if err := s.checkManagePrincipals(ctx, a, ActionRotateRefused, object); err != nil {
 		return err
 	}
 
-	if err := s.checkFreshSignIn(ctx, a, object); err != nil {
+	if err := s.checkFreshSignIn(ctx, a, ActionRotateRefused, object); err != nil {
 		return err
 	}
 
@@ -802,17 +795,46 @@ func (s *Service) RotatePasskey(ctx context.Context, a *Actor, personID, oldID s
 	return nil
 }
 
-// breakGlassFreshWindow is the oldest sign-in that a rotation of the passkey
-// of a break-glass account accepts: the default of the session policy, which
-// is also the longest window that a policy can hold. The HTTP adapter checks
-// the window of the policy of the installation; this check is the backstop
-// that does not rely on it.
-const breakGlassFreshWindow = session.DefaultTokenFreshness
+// checkAddCaller checks the caller and the kind of the add of a break-glass
+// person. Each refusal writes one entry of ActionAddRefused.
+func (s *Service) checkAddCaller(ctx context.Context, a *Actor, kind principal.Kind) error {
+	if a == nil {
+		return ErrMissingActor
+	}
+
+	if a.PrincipalID == "" {
+		return s.refuse(ctx, a.Entry, on(ActionAddRefused, unknownObject), "no caller", mfa.ErrWrongPerson)
+	}
+
+	// Defense in depth: the route checks the action and the HTTP adapter checks
+	// the fresh sign-in. Each check here does not rely on them, so that a new
+	// caller of the service cannot add a break-glass account with a passkey of
+	// its choice. The add makes the account, so there is no grant of it to reach.
+	if err := s.checkManagePrincipals(ctx, a, ActionAddRefused, unknownObject); err != nil {
+		return err
+	}
+
+	if err := s.checkFreshSignIn(ctx, a, ActionAddRefused, unknownObject); err != nil {
+		return err
+	}
+
+	// Defense in depth: the HTTP adapter sends a person only. This check stays
+	// so that no caller makes another kind of principal a break-glass account.
+	if kind != "" && kind != principal.KindPerson {
+		return s.refuse(
+			ctx, a.Entry, on(ActionAddRefused, unknownObject), "a break-glass account is a person",
+			fmt.Errorf("%w: a break-glass account is a person, not a %s", principal.ErrBreakGlassKind, kind),
+		)
+	}
+
+	return nil
+}
 
 // checkManagePrincipals refuses a caller that does not hold
-// server:manage-principals on the installation. With no Authorizer wired,
-// only an administrator of the identity layer passes. This fails closed.
-func (s *Service) checkManagePrincipals(ctx context.Context, a *Actor, object string) error {
+// server:manage-principals on the installation. The refusal entry has the
+// action refused. With no Authorizer wired, only an administrator of the
+// identity layer passes. This fails closed.
+func (s *Service) checkManagePrincipals(ctx context.Context, a *Actor, refused, object string) error {
 	if s.authz == nil {
 		// Defense in depth: the Config keeps the Authorizer optional, so a
 		// Service can be built without one. This check stays so that such a
@@ -821,14 +843,14 @@ func (s *Service) checkManagePrincipals(ctx context.Context, a *Actor, object st
 			return nil
 		}
 
-		return s.refuse(ctx, a.Entry, on(ActionRotateRefused, object), "the caller does not hold the action",
-			fmt.Errorf("%w: only an administrator rotates a break-glass passkey "+
+		return s.refuse(ctx, a.Entry, on(refused, object), "the caller does not hold the action",
+			fmt.Errorf("%w: only an administrator changes a break-glass account "+
 				"when the service cannot check the action", identity.ErrDenied))
 	}
 
 	err := s.authz.Authorize(ctx, a.Caller, identity.ActionServerManagePrincipals, identity.ServerObject())
 	if err != nil {
-		return s.refuse(ctx, a.Entry, on(ActionRotateRefused, object), "the caller does not hold the action",
+		return s.refuse(ctx, a.Entry, on(refused, object), "the caller does not hold the action",
 			fmt.Errorf("%w: %s does not hold %s on the installation: %w",
 				identity.ErrDenied, a.Caller.Subject, identity.ActionServerManagePrincipals, err))
 	}
@@ -839,15 +861,22 @@ func (s *Service) checkManagePrincipals(ctx context.Context, a *Actor, object st
 // checkFreshSignIn refuses a caller whose console session has no sign-in in
 // the window: a zero time, a sign-in older than the window, and a sign-in
 // after now all refuse. The HTTP adapter checks the same session with the
-// window of the session policy; this check does not rely on it.
-func (s *Service) checkFreshSignIn(ctx context.Context, a *Actor, object string) error {
-	if sessionauth.Fresh(s.now(), a.SignedInAt, breakGlassFreshWindow) {
+// window of the session policy; this check does not rely on it. The window
+// comes from Config.FreshWindow. With no window wired, or a window of 0, no
+// sign-in is fresh: this fails closed. The refusal entry has the action refused.
+func (s *Service) checkFreshSignIn(ctx context.Context, a *Actor, refused, object string) error {
+	var window time.Duration
+	if s.freshWindow != nil {
+		window = s.freshWindow(ctx)
+	}
+
+	if sessionauth.Fresh(s.now(), a.SignedInAt, window) {
 		return nil
 	}
 
-	return s.refuse(ctx, a.Entry, on(ActionRotateRefused, object), "no fresh sign-in",
+	return s.refuse(ctx, a.Entry, on(refused, object), "no fresh sign-in",
 		fmt.Errorf("%w: the sign-in of the console session of the caller is missing or older than %s",
-			identity.ErrDenied, breakGlassFreshWindow))
+			identity.ErrDenied, window))
 }
 
 // checkTargetReach refuses a caller that does not hold every action that the

@@ -69,7 +69,8 @@ var errBreakGlassBody = errors.New(
 // break-glass account, and of a passkey that the account does not hold.
 var errBreakGlassNotFound = &codedError{
 	status: http.StatusNotFound, code: errcode.BreakGlassNotFound, args: nil,
-	message: "No break-glass account has this ID, or the passkey is not one of its records.",
+	message: "No break-glass account has this ID, or the passkey is not one of its records. " +
+		"List the accounts and their passkeys with GET /api/dustpan/v1/break-glass/accounts.",
 }
 
 // breakGlassAccountResponse is one break-glass account on the wire. Enabled
@@ -258,6 +259,9 @@ func (h *Handler) listBreakGlass(w http.ResponseWriter, r *http.Request, p ident
 		return
 	}
 
+	// The accounts of this API are the accounts of the installation: the routes
+	// refuse an account with a namespace (see breakGlassAccount). So the count is
+	// the installation count, not the count of one namespace.
 	working, err := h.principals.CountWorkingBreakGlass(ctx, h.now())
 	if err != nil {
 		h.writeError(ctx, w, err)
@@ -403,6 +407,13 @@ func (h *Handler) rotateBreakGlass(w http.ResponseWriter, r *http.Request, p ide
 		return
 	}
 
+	// Defense in depth: the route checks server:manage-principals before this
+	// handler runs, and the passkey service checks it again. This check stays
+	// so that a new caller of the handler cannot skip the action.
+	if h.refuseRotateWithoutAction(ctx, w, r, p, id) {
+		return
+	}
+
 	account, ok := h.rotateAccount(w, r, p, id)
 	if !ok {
 		return
@@ -481,6 +492,36 @@ func (h *Handler) rotatePasskeyOf(
 	}
 
 	w.WriteHeader(http.StatusNoContent)
+}
+
+// refuseRotateWithoutAction refuses a rotation by a caller that does not hold
+// server:manage-principals on the installation. It writes the denial entry on
+// the account ID of the path and the answer, and it returns true when it
+// refused. With no authorizer it fails closed.
+func (h *Handler) refuseRotateWithoutAction(
+	ctx context.Context, w http.ResponseWriter, r *http.Request, p identity.Principal, id string,
+) bool {
+	var err error
+
+	if h.authz == nil {
+		err = fmt.Errorf("%w: the server cannot check the action of the caller", identity.ErrDenied)
+	} else {
+		authErr := h.authz.Authorize(ctx, p, identity.ActionServerManagePrincipals, identity.ServerObject())
+		if authErr == nil {
+			return false
+		}
+
+		err = fmt.Errorf("%w: the caller does not hold %s: %w",
+			identity.ErrDenied, identity.ActionServerManagePrincipals, authErr)
+	}
+
+	h.appendServerChangeReason(r, p, serverChange{
+		at: h.now(), action: identity.ActionServerManagePrincipals, object: principal.Ref(id),
+		outcome: audit.OutcomeDenied,
+	}, refusalReason(err))
+	h.writeError(ctx, w, err)
+
+	return true
 }
 
 // refuseRotateOutsideReach refuses a rotation by a caller that does not hold

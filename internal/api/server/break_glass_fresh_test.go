@@ -89,6 +89,11 @@ func checkBreakGlassAddFreshStep(t *testing.T, f accessFixture, old passkeyClien
 			rec.Body.String(), freshErrorCode)
 	}
 
+	// The person has no enrolled passkey, so the refusal names the way to enroll one.
+	if !strings.Contains(got.Message, "/api/dustpan/v1/me/passkeys/register/begin") {
+		t.Fatalf("stale add message = %q, want the enrollment path", got.Message)
+	}
+
 	expectOneMoreBreakGlassFailure(t, f, failures, "stale add")
 
 	// The stale add stored nothing: the same subject is free.

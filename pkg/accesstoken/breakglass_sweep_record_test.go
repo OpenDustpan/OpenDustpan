@@ -3,11 +3,13 @@ package accesstoken_test
 import (
 	"slices"
 	"testing"
+	"time"
 
 	"opendustpan.org/opendustpan/pkg/accesstoken"
 	"opendustpan.org/opendustpan/pkg/audit"
 	"opendustpan.org/opendustpan/pkg/identity"
 	"opendustpan.org/opendustpan/pkg/principal"
+	"opendustpan.org/opendustpan/pkg/store/storetest"
 )
 
 // exemptReason is the reason of the audit record of a break-glass account
@@ -64,10 +66,14 @@ func TestBreakGlassSweepWritesExemptRecord(t *testing.T) {
 		t.Fatalf("set policy: %v", err)
 	}
 
-	bg, err := f.principals.CreateBreakGlassAccount(ctx, caller(), principal.Input{
-		Subject: "bg@example.com", DisplayName: "", Kind: principal.KindPerson,
-	})
-	if err != nil {
+	at := sweepStart()
+	bg := principal.Principal{
+		CreatedAt: at, UpdatedAt: at, DisabledAt: time.Time{}, ID: "prn-bg-sweep",
+		Subject: "bg@example.com", DisplayName: "bg@example.com", Kind: principal.KindPerson,
+		Source: principal.SourceLocal, Namespace: "", GroupCount: 0, BreakGlass: true,
+	}
+
+	if err := f.store.CreatePrincipal(ctx, bg, storetest.ServerChange(at, principal.Ref(bg.ID))); err != nil {
 		t.Fatalf("create break-glass account: %v", err)
 	}
 

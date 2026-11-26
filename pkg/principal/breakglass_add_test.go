@@ -54,26 +54,49 @@ func checkBreakGlassAddAtZero(t *testing.T) {
 	svc := newBreakGlassService(t)
 	checkBreakGlassCount(t, svc, 0)
 
-	account, err := svc.service.CreateBreakGlassAccount(t.Context(), testEntry(), principal.Input{
-		Subject: "break-glass:recovery", DisplayName: "Recovery", Kind: principal.KindPerson,
-	})
-	if err != nil {
-		t.Fatalf("add at zero accounts: %v", err)
-	}
+	// The add of a break-glass person is a write of the passkey store with its
+	// first passkey; the service of the principals only reads the accounts.
+	storeBreakGlass(t, svc.store, "prn-recovery", "break-glass:recovery")
 
-	if !account.BreakGlass || account.Kind != principal.KindPerson || account.Source != principal.SourceLocal ||
-		account.Subject != "break-glass:recovery" || account.DisplayName != "Recovery" {
-		t.Fatalf("account = %+v, want a local break-glass person", account)
-	}
-
-	stored, err := svc.store.GetPrincipal(t.Context(), account.ID)
-	if err != nil || !stored.BreakGlass || stored.Subject != account.Subject {
-		t.Fatalf("stored account = %+v, %v; want the break-glass person", stored, err)
+	stored, err := svc.store.GetPrincipal(t.Context(), "prn-recovery")
+	if err != nil || !stored.BreakGlass || stored.Kind != principal.KindPerson ||
+		stored.Source != principal.SourceLocal || stored.Subject != "break-glass:recovery" {
+		t.Fatalf("stored account = %+v, %v; want a local break-glass person", stored, err)
 	}
 
 	// The account has no passkey yet, so it is not a working path.
 	checkBreakGlassCount(t, svc, 0)
-	checkBreakGlassRefusesService(t, svc)
+}
+
+// noCounterStore hides the count methods of the store: it embeds only the
+// principal.Store interface.
+type noCounterStore struct {
+	principal.Store
+}
+
+// TestCountWorkingBreakGlassFailsClosedWithoutCounter proves that a store that
+// cannot count answers ErrBreakGlassUnavailable, never a count of 0.
+func TestCountWorkingBreakGlassFailsClosedWithoutCounter(t *testing.T) {
+	t.Parallel()
+
+	svc, err := principal.NewService(principal.Config{
+		TempAdmins: nil,
+		Store:      noCounterStore{Store: openStore(t)},
+		Guard:      principal.AdminOnlyGuard{},
+		Namespaces: nil,
+		Tokens:     nil,
+		GroupReach: nil,
+		Now:        nil,
+		NewID:      nil,
+	})
+	if err != nil {
+		t.Fatalf("service: %v", err)
+	}
+
+	count, err := svc.CountWorkingBreakGlass(t.Context(), svc.Now())
+	if !errors.Is(err, principal.ErrBreakGlassUnavailable) || count != 0 {
+		t.Fatalf("count = %d, %v; want 0 and ErrBreakGlassUnavailable", count, err)
+	}
 }
 
 // checkBreakGlassCount proves the live count of the service.
@@ -83,18 +106,6 @@ func checkBreakGlassCount(t *testing.T, svc breakGlassService, want int64) {
 	count, err := svc.service.CountWorkingBreakGlass(t.Context(), svc.service.Now())
 	if err != nil || count != want {
 		t.Fatalf("working count = %d, %v; want %d", count, err, want)
-	}
-}
-
-// checkBreakGlassRefusesService proves that the add refuses a service.
-func checkBreakGlassRefusesService(t *testing.T, svc breakGlassService) {
-	t.Helper()
-
-	_, err := svc.service.CreateBreakGlassAccount(t.Context(), testEntry(), principal.Input{
-		Subject: "break-glass:other", DisplayName: "", Kind: principal.KindService,
-	})
-	if !errors.Is(err, principal.ErrBreakGlassKind) {
-		t.Fatalf("add of a service = %v, want ErrBreakGlassKind", err)
 	}
 }
 
