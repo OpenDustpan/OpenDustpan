@@ -4,6 +4,8 @@ version: 9
 
 Roadmap: `docs/roadmap.md:315` (Output sharing).
 
+Issue: #4123.
+
 ## Why
 
 **Persona: developer.** Developer runs the Pulumi CLI and OpenTofu against one server and reads outputs of a unit of the other tool from a runner job. With no clear rule, the read fails or leaks across units. This change lets each job read only what a producer rule and the starter grants allow.

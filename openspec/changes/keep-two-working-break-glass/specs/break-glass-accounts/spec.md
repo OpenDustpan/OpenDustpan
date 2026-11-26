@@ -34,11 +34,19 @@ The inactivity sweep SHALL NOT disable a break-glass account, and SHALL write on
 
 ### Requirement: add-raises-count
 
-When a site administrator adds a break-glass account with a fresh authentication, the server SHALL accept the add whatever the current count.
+When a site administrator adds a break-glass account with a fresh authentication, the server SHALL accept the add whatever the current count, and SHALL store the account, its first passkey and the audit entry in one transaction.
 
 #### Scenario: Add at zero accounts
 - **WHEN** no working account exists and an administrator adds one with a passkey
 - **THEN** the server accepts the add
+
+#### Scenario: Add stores account and first passkey together
+- **WHEN** an administrator adds a break-glass account with a passkey
+- **THEN** the server stores the account, its first passkey and the audit entry in one transaction
+
+#### Scenario: Failed passkey insert leaves no account
+- **WHEN** an administrator adds a break-glass account and the insert of its first passkey fails
+- **THEN** the transaction rolls back, the server stores no account and no audit entry, and the answer carries the error of the passkey insert
 
 #### Scenario: Add without fresh step
 - **WHEN** the add comes with a stale fresh step
@@ -70,11 +78,11 @@ If two requests disable the last two enabled break-glass accounts together, then
 
 ### Requirement: restore-guard
 
-If a restore leaves fewer than two working break-glass paths in the staged data of a scope, then the server SHALL refuse the restore before the swap.
+If a restore leaves fewer than two working break-glass paths in the staged data of a scope, then the server SHALL end the restore as failed in the swap transaction, with the code principal.no-working-break-glass, and keep the live data.
 
 #### Scenario: Old backup with one account
 - **WHEN** an operator restores a backup with one working account
-- **THEN** the server answers 409 with principal.no-working-break-glass and the data stays unchanged
+- **THEN** the start route still answers 202, the restore ends failed with the code principal.no-working-break-glass, and the data stays unchanged
 
 #### Scenario: Backup with two accounts
 - **WHEN** an operator restores a backup with two working accounts
@@ -84,9 +92,9 @@ If a restore leaves fewer than two working break-glass paths in the staged data 
 - **WHEN** the swap fails after the check
 - **THEN** the transaction rolls back and the live data stays
 
-#### Scenario: Hosted namespace restore
-- **WHEN** a restore brings a namespace whose break-glass principals sit in another namespace
-- **THEN** the server counts only the principals of the restored namespace and refuses when they are fewer than two
+#### Scenario: Count of one namespace
+- **WHEN** the NEW count `CountWorkingBreakGlassInNamespace` runs for a namespace and the break-glass principals of that namespace are fewer than two, while another namespace has more
+- **THEN** the count gives only the principals of the given namespace and the restore check refuses
 
 ### Requirement: fresh-step
 
@@ -98,7 +106,7 @@ If a guarded change of a break-glass account comes without a fresh authenticatio
 
 #### Scenario: Person with no factor
 - **WHEN** a person with no enrolled factor starts a rotation
-- **THEN** the server answers 403 and the text names the page that enrolls a factor
+- **THEN** the server answers 403 with mfa.fresh-step-required and the text names `/api/dustpan/v1/me/passkeys/register/begin`
 
 ### Requirement: atomic-rotation
 

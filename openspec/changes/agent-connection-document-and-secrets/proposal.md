@@ -1,6 +1,8 @@
 ---
-version: 3
+version: 4
 ---
+
+Issue: #4287
 
 ## Why
 
@@ -8,11 +10,11 @@ ADR 129 (accepted 2026-10-18, owner) says: "The operator sets every field of the
 
 ## What Changes
 
-- The NEW type `agent.ConnectionSpec` with the 18 fields of decision 3, in version 1, and its `Validate`. It refuses an unknown field, a document above 32 KiB, a string with a control character, and a `format` of `responses` with the NEW error `ErrFormatNotSupported` (decisions 2 and 5). The NEW Go names of this change are `agent.ConnectionSpec`, `ConnectionSpec`, `agent.SecretRef`, `SecretRef`, `ParseConnectionSpec`, `ErrFormatNotSupported`, `ErrPlainSecret`, `agenttest.SecretItems`, `agenttest.ConnectionStore`, `egress.CheckModelURL` and `egress.Allowlist`. The decoder is a NEW call of `DisallowUnknownFields` of `encoding/json`.
+- The NEW type `agent.ConnectionSpec` with the 18 fields of decision 3, in version 1, and its `Validate`. It refuses an unknown field, a document above 32 KiB, a string with a control character, and a `format` of `responses` with the NEW error `ErrFormatNotSupported` (decisions 2 and 5). The NEW Go names of this change are `agent.ConnectionSpec`, `ConnectionSpec`, `agent.SecretRef`, `SecretRef`, `ParseConnectionSpec`, `ErrFormatNotSupported`, `ErrPlainSecret`, `agenttest.SecretItems`, `agenttest.ConnectionStore`, `egress.CheckModelURL`, `egress.CheckModelAddrs`, `egress.PublicOnly` and `egress.Allowlist`. The decoder is a NEW call of `DisallowUnknownFields` of `encoding/json`.
 - The field rules that need no model call: `baseURL` (decision 4), `auth` (decision 9), `headers` and `query` (decision 11, the name rules and the plain-value check by name), `userAgent` (decision 12), `outputTokens` and `tools` (decisions 13 and 14), `transport`, `reasoning`, `cache`, `conversationKey`, `providerFields`, `errors`, `rateLimit` and `requestIDHeaders` as the structural rules of decisions 15 to 23. The adapter behavior of those fields is not in this change.
 - The secret items of the scope `@server`: the NEW port `agent.SecretItems` and its NEW routes `POST /api/agent/secrets`, `GET /api/agent/secrets`, `PUT /api/agent/secrets/{ref}` and `DELETE /api/agent/secrets/{ref}` (decision 10), sealed with `secret.InstallationSecrets`. A reference row with a foreign key makes a `DELETE` of a used item answer 409.
 - The stored connection: the tables for the current document, its version and its reference rows, and the pending document with the key of a probe ID (decision 29), as storage only. The probe and the route that starts it are not in this change.
-- The NEW function `egress.CheckModelURL`, the NEW type `egress.Allowlist` and the egress allowlist setting with the NEW routes `GET /api/server/egress-allowlist` and `PUT /api/server/egress-allowlist` (decisions 25 and 26), and the NEW flag `--egress-public-only`. Main serves neither route.
+- The NEW functions `egress.CheckModelURL` and `egress.CheckModelAddrs`, the NEW types `egress.Allowlist` and `egress.PublicOnly` and the egress allowlist setting with the NEW routes `GET /api/server/egress-allowlist` and `PUT /api/server/egress-allowlist` (decisions 25 and 26), and the NEW flag `--egress-public-only`. Main serves neither route. The flag reaches the checks as the third parameter `publicOnly`, not as a field of `Allowlist`. The NEW functions have no production caller in this change and write no audit entry; their first caller is the check `reach` of the change `agent-connection-probe`.
 - The NEW routes `GET /api/agent/connection`, `DELETE /api/agent/connection` and `GET /api/agent/formats` (decision 32). Main serves none of them. `GET` answers the document with references only, its version, the pending document and the result of the last probe. `DELETE` removes the connection and each pending document in one transaction (decision 29).
 - The audit entries of decision 33 for a disconnect, a secret item and an allowlist change.
 

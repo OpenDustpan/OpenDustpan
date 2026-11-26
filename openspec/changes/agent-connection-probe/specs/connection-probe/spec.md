@@ -14,6 +14,10 @@ The probe SHALL run `reach`, `auth`, `tools`, `tool-result`, `transport`, `usage
 - **WHEN** the model gives no tool call in 2 attempts
 - **THEN** the check `tools` fails and the later checks are `skipped`
 
+#### Scenario: A base URL that resolves to a metadata address
+- **WHEN** the `baseURL` of the document resolves to a link-local address, at the first check or at connect time
+- **THEN** the check `reach` fails, no call goes out, and the audit log has an entry
+
 #### Scenario: A server with no cache tokens
 - **WHEN** the mode is `automatic` and the server reports no cache tokens
 - **THEN** the check `cache` is a warning and the probe passes

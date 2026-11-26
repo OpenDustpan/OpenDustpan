@@ -38,6 +38,11 @@ func NewGuard(p Policy, check func(ctx context.Context, subject string) error) (
 // Require returns nil when the policy does not require a step, else the
 // result of the check (ErrFreshStepRequired of the domain package).
 func (g Guard) Require(ctx context.Context, subject string) error
+
+// Required returns the answer of the policy of g. A Guard with no policy
+// (the zero value) returns true (fail closed). The confirmation gate of
+// pkg/job gets this answer as its parameter freshRequired.
+func (g Guard) Required(ctx context.Context) bool
 ```
 
 Settings API: `GET /api/dustpan/v1/settings` lists `freshAuthEnabled` with `value`, `default` and `source` as for each setting (ADR 212 decision 9). `PATCH /api/dustpan/v1/settings` changes it, with the authorization action of the settings write. The rule and namespace APIs add `enforced` (boolean) to each of `freshAuthSeconds` and `freshAuthForApprovals`. Error: 403 `mfa.fresh-step-required` as before.
@@ -49,6 +54,8 @@ Settings API: `GET /api/dustpan/v1/settings` lists `freshAuthEnabled` with `valu
 | Port adapter (store) | `checkDestroyProof` reads the same `Policy`. With the setting on, an approval of a `destroy` with no proof is refused. | A store call with no proof and the setting on is refused, and the guard removed makes the test fail. |
 | Service | `pkg/job`, `pkg/accesstoken`, `pkg/profile`, `pkg/setting` hold a `Guard`. | A service call with an access token subject and the setting on is refused. |
 | HTTP handler | Each adapter handler holds the same `Guard`. | A request with an access token and the setting on gets 403 `mfa.fresh-step-required`. |
+| Kind of the approver (handler, service, store) | `checkDestroyFresh`, `newDestroyFresh` and `checkDestroyProof` allow `auth: none` for the kind person only. | A service, a workload and an agent principal with `job:approve` and the setting off are refused at each layer, and the layer removed makes its own test fail. |
+| Confirmation gate | `GatesStatus`, `GatesProgress` and `Gate.Status` take `freshRequired`. A confirmation with `auth: none` counts only when it is false. The gate does not rely on the three write layers. | A confirmation with `auth: none` and the setting on does not open the gate, and a gate that ignores the parameter makes the test fail. |
 | Setting read | `Required` fails closed. | A setting store that returns an error gives `Required` true. |
 
 Each guard keeps a comment that says it is a defense-in-depth layer and names the layers that it does not rely on.
@@ -57,4 +64,4 @@ Each guard keeps a comment that says it is a defense-in-depth layer and names th
 
 - The call-site list of the proposal is a snapshot. Task 1.1 runs `rg` again on the current main and gates each site it finds.
 - Code that lands before this change (#3283, #3286) adds sites. Their lanes add them to the list when this change merges.
-- With the setting off, the grant and the audit entry are the only checks of a `destroy` approval (ADR 385 consequences). The guide says it.
+- With the setting off, the grant and the audit entry are the only checks for a person; a non-person never approves a destroy. The handler, the service and the store each allow the kind person for `auth: none` and refuse every other kind. The guide says it (ADR 385 consequences).
