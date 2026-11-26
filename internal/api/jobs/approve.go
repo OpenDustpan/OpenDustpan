@@ -154,7 +154,11 @@ func (h *Handler) approveVerdict(w http.ResponseWriter, r *http.Request, p ident
 		return
 	}
 
-	err = h.checkDestroyFresh(ctx, p, t, verdict)
+	// One read of the setting for the request: the check and the answer use the
+	// same value.
+	freshRequired := h.freshGuard.Required(ctx)
+
+	err = h.checkDestroyFresh(p, t, verdict, stepRequirement(freshRequired))
 	if err != nil {
 		h.recordApprovalRefusal(r, p, t, err)
 		h.writeError(ctx, w, err)
@@ -186,8 +190,12 @@ func (h *Handler) approveVerdict(w http.ResponseWriter, r *http.Request, p ident
 	}
 
 	setETag(w, &j)
-	h.answerStartedJob(ctx, w, http.StatusCreated, &j)
+	h.writeStartedJob(ctx, w, http.StatusCreated, &j, freshRequired)
 }
+
+// stepRequirement is the answer of the setting freshAuthEnabled that the
+// handler read once for the request: true when a fresh step is required.
+type stepRequirement bool
 
 // checkDestroyFresh returns the refusal of the approval of a destroy that the
 // handler gives itself, or nil. It never refuses another verdict or another
@@ -199,14 +207,14 @@ func (h *Handler) approveVerdict(w http.ResponseWriter, r *http.Request, p ident
 // implementation of the service would allow it. With the setting off, only a
 // person gets an approval of a destroy. This check does not rely on the service
 // or on the store.
-func (h *Handler) checkDestroyFresh(ctx context.Context, p identity.Principal, t *target, v job.Verdict) error {
+func (h *Handler) checkDestroyFresh(p identity.Principal, t *target, v job.Verdict, step stepRequirement) error {
 	if v != job.VerdictApprove || t.job.Spec.Operation != job.OperationDestroy {
 		return nil
 	}
 
-	// The guard reads the setting here, at the point of use. Its check always
-	// refuses, so a nil result means that the policy requires no step.
-	if h.freshGuard.Require(ctx, p.Subject) == nil {
+	// The caller read the setting once for the request. The check of the guard
+	// always refuses, so an unset requirement means that no step is needed.
+	if !step {
 		// Defense in depth: the service and the job store also allow only a
 		// person here. This check stays so that a service, a workload or an agent
 		// never gets the approval of a destroy without a step, whatever the

@@ -216,7 +216,15 @@ func (h *Handler) answerJob(ctx context.Context, w http.ResponseWriter, status i
 // keeps the status, with poolID and without pool: a write that committed never
 // gets a failure answer.
 func (h *Handler) answerStartedJob(ctx context.Context, w http.ResponseWriter, status int, j *job.Job) {
-	out := toJobResponse(j, h.approvers, h.freshGuard.Required(ctx))
+	h.writeStartedJob(ctx, w, status, j, h.freshGuard.Required(ctx))
+}
+
+// writeStartedJob is answerStartedJob with the answer of the setting that the
+// caller already read.
+func (h *Handler) writeStartedJob(
+	ctx context.Context, w http.ResponseWriter, status int, j *job.Job, freshRequired bool,
+) {
+	out := toJobResponse(j, h.approvers, freshRequired)
 
 	name, err := h.poolName(ctx, j)
 	if err != nil {
