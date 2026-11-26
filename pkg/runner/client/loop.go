@@ -660,6 +660,9 @@ func answerError(resp session.Response) error {
 		// rate-limited, and the log records code=unknown, never the value from
 		// the server.
 		if e.Code == "" {
+			// Defense in depth: Is already treats an empty 429 code as
+			// rate-limited through the status rule; this default keeps the
+			// code name in the log and in Error().
 			e.Code = protocol.ErrorRateLimited
 		}
 
@@ -669,6 +672,8 @@ func answerError(resp session.Response) error {
 		// and polls again, whatever the body code. The code stays as the server
 		// sent it; the log records code=unknown when it is not a protocol code.
 		if e.Code == "" {
+			// Defense in depth: Is already treats a 5xx as unavailable; this
+			// default keeps the code name in the log and in Error().
 			e.Code = protocol.ErrorUnavailable
 		}
 

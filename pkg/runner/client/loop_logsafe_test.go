@@ -202,6 +202,91 @@ func TestErrorStringHidesInvalidCode(t *testing.T) {
 	}
 }
 
+func TestLoopDefaultsEmpty429CodeToRateLimited(t *testing.T) {
+	t.Parallel()
+
+	srv := newFakeServer(map[string][]answer{
+		protocol.PathPoll: {
+			rawAnswer(http.StatusTooManyRequests, []byte(`{"message":"slow down"}`)),
+			noWork(),
+		},
+	})
+	ticks := newFakeTicks()
+	l, logs := loggedLoop(t, srv, ticks)
+
+	ctx, cancel := context.WithTimeout(t.Context(), 5*time.Second)
+	defer cancel()
+
+	done := make(chan error, 1)
+	go func() {
+		if err := ticks.fireErr(ctx, 5*time.Second); err != nil {
+			done <- err
+			cancel()
+			return
+		}
+		waitFor(ctx, func() bool { return srv.count(protocol.PathPoll) >= 2 })
+		cancel()
+		done <- nil
+	}()
+
+	err := l.Run(ctx, func(context.Context, protocol.Work) error { return nil })
+	if gerr := <-done; gerr != nil {
+		t.Fatal(gerr)
+	}
+	if err != nil {
+		t.Fatalf("Run = %v, want nil", err)
+	}
+	if !ticks.has(5 * time.Second) {
+		t.Error("no wait of 5s")
+	}
+	if !logs.hasAttrs("the server limits the polls", map[string]string{"error.code": protocol.ErrorRateLimited}) {
+		t.Errorf("no rate-limited record; records: %+v", logs.all())
+	}
+}
+
+func TestLoopDefaultsEmpty5xxCodeToUnavailable(t *testing.T) {
+	t.Parallel()
+
+	srv := newFakeServer(map[string][]answer{
+		protocol.PathPoll: {
+			rawAnswer(http.StatusServiceUnavailable, []byte(`{"message":"busy"}`)),
+			noWork(),
+		},
+	})
+	ticks := newFakeTicks()
+	l, logs := loggedLoop(t, srv, ticks)
+
+	ctx, cancel := context.WithTimeout(t.Context(), 5*time.Second)
+	defer cancel()
+
+	done := make(chan error, 1)
+	go func() {
+		if err := ticks.fireErr(ctx, time.Second); err != nil {
+			done <- err
+			cancel()
+			return
+		}
+		waitFor(ctx, func() bool { return srv.count(protocol.PathPoll) >= 2 })
+		cancel()
+		done <- nil
+	}()
+
+	err := l.Run(ctx, func(context.Context, protocol.Work) error { return nil })
+	if gerr := <-done; gerr != nil {
+		t.Fatal(gerr)
+	}
+	if err != nil {
+		t.Fatalf("Run = %v, want nil", err)
+	}
+	if !ticks.has(time.Second) {
+		t.Error("no backoff wait")
+	}
+	want := map[string]string{"error.code": protocol.ErrorUnavailable}
+	if !logs.hasAttrs("the poll failed: the loop waits and polls again", want) {
+		t.Errorf("no unavailable record; records: %+v", logs.all())
+	}
+}
+
 // errorTransport fails each call with err.
 type errorTransport struct {
 	err error
@@ -445,17 +530,27 @@ func checkHostileStatusPoll(t *testing.T, tc hostileStatusCase) {
 	ctx, cancel := context.WithTimeout(t.Context(), 5*time.Second)
 	defer cancel()
 
+	done := make(chan error, 1)
 	go func() {
+		d := time.Second
 		if tc.wantWait {
-			ticks.fire(ctx, t, 7*time.Second)
-		} else {
-			ticks.fire(ctx, t, time.Second)
+			d = 7 * time.Second
+		}
+		if err := ticks.fireErr(ctx, d); err != nil {
+			done <- err
+			cancel()
+
+			return
 		}
 		waitFor(ctx, func() bool { return srv.count(protocol.PathPoll) >= 2 })
 		cancel()
+		done <- nil
 	}()
 
 	err := l.Run(ctx, func(context.Context, protocol.Work) error { return nil })
+	if gerr := <-done; gerr != nil {
+		t.Fatal(gerr)
+	}
 	if !errors.Is(err, tc.wantRun) {
 		t.Fatalf("Run = %v, want %v", err, tc.wantRun)
 	}
@@ -489,37 +584,49 @@ func checkHostileStatusRenew(t *testing.T, tc hostileStatusCase) {
 	ctx, cancel := context.WithTimeout(t.Context(), 5*time.Second)
 	defer cancel()
 
+	done := make(chan error, 1)
 	if tc.wantRetry {
-		go fireHostileRenewTicksRetry(ctx, t, cancel, ticks, srv)
+		go fireHostileRenewTicksRetry(ctx, done, cancel, ticks, srv)
 	} else {
-		go fireHostileRenewTicksOnce(ctx, t, ticks, srv)
+		go fireHostileRenewTicksOnce(ctx, done, ticks, srv)
 	}
 
 	stopped := runHostileRenewLoop(ctx, t, l, tc)
+	if gerr := <-done; gerr != nil {
+		t.Fatal(gerr)
+	}
 	checkHostileRenewResult(t, tc, srv, logs, stopped)
 }
 
-func fireHostileRenewTicksOnce(ctx context.Context, t *testing.T, ticks *fakeTicks, srv *fakeServer) {
-	t.Helper()
-
-	ticks.fire(ctx, t, runner.RenewEvery(runner.DefaultLease))
+func fireHostileRenewTicksOnce(ctx context.Context, done chan<- error, ticks *fakeTicks, srv *fakeServer) {
+	if err := ticks.fireErr(ctx, runner.RenewEvery(runner.DefaultLease)); err != nil {
+		done <- err
+		return
+	}
 	waitFor(ctx, func() bool { return srv.count(protocol.PathClaimRenew) >= 1 })
+	done <- nil
 }
 
 func fireHostileRenewTicksRetry(
 	ctx context.Context,
-	t *testing.T,
+	done chan<- error,
 	cancel context.CancelFunc,
 	ticks *fakeTicks,
 	srv *fakeServer,
 ) {
-	t.Helper()
-
-	ticks.fire(ctx, t, runner.RenewEvery(runner.DefaultLease))
+	if err := ticks.fireErr(ctx, runner.RenewEvery(runner.DefaultLease)); err != nil {
+		done <- err
+		return
+	}
 	waitFor(ctx, func() bool { return srv.count(protocol.PathClaimRenew) >= 1 })
-	ticks.fire(ctx, t, runner.RenewEvery(runner.DefaultLease))
+	if err := ticks.fireErr(ctx, runner.RenewEvery(runner.DefaultLease)); err != nil {
+		done <- err
+		cancel()
+		return
+	}
 	waitFor(ctx, func() bool { return srv.count(protocol.PathClaimRenew) >= 2 })
 	cancel()
+	done <- nil
 }
 
 func runHostileRenewLoop(ctx context.Context, t *testing.T, l *client.Loop, tc hostileStatusCase) error {
@@ -578,21 +685,34 @@ func checkHostileStatusHeartbeat(t *testing.T, tc hostileStatusCase) {
 	ctx, cancel := context.WithTimeout(t.Context(), 5*time.Second)
 	defer cancel()
 
+	done := make(chan error, 1)
 	go func() {
-		ticks.fire(ctx, t, runner.HeartbeatEvery)
+		if err := ticks.fireErr(ctx, runner.HeartbeatEvery); err != nil {
+			done <- err
+			cancel()
+			return
+		}
 		if tc.wantRetry {
 			waitFor(ctx, func() bool { return srv.count(protocol.PathHeartbeat) >= 1 })
-			ticks.fire(ctx, t, runner.HeartbeatEvery)
+			if err := ticks.fireErr(ctx, runner.HeartbeatEvery); err != nil {
+				done <- err
+				cancel()
+				return
+			}
 			waitFor(ctx, func() bool { return srv.count(protocol.PathHeartbeat) >= 2 })
 			cancel()
-
+			done <- nil
 			return
 		}
 		waitFor(ctx, func() bool { return logs.has(slog.LevelWarn, "", "") })
 		cancel()
+		done <- nil
 	}()
 
 	err := l.Run(ctx, func(context.Context, protocol.Work) error { return nil })
+	if gerr := <-done; gerr != nil {
+		t.Fatal(gerr)
+	}
 	if !errors.Is(err, tc.wantRun) {
 		t.Fatalf("Run = %v, want %v", err, tc.wantRun)
 	}

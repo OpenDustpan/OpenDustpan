@@ -209,12 +209,23 @@ func (f *fakeTicks) send(d time.Duration) bool {
 func (f *fakeTicks) fire(ctx context.Context, t *testing.T, d time.Duration) {
 	t.Helper()
 
+	if err := f.fireErr(ctx, d); err != nil {
+		t.Error(err)
+	}
+}
+
+var errNoTicker = errors.New("no ticker with the period")
+
+// fireErr sends one tick to the ticker with the period d, once it exists.
+func (f *fakeTicks) fireErr(ctx context.Context, d time.Duration) error {
 	ctx, cancel := context.WithTimeout(ctx, 5*time.Second)
 	defer cancel()
 
 	if !waitFor(ctx, func() bool { return f.send(d) }) {
-		t.Errorf("no ticker with the period %v", d)
+		return fmt.Errorf("%w: %v", errNoTicker, d)
 	}
+
+	return nil
 }
 
 func (f *fakeTicks) has(d time.Duration) bool {
