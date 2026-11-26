@@ -9,7 +9,10 @@ script does these steps:
    diff, clients-check, nolint-check, files-check, ignored-check and
    subtestcheck.
 3. golangci-lint (also of the journal build) and nilaway on the packages
-   that hold a changed file.
+   that hold a changed file. A nolintlint finding that a directive is unused
+   does not fail the step: on a part of the packages a linter can stay
+   silent where the full run reports, so the finding is not reliable.
+   The full lint in CI keeps that check.
 4. `go test` on those packages and on each package whose tests import one
    of them. The flags are the defaults, so the test cache stays valid: no
    -race and no -count.
@@ -39,6 +42,7 @@ import os
 import shutil
 import subprocess
 import sys
+import tempfile
 
 STORE_PREFIXES = ("pkg/store/", "internal/store/")
 STORE_DIRS = ("internal/store/sqlite", "internal/store/postgres")
@@ -150,6 +154,40 @@ def run(args, root):
     return subprocess.run(args, cwd=root, check=False).returncode
 
 
+def only_unused_directives(report):
+    """Return True when the golangci-lint JSON report holds findings, and
+    each one is a nolintlint finding that a directive is unused.
+
+    A run on a part of the packages cannot tell if a directive is unused:
+    the linter that the directive names can stay silent when the run does
+    not load all packages. CI runs the full lint and keeps the check.
+    """
+    try:
+        issues = json.loads(report).get("Issues") or []
+    except (ValueError, AttributeError):
+        return False
+    return bool(issues) and all(
+        i.get("FromLinter") == "nolintlint" and "is unused" in i.get("Text", "")
+        for i in issues
+    )
+
+
+def run_lint(args, root):
+    """Run golangci-lint. Return its status, or 0 when only nolintlint
+    findings about an unused directive made it fail."""
+    with tempfile.TemporaryDirectory() as tmp:
+        report = os.path.join(tmp, "report.json")
+        # The text output stays on stdout, so that the user sees each finding.
+        code = run([*args, "--output.text.path=stdout", f"--output.json.path={report}"], root)
+        if code != 1 or not os.path.exists(report):
+            return code
+        with open(report, encoding="utf-8") as f:
+            if only_unused_directives(f.read()):
+                note("only nolintlint findings of an unused directive; not a failure of this partial run")
+                return 0
+    return code
+
+
 def make(target, *variables):
     return ["make", "--no-print-directory", target, *variables]
 
@@ -232,7 +270,8 @@ def main(argv):
         if shutil.which(tool) is None:
             note(f"{tool} is not installed; skipped {name}")
             continue
-        if run(argv, root) != 0:
+        runner = run_lint if name == "golangci-lint" else run
+        if runner(argv, root) != 0:
             failed.append(name)
     if failed:
         note("failed: " + ", ".join(failed))
@@ -286,6 +325,25 @@ def selftest():
     assert names == ["go test"], names
     names = [name for name, _, _ in package_checks(["a"], ["a"], "1m")]
     assert names == ["golangci-lint", "golangci-lint of the journal build", "nilaway", "go test"], names
+
+    # A partial lint run does not fail on a nolintlint finding of an unused directive.
+    # The marker is split, so that nolint-check does not read the text as a marker.
+    MARK = "//" + "nolint"
+    unused = {"FromLinter": "nolintlint", "Text": "directive `" + MARK + ":contextcheck // x` is unused for linter \"contextcheck\""}
+    other = {"FromLinter": "nolintlint", "Text": "directive `" + MARK + "` should mention specific linter"}
+    vet = {"FromLinter": "govet", "Text": "bad"}
+    for issues, want in [
+        ([unused], True),
+        ([unused, unused], True),
+        ([unused, vet], False),
+        ([other], False),
+        ([vet], False),
+        ([], False),
+        (None, False),
+    ]:
+        assert only_unused_directives(json.dumps({"Issues": issues})) is want, issues
+    assert only_unused_directives("not json") is False
+    assert only_unused_directives("[]") is False
 
     assert parse_go_list("", root) == ({}, {})
     assert parse_go_list("  \n", root) == ({}, {})

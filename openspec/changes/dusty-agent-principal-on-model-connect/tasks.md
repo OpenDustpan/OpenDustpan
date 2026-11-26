@@ -30,6 +30,7 @@
 - [ ] 3.1 Regenerate `internal/api/apidesc/openapi.json` and the clients (`make clients-generate`). Check: the named files change in the same pull request. Confirmed by: the driver's gates.
 - [ ] 3.2 In `GLOSSARY.md`, add the entries "sponsor" and "agent record" (a new domain concept gets a term). Check: `make docs-lint` passes.
 - [ ] 3.3 Add `docs/guides/dusty-principal.md` to `docs/commands-pending-pages.txt` (its examples need an access token, so `make docs-lint` needs the page in that list). Write the docs page `docs/guides/dusty-principal.md` with the exact commands to list the record and read its sponsors and grants. Check: `make docs-lint` passes and the e2e step of 4.1 runs each command as written.
+- [ ] 3.4 In `docs/guides/principals-and-groups.md`, state in the row for the kind `agent` (near line 24) that the subject `dusty` is reserved: a create request for a person, a service or a workload with the subject `dusty` gets the 400 code `agent.subject-reserved`. Also state the 400 code `agent.sponsor-invalid` (a sponsor is not a person, is disabled, or the list does not have 1 to 5 sponsors). Check: `rg -n 'agent.subject-reserved|agent.sponsor-invalid' docs/guides/principals-and-groups.md` finds both codes, and `make docs-lint` passes.
 
 ## 4. Definition of done
 
