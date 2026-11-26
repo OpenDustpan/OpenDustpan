@@ -60,9 +60,16 @@ func TestLoopLogsAnUnknownCodeAsUnknown(t *testing.T) {
 	})
 	l, logs := loggedLoop(t, srv, ticks)
 
-	go ticks.fire(t.Context(), t, runner.HeartbeatEvery)
+	done := make(chan error, 1)
+	go func() {
+		done <- ticks.fireErr(t.Context(), runner.HeartbeatEvery)
+	}()
 
-	if res := boundedRun(t, l); !errors.Is(res.run, client.ErrRefused) {
+	res := boundedRun(t, l)
+	if err := <-done; err != nil {
+		t.Fatal(err)
+	}
+	if !errors.Is(res.run, client.ErrRefused) {
 		t.Errorf("Run = %v, want ErrRefused", res.run)
 	}
 
@@ -99,13 +106,24 @@ func TestLoopStripsControlCharactersFromLoggedMessages(t *testing.T) {
 		ctx, cancel := context.WithTimeout(t.Context(), 5*time.Second)
 		defer cancel()
 
+		done := make(chan error, 1)
 		go func() {
-			ticks.fire(ctx, t, 7*time.Second)
+			if err := ticks.fireErr(ctx, 7*time.Second); err != nil {
+				done <- err
+				cancel()
+
+				return
+			}
 			waitFor(ctx, func() bool { return srv.count(protocol.PathPoll) >= 2 })
 			cancel()
+			done <- nil
 		}()
 
-		if err := l.Run(ctx, func(context.Context, protocol.Work) error { return nil }); err != nil {
+		err := l.Run(ctx, func(context.Context, protocol.Work) error { return nil })
+		if gerr := <-done; gerr != nil {
+			t.Fatal(gerr)
+		}
+		if err != nil {
 			t.Fatalf("Run = %v, want nil", err)
 		}
 
@@ -375,6 +393,93 @@ func TestLoopRefusesACodeThatIsNotExactlyAProtocolCode(t *testing.T) {
 	}
 }
 
+func TestLoopRefusesAProtocolCodeWithNoSentinel(t *testing.T) {
+	t.Parallel()
+
+	cases := []struct {
+		code   string
+		status int
+	}{
+		{code: protocol.ErrorInvalid, status: http.StatusBadRequest},
+		{code: protocol.ErrorKeyExpired, status: http.StatusUnauthorized},
+		{code: protocol.ErrorConflict, status: http.StatusConflict},
+	}
+
+	for _, tc := range cases {
+		t.Run("poll/"+tc.code, func(t *testing.T) {
+			t.Parallel()
+			checkNoSentinelPoll(t, tc.status, tc.code)
+		})
+		t.Run("renew/"+tc.code, func(t *testing.T) {
+			t.Parallel()
+			checkNoSentinelRenew(t, tc.status, tc.code)
+		})
+		t.Run("heartbeat/"+tc.code, func(t *testing.T) {
+			t.Parallel()
+			checkNoSentinelHeartbeat(t, tc.status, tc.code)
+		})
+	}
+}
+
+func checkNoSentinelPoll(t *testing.T, status int, code string) {
+	t.Helper()
+
+	srv := newFakeServer(map[string][]answer{protocol.PathPoll: {refusal(status, code, 0)}})
+	logs, err := runRefused(t, srv)
+	if !errors.Is(err, client.ErrRefused) {
+		t.Errorf("Run = %v, want ErrRefused", err)
+	}
+	if !logs.hasAttrs(refusedMessage, map[string]string{"reason": unknownCodeMessage, "error.code": code}) {
+		t.Errorf("no refusal record with reason=%q code=%q; records: %+v", unknownCodeMessage, code, logs.all())
+	}
+}
+
+func checkNoSentinelRenew(t *testing.T, status int, code string) {
+	t.Helper()
+
+	lease := runner.DefaultLease
+	ticks := newFakeTicks()
+	srv := newFakeServer(map[string][]answer{
+		protocol.PathPoll:       {ok(work(lease)), noWork()},
+		protocol.PathClaimRenew: {refusal(status, code, 0)},
+	})
+	l, logs := loggedLoop(t, srv, ticks)
+
+	checkWorkStops(t, l, ticks, client.ErrRefused)
+
+	if !logs.hasAttrs(refusedMessage, map[string]string{"reason": unknownCodeMessage, "error.code": code}) {
+		t.Errorf("no refusal record with reason=%q code=%q; records: %+v", unknownCodeMessage, code, logs.all())
+	}
+}
+
+func checkNoSentinelHeartbeat(t *testing.T, status int, code string) {
+	t.Helper()
+
+	ticks := newFakeTicks()
+	srv := newFakeServer(map[string][]answer{
+		protocol.PathPoll:      {noWork()},
+		protocol.PathHeartbeat: {refusal(status, code, 0)},
+	})
+	l, logs := loggedLoop(t, srv, ticks)
+
+	done := make(chan error, 1)
+	go func() {
+		done <- ticks.fireErr(t.Context(), runner.HeartbeatEvery)
+	}()
+
+	res := boundedRun(t, l)
+	if err := <-done; err != nil {
+		t.Fatal(err)
+	}
+	if !errors.Is(res.run, client.ErrRefused) {
+		t.Errorf("Run = %v, want ErrRefused", res.run)
+	}
+
+	if !logs.hasAttrs(refusedMessage, map[string]string{"reason": unknownCodeMessage, "error.code": code}) {
+		t.Errorf("no refusal record with reason=%q code=%q; records: %+v", unknownCodeMessage, code, logs.all())
+	}
+}
+
 // hostileCodes returns codes that are each a protocol code with a control or
 // format character added. The loop refuses each of them as an unknown code.
 func hostileCodes() []string {
@@ -430,9 +535,16 @@ func checkHostileHeartbeat(t *testing.T, code string) {
 	})
 	l, logs := loggedLoop(t, srv, ticks)
 
-	go ticks.fire(t.Context(), t, runner.HeartbeatEvery)
+	done := make(chan error, 1)
+	go func() {
+		done <- ticks.fireErr(t.Context(), runner.HeartbeatEvery)
+	}()
 
-	if res := boundedRun(t, l); !errors.Is(res.run, client.ErrRefused) {
+	res := boundedRun(t, l)
+	if err := <-done; err != nil {
+		t.Fatal(err)
+	}
+	if !errors.Is(res.run, client.ErrRefused) {
 		t.Errorf("Run = %v, want ErrRefused", res.run)
 	}
 
@@ -441,11 +553,14 @@ func checkHostileHeartbeat(t *testing.T, code string) {
 	}
 }
 
+// hostileStatusCase is a hostile answer with a 429 or 5xx status. The loop
+// retries each of these answers, so its sentinel is not observable: Run
+// returns nil and the work goes on. The test checks the wait, the backoff,
+// the log record and the Run result instead.
 type hostileStatusCase struct {
 	name      string
 	status    int
 	code      string
-	wantSent  error
 	wantRun   error
 	wantStop  error
 	wantWait  bool
@@ -460,37 +575,37 @@ func TestLoopHandlesHostileStatusAndCode(t *testing.T) {
 	cases := []hostileStatusCase{
 		{
 			name: "429 with CR in code", status: http.StatusTooManyRequests, code: "rate-limited\r",
-			wantSent: client.ErrRateLimited, wantRun: nil, wantStop: nil, wantWait: true, wantRetry: true,
+			wantRun: nil, wantStop: nil, wantWait: true, wantRetry: true,
 			logCode: "unknown", logMsg: "",
 		},
 		{
 			name: "429 with unknown code", status: http.StatusTooManyRequests, code: "not-a-code",
-			wantSent: client.ErrRateLimited, wantRun: nil, wantStop: nil, wantWait: true, wantRetry: true,
+			wantRun: nil, wantStop: nil, wantWait: true, wantRetry: true,
 			logCode: "unknown", logMsg: "",
 		},
 		{
 			name: "503 with CRLF in code", status: http.StatusServiceUnavailable, code: "claim-lost\n",
-			wantSent: client.ErrUnavailable, wantRun: nil, wantStop: nil, wantWait: false, wantRetry: true,
+			wantRun: nil, wantStop: nil, wantWait: false, wantRetry: true,
 			logCode: "unknown", logMsg: "",
 		},
 		{
 			name: "503 with unknown code", status: http.StatusServiceUnavailable, code: "not-a-code",
-			wantSent: client.ErrUnavailable, wantRun: nil, wantStop: nil, wantWait: false, wantRetry: true,
+			wantRun: nil, wantStop: nil, wantWait: false, wantRetry: true,
 			logCode: "unknown", logMsg: "",
 		},
 		{
 			name: "503 with retired", status: http.StatusServiceUnavailable, code: protocol.ErrorRetired,
-			wantSent: client.ErrUnavailable, wantRun: nil, wantStop: nil, wantWait: false, wantRetry: true,
+			wantRun: nil, wantStop: nil, wantWait: false, wantRetry: true,
 			logCode: protocol.ErrorRetired, logMsg: "",
 		},
 		{
 			name: "503 with bad-proof", status: http.StatusServiceUnavailable, code: protocol.ErrorBadProof,
-			wantSent: client.ErrUnavailable, wantRun: nil, wantStop: nil, wantWait: false, wantRetry: true,
+			wantRun: nil, wantStop: nil, wantWait: false, wantRetry: true,
 			logCode: protocol.ErrorBadProof, logMsg: "",
 		},
 		{
 			name: "503 with claim-lost", status: http.StatusServiceUnavailable, code: protocol.ErrorClaimLost,
-			wantSent: client.ErrUnavailable, wantRun: nil, wantStop: nil, wantWait: false, wantRetry: true,
+			wantRun: nil, wantStop: nil, wantWait: false, wantRetry: true,
 			logCode: protocol.ErrorClaimLost, logMsg: "",
 		},
 	}

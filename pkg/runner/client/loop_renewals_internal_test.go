@@ -1,10 +1,13 @@
 package client
 
 import (
+	"bytes"
 	"context"
 	"crypto/ed25519"
 	"crypto/rand"
 	"errors"
+	"log/slog"
+	"strings"
 	"testing"
 	"time"
 
@@ -51,6 +54,8 @@ func TestRenewalsRefuseALeaseOutOfRange(t *testing.T) {
 				t.Fatalf("key: %v", err)
 			}
 
+			var records bytes.Buffer
+
 			l, err := New(Config{
 				Server: "https://server.example", Transport: noRequestTransport{t: t},
 				RunnerID: "runner-1", Key: key, Release: "1.0.0", Lease: runner.MinLease,
@@ -62,7 +67,8 @@ func TestRenewalsRefuseALeaseOutOfRange(t *testing.T) {
 
 					return c, func() {}
 				},
-				Now: func() time.Time { return time.Unix(0, 0) }, Random: nil, Logger: nil,
+				Now: func() time.Time { return time.Unix(0, 0) }, Random: nil,
+				Logger: slog.New(slog.NewTextHandler(&records, nil)),
 			})
 			if err != nil {
 				t.Fatalf("New: %v", err)
@@ -85,6 +91,12 @@ func TestRenewalsRefuseALeaseOutOfRange(t *testing.T) {
 
 			if !errors.Is(stopCause, ErrInvalid) {
 				t.Fatalf("stop cause = %v, want ErrInvalid", stopCause)
+			}
+
+			// The refusal record names the route of the renewal, not the poll.
+			if got := records.String(); !strings.Contains(got, "path="+renewPath(w.Operation)) ||
+				strings.Contains(got, protocol.PathPoll) {
+				t.Errorf("records = %q, want the path %s", got, renewPath(w.Operation))
 			}
 		})
 	}

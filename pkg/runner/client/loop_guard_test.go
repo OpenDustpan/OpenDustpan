@@ -560,8 +560,8 @@ func TestRunReturnsTheDeadlineOfTheContext(t *testing.T) {
 	}
 }
 
-// The tests below each cover one scenario of the runner claims spec, on the
-// side of the loop.
+// The tests below check each scenario of the runner claim behavior, on the
+// loop side.
 
 // TestScenarioFenceMoved: the server denies the renewal of a claim whose fence
 // moved with claim-lost. The loop stops the work at once and sends no more

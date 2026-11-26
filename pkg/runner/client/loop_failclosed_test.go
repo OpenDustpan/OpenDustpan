@@ -57,7 +57,10 @@ func checkWorkStops(t *testing.T, l *client.Loop, ticks *fakeTicks, want error) 
 	ctx, cancel := context.WithTimeout(t.Context(), 5*time.Second)
 	defer cancel()
 
-	go ticks.fire(ctx, t, runner.RenewEvery(runner.DefaultLease))
+	done := make(chan error, 1)
+	go func() {
+		done <- ticks.fireErr(ctx, runner.RenewEvery(runner.DefaultLease))
+	}()
 
 	var stopped error
 
@@ -69,6 +72,9 @@ func checkWorkStops(t *testing.T, l *client.Loop, ticks *fakeTicks, want error) 
 
 		return nil
 	})
+	if gerr := <-done; gerr != nil {
+		t.Fatal(gerr)
+	}
 	if err != nil {
 		t.Errorf("Run = %v, want nil", err)
 	}

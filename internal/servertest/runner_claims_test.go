@@ -1,10 +1,12 @@
 package servertest_test
 
 import (
+	"context"
 	"crypto/ed25519"
 	"crypto/rand"
 	"errors"
 	"net/http"
+	"slices"
 	"strings"
 	"testing"
 	"time"
@@ -390,6 +392,99 @@ func checkRenewedExpiry(h *rtHarness, clockBefore, clockAfter, stored time.Time)
 	if got := stored.UnixMilli(); got < lowest || got > highest {
 		h.t.Fatalf("the renewal set the claim expiry to %d ms, want from %d to %d ms: "+
 			"the clock of the database plus the pool lease", got, lowest, highest)
+	}
+}
+
+// replayTransport sends each request with httpTransport and keeps the last
+// signed request, so that a test can send the same proof again. A non-nil
+// change edits each request after the proof signed it.
+type replayTransport struct {
+	inner  httpTransport
+	last   *session.Request
+	change func(*session.Request) *session.Request
+}
+
+// Do implements session.Transport.
+func (r *replayTransport) Do(ctx context.Context, req *session.Request) (*session.Response, error) {
+	if r.change != nil {
+		req = r.change(req)
+	}
+
+	r.last = req
+
+	return r.inner.Do(ctx, req)
+}
+
+// TestReplayedOrBadPollProofGetsNoWork checks that, while work waits in the
+// pool, a poll that sends a proof again, a proof of another key or a body that
+// the proof does not sign gets 401 bad-proof and no work. The work stays
+// queued for a poll with a new proof.
+func TestReplayedOrBadPollProofGetsNoWork(t *testing.T) {
+	t.Parallel()
+
+	h := newRoundTripHarness(t, traceOff, dustpan.WithPublicURL(publicURL))
+	h.workspace = h.createWorkspace("web")
+
+	rec := &replayTransport{inner: httpTransport{h: h}, last: nil, change: nil}
+	client := &session.Client{Server: publicURL, Transport: rec, Release: "0.0.1", Now: nil}
+
+	poolID := createJobPool(h, "proofs")
+	rn := joinPoolRunner(h, client, poolID, "builder-proofs")
+
+	// The first signed poll finds no work. The test keeps its proof.
+	resp := pollOnce(h, client, rn)
+	if resp.Status != http.StatusNoContent {
+		t.Fatalf("first poll = %d %s, want 204", resp.Status, resp.Body)
+	}
+
+	replayed := rec.last
+	if replayed == nil {
+		t.Fatal("the transport kept no request")
+	}
+
+	jobID := queuePlanJob(h, "proofs")
+
+	// Hostile case: the same signed poll again while the work waits.
+	again, err := rec.inner.Do(t.Context(), replayed)
+	if err != nil {
+		t.Fatalf("replayed poll: %v", err)
+	}
+
+	wantProtocolError(h, "replayed poll", again, http.StatusUnauthorized, protocol.ErrorBadProof)
+
+	// Hostile case: a proof of a key that is not the runner key.
+	_, other, err := ed25519.GenerateKey(rand.Reader)
+	if err != nil {
+		t.Fatalf("generate another key: %v", err)
+	}
+
+	wantProtocolError(h, "poll with the proof of another key", pollOnce(h, client, poolRunner{key: other, id: rn.id}),
+		http.StatusUnauthorized, protocol.ErrorBadProof)
+
+	// Hostile case: a body that the proof does not sign.
+	rec.change = func(req *session.Request) *session.Request {
+		return &session.Request{
+			Method: req.Method, Path: req.Path, Body: append(slices.Clone(req.Body), ' '), Header: req.Header,
+		}
+	}
+
+	wantProtocolError(h, "poll with a changed body", pollOnce(h, client, rn),
+		http.StatusUnauthorized, protocol.ErrorBadProof)
+
+	rec.change = nil
+
+	// The work stayed queued: a poll with a new proof gets it.
+	resp = pollOnce(h, client, rn)
+	if resp.Status != http.StatusOK {
+		t.Fatalf("poll with a new proof = %d %s, want 200", resp.Status, resp.Body)
+	}
+
+	var work protocol.Work
+
+	h.decode(string(resp.Body), &work)
+
+	if work.Job != jobID || work.Operation == "" {
+		t.Fatalf("work of the runner = %+v, want the job %s", work, jobID)
 	}
 }
 

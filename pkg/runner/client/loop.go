@@ -460,6 +460,15 @@ func (l *Loop) pollFailed(ctx context.Context, err error, failures *int) error {
 
 		l.wait(ctx, d)
 	default:
+		// The poll already wrote a refusal record for a code it does not
+		// know and for work it refuses: do not write a second record for
+		// those. A terminal code that ends the loop writes the same record
+		// as the heartbeat path, so that each automatic end has a record.
+		if !errors.Is(err, ErrRefused) && !errors.Is(err, ErrInvalid) {
+			l.log.WarnContext(ctx, "the server does not accept the runner: the loop ends",
+				errorAttr("error", err))
+		}
+
 		return fmt.Errorf("poll: %w", err)
 	}
 
@@ -796,7 +805,7 @@ func (l *Loop) renewals(
 	// check stays so that a renewal never uses a lease out of range.
 	lease := w.Lease.Std()
 	if lease < runner.MinLease || lease > runner.MaxLease {
-		l.refused(wctx, protocol.PathPoll, "the lease of the claim is out of range",
+		l.refused(wctx, renewPath(w.Operation), "the lease of the claim is out of range",
 			slog.String("operation", w.Operation), slog.Duration("lease", lease))
 		stopWork(fmt.Errorf("%w: the lease %v of the claim is not from %v to %v",
 			ErrInvalid, lease, runner.MinLease, runner.MaxLease))
@@ -831,12 +840,17 @@ func (l *Loop) renewals(
 	}
 }
 
+// renewPath is the path of the renewal of the claim of op.
+func renewPath(op string) string {
+	return strings.NewReplacer("{operation}", op).Replace(protocol.PathClaimRenew)
+}
+
 // renew sends one renewal of the claim of op. It returns the last expiry
 // that the server sent, and true when the renewals end.
 func (l *Loop) renew(
 	ctx context.Context, stop, stopWork context.CancelCauseFunc, op string, expires time.Time,
 ) (time.Time, bool) {
-	path := strings.NewReplacer("{operation}", op).Replace(protocol.PathClaimRenew)
+	path := renewPath(op)
 
 	resp, err := l.post(ctx, path, nil)
 	if err == nil {

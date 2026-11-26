@@ -9,6 +9,7 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"log/slog"
 	"net/http"
 	"slices"
 	"strings"
@@ -275,7 +276,9 @@ func TestLoopPollsAndRenewsAfterAThirdOfTheLease(t *testing.T) {
 	})
 	ticks := newFakeTicks()
 
-	ctx, cancel := context.WithCancel(t.Context())
+	// The deadline bounds a loop that never renews: Run then returns the
+	// deadline, and the check of Run below fails.
+	ctx, cancel := context.WithTimeout(t.Context(), 5*time.Second)
 	defer cancel()
 
 	l, err := client.New(testConfig(t, srv, ticks))
@@ -284,19 +287,27 @@ func TestLoopPollsAndRenewsAfterAThirdOfTheLease(t *testing.T) {
 	}
 
 	renewed := make(chan struct{})
+	fired := make(chan error, 1)
 
 	go func() {
-		ticks.fire(ctx, t, runner.RenewEvery(lease))
+		fired <- ticks.fireErr(ctx, runner.RenewEvery(lease))
 		waitFor(ctx, func() bool { return srv.count(protocol.PathClaimRenew) > 0 })
 		close(renewed)
 	}()
 
-	err = l.Run(ctx, func(context.Context, protocol.Work) error {
-		<-renewed
-		cancel()
+	err = l.Run(ctx, func(wctx context.Context, _ protocol.Work) error {
+		select {
+		case <-renewed:
+			cancel()
+		case <-wctx.Done():
+		}
 
 		return nil
 	})
+	if ferr := <-fired; ferr != nil {
+		t.Fatal(ferr)
+	}
+
 	if err != nil {
 		t.Fatalf("Run = %v, want nil", err)
 	}
@@ -328,7 +339,9 @@ func TestLoopHeartbeatsEveryFifteenSeconds(t *testing.T) {
 	})
 	ticks := newFakeTicks()
 
-	ctx, cancel := context.WithCancel(t.Context())
+	// The deadline bounds a loop that never heartbeats: Run then returns the
+	// deadline, and the check of Run below fails.
+	ctx, cancel := context.WithTimeout(t.Context(), 5*time.Second)
 	defer cancel()
 
 	l, err := client.New(testConfig(t, srv, ticks))
@@ -336,13 +349,20 @@ func TestLoopHeartbeatsEveryFifteenSeconds(t *testing.T) {
 		t.Fatalf("New: %v", err)
 	}
 
+	fired := make(chan error, 1)
+
 	go func() {
-		ticks.fire(ctx, t, runner.HeartbeatEvery)
+		fired <- ticks.fireErr(ctx, runner.HeartbeatEvery)
 		waitFor(ctx, func() bool { return srv.count(protocol.PathHeartbeat) > 0 })
 		cancel()
 	}()
 
-	if err = l.Run(ctx, func(context.Context, protocol.Work) error { return nil }); err != nil {
+	err = l.Run(ctx, func(context.Context, protocol.Work) error { return nil })
+	if ferr := <-fired; ferr != nil {
+		t.Fatal(ferr)
+	}
+
+	if err != nil {
 		t.Fatalf("Run = %v, want nil", err)
 	}
 
@@ -415,7 +435,10 @@ func checkRenewCase(t *testing.T, tc renewCase) {
 		t.Fatalf("New: %v", err)
 	}
 
-	go ticks.fire(ctx, t, runner.RenewEvery(lease))
+	done := make(chan error, 1)
+	go func() {
+		done <- ticks.fireErr(ctx, runner.RenewEvery(lease))
+	}()
 
 	var stopped error
 
@@ -429,6 +452,9 @@ func checkRenewCase(t *testing.T, tc renewCase) {
 
 		return nil
 	})
+	if gerr := <-done; gerr != nil {
+		t.Fatal(gerr)
+	}
 
 	if !errors.Is(stopped, tc.wantStop) {
 		t.Errorf("work stopped with %v, want %v", stopped, tc.wantStop)
@@ -454,7 +480,9 @@ func checkRetryAfter(t *testing.T) {
 	})
 	ticks := newFakeTicks()
 
-	ctx, cancel := context.WithCancel(t.Context())
+	// The deadline bounds a loop that never polls again: Run then returns the
+	// deadline, and the check of Run below fails.
+	ctx, cancel := context.WithTimeout(t.Context(), 5*time.Second)
 	defer cancel()
 
 	l, err := client.New(testConfig(t, srv, ticks))
@@ -462,13 +490,20 @@ func checkRetryAfter(t *testing.T) {
 		t.Fatalf("New: %v", err)
 	}
 
+	fired := make(chan error, 1)
+
 	go func() {
-		ticks.fire(ctx, t, 7*time.Second)
+		fired <- ticks.fireErr(ctx, 7*time.Second)
 		waitFor(ctx, func() bool { return srv.count(protocol.PathPoll) >= 2 })
 		cancel()
 	}()
 
-	if err = l.Run(ctx, func(context.Context, protocol.Work) error { return nil }); err != nil {
+	err = l.Run(ctx, func(context.Context, protocol.Work) error { return nil })
+	if ferr := <-fired; ferr != nil {
+		t.Fatal(ferr)
+	}
+
+	if err != nil {
 		t.Fatalf("Run = %v, want nil", err)
 	}
 
@@ -484,14 +519,15 @@ func checkRetiredOnPoll(t *testing.T) {
 		protocol.PathPoll: {refusal(http.StatusForbidden, protocol.ErrorRetired, 0)},
 	})
 
-	l, err := client.New(testConfig(t, srv, newFakeTicks()))
-	if err != nil {
-		t.Fatalf("New: %v", err)
-	}
+	l, logs := loggedLoop(t, srv, newFakeTicks())
 
-	err = l.Run(t.Context(), func(context.Context, protocol.Work) error { return nil })
+	err := l.Run(t.Context(), func(context.Context, protocol.Work) error { return nil })
 	if !errors.Is(err, client.ErrRetired) {
 		t.Errorf("Run = %v, want ErrRetired", err)
+	}
+
+	if !logs.hasAttrs(endedMessage, map[string]string{"error.code": protocol.ErrorRetired}) {
+		t.Errorf("no record that the loop ends on retired; records: %+v", logs.all())
 	}
 }
 
@@ -545,17 +581,18 @@ func TestLoopRefusesAHostileOperation(t *testing.T) {
 		protocol.PathPoll: {ok(hostile)},
 	})
 
-	l, err := client.New(testConfig(t, srv, newFakeTicks()))
-	if err != nil {
-		t.Fatalf("New: %v", err)
-	}
+	l, logs := loggedLoop(t, srv, newFakeTicks())
 
-	err = l.Run(t.Context(), func(context.Context, protocol.Work) error {
+	err := l.Run(t.Context(), func(context.Context, protocol.Work) error {
 		t.Error("the handler ran for a hostile operation")
 
 		return nil
 	})
-	if err == nil {
-		t.Fatal("Run = nil, want an error")
+	if !errors.Is(err, client.ErrInvalid) {
+		t.Fatalf("Run = %v, want ErrInvalid", err)
+	}
+
+	if !logs.has(slog.LevelWarn, refusedMessage, "operation ID of the work is not valid") {
+		t.Errorf("no refusal record for the operation; records: %+v", logs.all())
 	}
 }
