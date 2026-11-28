@@ -32,7 +32,7 @@ func (c *testClock) advance(d time.Duration) { c.offset.Add(int64(d)) }
 // openOpts returns the options of a guard with a limit of one call.
 func openOpts(clock *testClock, onRefused func(string), failServer *atomic.Bool) mtlsOpts {
 	return mtlsOpts{
-		revocation: noRevocation, failWrite: false, limit: 1, noMtls: false, canceled: false,
+		revocation: noRevocation, failWrite: false, refuseRecord: nil, limit: 1, noMtls: false, canceled: false,
 		guardNow: clock.now, onRefused: onRefused, failServer: failServer,
 	}
 }

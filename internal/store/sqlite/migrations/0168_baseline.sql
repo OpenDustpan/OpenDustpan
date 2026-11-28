@@ -1989,6 +1989,8 @@ CREATE UNIQUE INDEX trust_rules_name ON trust_rules (namespace, name);
 
 CREATE INDEX trust_rules_principal ON trust_rules (principal_id);
 
+CREATE INDEX trust_rules_spiffe ON trust_rules (namespace, bundle_id, spiffe_id_pattern);
+
 CREATE UNIQUE INDEX self_service_blueprint_versions_draft ON self_service_blueprint_versions (namespace_id, name, draft_version);
 
 CREATE UNIQUE INDEX store_checks_one_running ON store_checks ((state = 'running')) WHERE state = 'running';

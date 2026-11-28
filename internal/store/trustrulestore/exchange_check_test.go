@@ -2,6 +2,7 @@ package trustrulestore_test
 
 import (
 	"errors"
+	"strings"
 	"testing"
 	"time"
 
@@ -87,53 +88,187 @@ func ruleRow(id, bundle, pattern string) trustrulestore.Row {
 	}
 }
 
-// TestCheckExchangeMatch sends rule rows to the match in the transaction of
-// an mTLS exchange, as if the service had matched other rows.
-func TestCheckExchangeMatch(t *testing.T) {
+// matchRow returns the narrow row that the match query returns.
+func matchRow(id, bundle, pattern string) trustrulestore.MatchRow {
+	return trustrulestore.MatchRow{ID: id, BundleID: bundle, SpiffeIDPattern: pattern}
+}
+
+// matchOfRow returns the narrow form of a rule row.
+func matchOfRow(r trustrulestore.Row) trustrulestore.MatchRow {
+	return matchRow(r.ID, r.BundleID, r.SpiffeIDPattern)
+}
+
+// zeroRow returns a rule row with no value.
+func zeroRow() trustrulestore.Row {
+	return trustrulestore.Row{
+		ID: "", Namespace: "", Name: "", Issuer: "", Audience: "", KeySource: "", StaticKeys: "",
+		ConditionsJSON: "", PrincipalID: "", CreatedBy: "", CreatedAtMs: 0, Revision: 0,
+		SpiffeIDPattern: "", BundleID: "",
+	}
+}
+
+// TestCheckExchangeMatchRows sends hostile rows to the match in the
+// transaction of an mTLS exchange, as if the query, the index and the adapter
+// had failed. The match reads only the rows that name the SPIFFE ID in the
+// bundle of the rule of the exchange.
+func TestCheckExchangeMatchRows(t *testing.T) {
+	t.Parallel()
+
+	x := exchangeOfKind(accesstoken.KindMTLSExchange, checkSPIFFEID)
+	own := ruleRow(string(x.Rule), "trb-1", checkSPIFFEID)
+	otherID := string(trustrule.NewID())
+	twin := ruleRow(otherID, "trb-1", checkSPIFFEID)
+	otherBundle := ruleRow(otherID, "trb-2", checkSPIFFEID)
+	otherPattern := ruleRow(otherID, "trb-1", "spiffe://example.org/ns/acme/sa/other")
+	wildcard := own
+	wildcard.SpiffeIDPattern = "spiffe://example.org/ns/acme/sa/*"
+	noBundle := own
+	noBundle.BundleID = ""
+	emptyID := own
+	emptyID.ID = ""
+	otherRule := ruleRow(otherID, "trb-1", checkSPIFFEID)
+	ownOtherPattern := own
+	ownOtherPattern.SpiffeIDPattern = "spiffe://example.org/ns/acme/sa/other"
+
+	otherRows := make([]trustrulestore.MatchRow, 0, 1001)
+	otherRows = append(otherRows, matchOfRow(own))
+	for i := range 1000 {
+		otherRows = append(otherRows, trustrulestore.MatchRow{
+			ID:       "trb-1-other-" + string(rune('a'+i%26)),
+			BundleID: "trb-other",
+			SpiffeIDPattern: "spiffe://example.org/ns/acme/sa/other-" +
+				string(rune('a'+i%26)),
+		})
+	}
+
+	rows := func(m ...trustrulestore.MatchRow) []trustrulestore.MatchRow { return m }
+	differsByCase := "spiffe://example.org/ns/acme/sa/Deploy"
+	percent := "spiffe://example.org/ns/acme/sa/%"
+
+	cases := []struct {
+		name    string
+		rule    trustrulestore.Row
+		matches []trustrulestore.MatchRow
+		ok      bool
+	}{
+		{"no matches at all", own, nil, false},
+		{"the rule row with another ID than the exchange rule", otherRule, rows(matchOfRow(otherRule)), false},
+		{
+			"the rule row with another ID while the matches hold the exchange rule",
+			otherRule, rows(matchOfRow(own)), false,
+		},
+		{
+			"the rule row with a pattern that differs from the matched rows",
+			ownOtherPattern, rows(matchOfRow(own)), false,
+		},
+		{"the rule row with an empty bundle ID", noBundle, rows(matchOfRow(noBundle)), false},
+		{
+			"the rule row with a pattern that is not the SPIFFE ID of the exchange",
+			otherPattern, rows(matchOfRow(otherPattern)), false,
+		},
+		{"one match that is the rule", own, rows(matchOfRow(own)), true},
+		{"one match that is another rule", own, rows(matchOfRow(twin)), false},
+		{
+			"two matches the rule and a twin of the same bundle",
+			own, rows(matchOfRow(own), matchOfRow(twin)), false,
+		},
+		{
+			"a twin of another bundle does not count",
+			own, rows(matchOfRow(own), matchOfRow(otherBundle)), true,
+		},
+		{
+			"a twin with an empty bundle ID does not count",
+			own, rows(matchOfRow(own), matchRow(twin.ID, "", checkSPIFFEID)), true,
+		},
+		{
+			"a row with a wildcard pattern does not count",
+			own, rows(matchOfRow(own), matchOfRow(wildcard)), true,
+		},
+		{
+			"a pattern that differs by case does not count",
+			own, rows(matchOfRow(own), matchRow(twin.ID, "trb-1", differsByCase)), true,
+		},
+		{
+			"a pattern that differs by a trailing slash does not count",
+			own, rows(matchOfRow(own), matchRow(twin.ID, "trb-1", checkSPIFFEID+"/")), true,
+		},
+		{
+			"a pattern that differs by a trailing space does not count",
+			own, rows(matchOfRow(own), matchRow(twin.ID, "trb-1", checkSPIFFEID+" ")), true,
+		},
+		{
+			"a pattern that differs by a % does not count",
+			own, rows(matchOfRow(own), matchRow(twin.ID, "trb-1", percent)), true,
+		},
+		{"a row with an empty ID does not count as the rule", own, rows(matchOfRow(emptyID)), false},
+		{
+			"matches of 1000 rows of other bundles and patterns and the one match still counts",
+			own, otherRows, true,
+		},
+	}
+
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			t.Parallel()
+
+			err := trustrulestore.CheckExchangeMatch(tc.rule, tc.matches, &x)
+			if tc.ok != (err == nil) || (!tc.ok && !errors.Is(err, trustrule.ErrNotFound)) {
+				t.Errorf("CheckExchangeMatch = %v, want ok %v", err, tc.ok)
+			}
+		})
+	}
+
+	jwt := exchangeOfKind(accesstoken.KindJWTExchange, "")
+	if err := trustrulestore.CheckExchangeMatch(own, nil, &jwt); err != nil {
+		t.Errorf("CheckExchangeMatch of a jwt-exchange = %v, want nil", err)
+	}
+}
+
+// TestCheckExchangeMatchRefusalText checks that the text of each refusal of
+// the match gives the correct number of the rules that name the SPIFFE ID.
+func TestCheckExchangeMatchRefusalText(t *testing.T) {
 	t.Parallel()
 
 	x := exchangeOfKind(accesstoken.KindMTLSExchange, checkSPIFFEID)
 	own := ruleRow(string(x.Rule), "trb-1", checkSPIFFEID)
 	twin := ruleRow(string(trustrule.NewID()), "trb-1", checkSPIFFEID)
-	other := ruleRow(string(trustrule.NewID()), "trb-1", "spiffe://example.org/ns/acme/sa/other")
-	wildcard := own
-	wildcard.SpiffeIDPattern = "spiffe://example.org/ns/acme/sa/*"
-	noBundle := own
-	noBundle.BundleID = ""
-	// ownOther is the rule of the exchange with a pattern that is not the
-	// SPIFFE ID, while twin, another rule of the bundle, names the SPIFFE ID:
-	// exactly one rule matches, and it is not the rule of the exchange.
-	ownOther := own
-	ownOther.SpiffeIDPattern = "spiffe://example.org/ns/acme/sa/other"
-	// stray has the SPIFFE ID and no bundle: it is not in the bundle of the
-	// rule of the exchange, so it must not count as a second match.
-	stray := ruleRow(string(trustrule.NewID()), "", checkSPIFFEID)
+	third := ruleRow(string(trustrule.NewID()), "trb-1", checkSPIFFEID)
 
 	cases := []struct {
-		name string
-		rows []trustrulestore.Row
-		ok   bool
+		name    string
+		matches []trustrulestore.MatchRow
+		want    string
 	}{
-		{"its rule only", []trustrulestore.Row{own, other}, true},
-		{"a late duplicate", []trustrulestore.Row{own, twin}, false},
-		{"another rule only", []trustrulestore.Row{twin}, false},
-		{"no rule", nil, false},
-		{"its rule with a /* pattern", []trustrulestore.Row{wildcard}, false},
-		{"its rule with no bundle", []trustrulestore.Row{noBundle}, false},
-		{"another rule names the SPIFFE ID, its rule names another", []trustrulestore.Row{ownOther, twin}, false},
-		{"no rule names the SPIFFE ID", []trustrulestore.Row{ownOther, other}, false},
-		{"a rule with no bundle names the SPIFFE ID too", []trustrulestore.Row{own, stray}, true},
+		{"no match", nil, "no rule names the SPIFFE ID of the exchange"},
+		{
+			"one match that is another rule",
+			[]trustrulestore.MatchRow{matchOfRow(twin)},
+			"1 rule names the SPIFFE ID of the exchange, but it is not the rule of the exchange",
+		},
+		{
+			"two matches",
+			[]trustrulestore.MatchRow{matchOfRow(own), matchOfRow(twin)},
+			"2 or more rules name the SPIFFE ID of the exchange. Only 1 rule can name it",
+		},
+		{
+			"three matches",
+			[]trustrulestore.MatchRow{matchOfRow(own), matchOfRow(twin), matchOfRow(third)},
+			"3 or more rules name the SPIFFE ID of the exchange. Only 1 rule can name it",
+		},
 	}
 
 	for _, tc := range cases {
-		err := trustrulestore.CheckExchangeMatch(tc.rows, &x)
-		if tc.ok != (err == nil) || (!tc.ok && !errors.Is(err, trustrule.ErrNotFound)) {
-			t.Errorf("%s: CheckExchangeMatch = %v, want ok %v", tc.name, err, tc.ok)
-		}
-	}
+		t.Run(tc.name, func(t *testing.T) {
+			t.Parallel()
 
-	jwt := exchangeOfKind(accesstoken.KindJWTExchange, "")
-	if err := trustrulestore.CheckExchangeMatch(nil, &jwt); err != nil {
-		t.Errorf("CheckExchangeMatch of a jwt-exchange = %v, want nil", err)
+			err := trustrulestore.CheckExchangeMatch(own, tc.matches, &x)
+			if !errors.Is(err, trustrule.ErrNotFound) {
+				t.Fatalf("CheckExchangeMatch = %v, want %v", err, trustrule.ErrNotFound)
+			}
+
+			if got := strings.TrimPrefix(err.Error(), trustrule.ErrNotFound.Error()+": "); got != tc.want {
+				t.Errorf("text = %q, want %q", got, tc.want)
+			}
+		})
 	}
 }
