@@ -67,6 +67,7 @@ var (
 	//
 	// Code rule: docs/reference/code-rules.md lists it.
 	ErrNoWorkingBreakGlass = errors.New("the change leaves too few working break-glass accounts")
+
 	// ErrBreakGlassUnavailable reports that the store cannot count the
 	// working break-glass accounts. A caller that cannot count refuses the
 	// change (fail closed).

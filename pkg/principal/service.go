@@ -220,6 +220,52 @@ func (s *Service) ListPrincipals(ctx context.Context, req PageRequest, kind Kind
 	return pageOf(rows, total, limit, func(p Principal) string { return p.Subject }), nil
 }
 
+// ListBreakGlassAccounts returns each person of the installation that is a
+// break-glass account, deleted or not, ordered by subject. An account of a
+// namespace is not listed: the list, the rotate route and the working count
+// read the same set. The list is small by design: the floor rule covers
+// installations with up to 50 accounts.
+func (s *Service) ListBreakGlassAccounts(ctx context.Context) ([]Principal, error) {
+	var accounts []Principal
+
+	req := PageRequest{Prefix: "", Cursor: "", Limit: MaxLimit}
+	for {
+		page, err := s.ListPrincipals(ctx, req, KindPerson)
+		if err != nil {
+			return nil, err
+		}
+
+		for i := range page.Items {
+			if p := &page.Items[i]; p.BreakGlass && p.Namespace == "" {
+				accounts = append(accounts, *p)
+			}
+		}
+
+		if page.NextCursor == "" {
+			return accounts, nil
+		}
+
+		req.Cursor = page.NextCursor
+	}
+}
+
+// CountWorkingBreakGlass returns the number of working break-glass accounts
+// at the time at. It returns ErrBreakGlassUnavailable when the store cannot
+// count.
+func (s *Service) CountWorkingBreakGlass(ctx context.Context, at time.Time) (int64, error) {
+	counter, ok := s.store.(WorkingBreakGlassCounter)
+	if !ok {
+		return 0, fmt.Errorf("%w: the principal store does not count break-glass accounts", ErrBreakGlassUnavailable)
+	}
+
+	n, err := counter.CountWorkingBreakGlass(ctx, at)
+	if err != nil {
+		return 0, fmt.Errorf("count working break-glass accounts: %w", err)
+	}
+
+	return n, nil
+}
+
 // Change names the fields of a principal that a change sets. A nil field
 // keeps its value.
 type Change struct {

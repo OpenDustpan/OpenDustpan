@@ -47,7 +47,10 @@ func (r countingRP) VerifyAssertion(
 func (f *fixture) withRP(t *testing.T, rp mfa.RelyingParty) *mfasvc.Service {
 	t.Helper()
 
-	svc, err := mfasvc.New(mfasvc.Config{Store: f.store, RP: rp, Audit: f.store, Now: f.clock.now, Log: nil})
+	svc, err := mfasvc.New(mfasvc.Config{
+		Store: f.store, RP: rp, Audit: f.store, Now: f.clock.now, Log: nil, Authorizer: nil, Guard: nil,
+		FreshWindow: testFreshWindow,
+	})
 	if err != nil {
 		t.Fatalf("service: %v", err)
 	}
@@ -131,7 +134,10 @@ func TestRegistrationRefusesEmptyIDs(t *testing.T) {
 	f := newFixture(t)
 	rp := counting(t, false)
 
-	svc, err := mfasvc.New(mfasvc.Config{Store: emptyStore{f.store}, RP: rp, Audit: f.store, Now: nil, Log: nil})
+	svc, err := mfasvc.New(mfasvc.Config{
+		Store: emptyStore{f.store}, RP: rp, Audit: f.store, Now: nil, Log: nil, Authorizer: nil, Guard: nil,
+		FreshWindow: nil,
+	})
 	if err != nil {
 		t.Fatalf("service: %v", err)
 	}
@@ -146,7 +152,12 @@ func TestRegistrationRefusesEmptyIDs(t *testing.T) {
 		t.Fatalf("register: %v", err)
 	}
 
-	nobody := mfasvc.Actor{Entry: base(time.Now(), "x"), PrincipalID: "", SessionID: "", Fresh: true}
+	nobody := &mfasvc.Actor{
+		Entry: base(time.Now(), "x"), PrincipalID: "", SessionID: "",
+		Caller:     noPrincipal(),
+		SignedInAt: time.Time{},
+		Fresh:      true,
+	}
 
 	_, err = svc.FinishRegistration(t.Context(), nobody, mfa.Person{ID: "", Name: "x", DisplayName: ""}, "key",
 		response)

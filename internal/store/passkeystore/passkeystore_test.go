@@ -6,6 +6,7 @@ import (
 	"math"
 	"strings"
 	"testing"
+	"time"
 
 	"opendustpan.org/opendustpan/internal/store/passkeystore"
 	"opendustpan.org/opendustpan/pkg/mfa"
@@ -139,6 +140,8 @@ func (looseTx) ListPasskeys(context.Context, string) ([]passkeystore.Row, error)
 
 func (looseTx) CreatePasskey(context.Context, passkeystore.Row) (int64, error) { return 0, nil }
 
+func (looseTx) CreatePrincipal(context.Context, principal.Principal) (int64, error) { return 0, nil }
+
 func (t looseTx) DeletePasskey(context.Context, string, string) (int64, error) {
 	*t.deleted++
 
@@ -186,5 +189,56 @@ func TestRemoveChecksTheOwnerItself(t *testing.T) {
 
 	if deleted != 0 {
 		t.Fatalf("deletes = %d, want 0", deleted)
+	}
+}
+
+// racedTx is a Tx of a break-glass person prn-1 who owns the passkey pky-1
+// when the rotation reads it, and whose delete then removes no row, as if
+// another transaction had removed the passkey in between. It counts the
+// inserts.
+type racedTx struct {
+	*looseTx
+
+	created *int
+}
+
+func (racedTx) LockPrincipal(context.Context, string) (passkeystore.Principal, error) {
+	return passkeystore.Principal{Kind: string(principal.KindPerson), BreakGlass: true}, nil
+}
+
+func (racedTx) PasskeyByID(context.Context, string) (passkeystore.Row, error) {
+	return row(), nil
+}
+
+func (racedTx) DeletePasskey(context.Context, string, string) (int64, error) { return 0, nil }
+
+func (t racedTx) CreatePasskey(context.Context, passkeystore.Row) (int64, error) {
+	*t.created++
+
+	return 1, nil
+}
+
+// TestRotateChecksTheDeleteCount checks the count of the delete of a rotation
+// alone: the owner check passes and the delete removes no row, so only the
+// count check stops the insert of the new passkey.
+func TestRotateChecksTheDeleteCount(t *testing.T) {
+	t.Parallel()
+
+	deleted, created := 0, 0
+	tx := racedTx{looseTx: &looseTx{deleted: &deleted}, created: &created}
+
+	next := mfa.Passkey{
+		CreatedAt: time.Time{}, LastUsedAt: time.Time{}, SuspendedAt: time.Time{}, ID: "pky-2", PersonID: "prn-1",
+		Name: "new", CredentialID: nil, PublicKey: nil, Transports: nil, AAGUID: [16]byte{}, SignCount: 0,
+		BackupEligible: false,
+	}
+
+	err := passkeystore.RotatePasskey(t.Context(), tx, "prn-1", "pky-1", next)
+	if !errors.Is(err, mfa.ErrNotFound) {
+		t.Fatalf("rotate when the delete removes no row: err = %v, want ErrNotFound", err)
+	}
+
+	if *tx.created != 0 {
+		t.Fatalf("inserts = %d, want 0", *tx.created)
 	}
 }

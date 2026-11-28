@@ -37,6 +37,89 @@ override) or U+200B (zero-width space), because the administrators read the
 reason in the alert and a hidden character could show other text than the
 stored text.
 
+## Add an account
+
+A site administrator adds a break-glass account, its first passkey and its
+grant in two requests. Each needs a recent sign-in.
+
+1. Make the passkey with an authenticator. Send `POST
+   /api/dustpan/v1/break-glass/accounts` with the person and the passkey:
+
+   ```json
+   {
+     "subject": "break-glass:recovery",
+     "displayName": "Recovery",
+     "name": "recovery-key",
+     "credential": "<base64url>",
+     "publicKey": "<base64url>",
+     "transports": ["usb"]
+   }
+   ```
+
+   The credential ID and the public key are base64url without padding. The
+   `displayName` value can be empty. It has a maximum of 255 bytes. It can
+   contain letters, digits, single spaces and the characters
+   `. , ' - _ ( ) & @ + : # /`. It cannot start or end with a space. The
+   server refuses a different value with `400`. The answer is `201` with the account and its passkeys. The route accepts the
+   add when no working account exists, and it does not lower any count.
+
+2. Give the account the role `site-administrator` on the installation with
+   `POST /api/server/grants`. A break-glass account with a passkey but no
+   administration grant signs in, but it cannot change anything. The working
+   count includes only an account with a grant.
+
+The add route writes the account and its passkey in one transaction. If the
+add fails, the server stores nothing: make the request again. If the
+grant request fails, retry it: the account has a passkey but no grant, and the
+count does not include it.
+
+The action `server:manage-principals` allows the add and the rotation. The
+action `server:read-principals` allows the list. Both actions apply to the
+installation object.
+
+## List the accounts and the count
+
+`GET /api/dustpan/v1/break-glass/accounts` returns each break-glass account with
+its passkeys, and the live count:
+
+```json
+{
+  "accounts": [{"id": "prn-...", "subject": "break-glass:recovery", "enabled": true, "passkeys": []}],
+  "working": 1,
+  "missing": 1,
+  "floor": 2
+}
+```
+
+`working` is the count of the working break-glass accounts at the request
+time. `missing` is the count that the installation needs to reach `floor`,
+and `0` at or above it. The count reads the rows at the request time, so an
+account that stops working, by a suspended passkey or a revoked grant, leaves
+the count without a write.
+
+## Rotate a passkey
+
+`POST /api/dustpan/v1/break-glass/accounts/{id}/rotate` replaces one passkey of
+an account with a new one. The rotation needs a recent sign-in. The body names
+the old passkey and the new one:
+
+```json
+{
+  "oldPasskey": "pky-...",
+  "name": "next-key",
+  "credential": "<base64url>",
+  "publicKey": "<base64url>",
+  "transports": ["usb"]
+}
+```
+
+The server writes the new passkey, deletes the old one and writes the audit
+entry in one database transaction. A failed write keeps the old passkey. Two
+rotations of one account run one after the other, and the second rotation
+sees the new passkey. An account that is not a break-glass account, or a
+passkey that the account does not hold, answers `404` with the error code
+`break-glass.not-found`. The answer of a change is `204`.
+
 ## The session limit
 
 A session of a break-glass account ends 1 hour after the sign-in. The limit is
@@ -61,8 +144,8 @@ needs no credential ID from the person who sends the response.
 
 ## The rule
 
-The server refuses to disable or delete the last enabled break-glass
-account. This applies to two requests:
+The guard keeps one enabled account. The server refuses to disable or delete
+the last enabled break-glass account. This applies to two requests:
 
 - `POST /api/server/principals/{id}/disable`
 - `DELETE /api/server/principals/{id}`
@@ -98,6 +181,8 @@ for every other principal. A caller that does not hold them gets 403.
 
 ## Replace the last account
 
+This is the upgrade path for a break-glass account.
+
 1. Make the second break-glass account before you disable the first.
 2. Check that the second account can sign in.
 3. Disable the first account.
@@ -107,7 +192,10 @@ The enable of a disabled account is not a revocation. It stays refused with
 
 ## Other paths
 
-The inactivity disable never disables a break-glass account. The expiry of a
+The inactivity disable never disables a break-glass account. Each run of the
+sweep that skips one writes an audit entry in the scope `@server` with the
+reason `break-glass account is exempt`. The entry names the account, so the
+audit log shows why the account stayed enabled. The expiry of a
 temporary administrator ends a temporary administrator only, and a temporary
 administrator is never a break-glass account.
 
@@ -127,8 +215,8 @@ not deleted, has a passkey that is not suspended, and holds a current grant
 without a condition of `site-administrator` or `account-administrator` on the
 installation, directly or through a group. The restore stops with the code
 `principal.no-working-break-glass` when it lowers this count and leaves fewer
-than two working accounts. A restore that does not lower the count continues,
-also when the count is below two.
+than two working break-glass accounts. A restore that does not lower the count
+continues, also when the count is below two.
 
 A break-glass account has no password, and no request of the API can give
 it one. A restore writes the rows of the backup, so it checks this rule too.

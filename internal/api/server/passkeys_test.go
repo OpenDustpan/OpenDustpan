@@ -18,10 +18,12 @@ import (
 	"opendustpan.org/opendustpan/internal/store/sqlite"
 	"opendustpan.org/opendustpan/internal/webauthntest"
 	"opendustpan.org/opendustpan/pkg/audit"
+	"opendustpan.org/opendustpan/pkg/identity"
 	"opendustpan.org/opendustpan/pkg/localuser"
 	"opendustpan.org/opendustpan/pkg/mfa"
 	"opendustpan.org/opendustpan/pkg/mfa/gowebauthn"
 	"opendustpan.org/opendustpan/pkg/principal"
+	"opendustpan.org/opendustpan/pkg/session"
 )
 
 // The relying party and the routes of the passkey route tests.
@@ -34,7 +36,14 @@ const (
 	finishTarget = ownKeysTarget + "/register/finish"
 )
 
-// newRoutePasskeys returns the passkey service of the route tests, over st.
+// testFreshWindow is the freshness window of the passkey services of the route
+// tests: the default of the session policy.
+func testFreshWindow(context.Context) time.Duration { return session.DefaultTokenFreshness }
+
+// newRoutePasskeys returns the passkey service of the route tests, over st,
+// with no authorizer and no guard: only an administrator of the identity
+// layer passes the checks of the rotation. The tests of the passkey sign-in
+// use it.
 func newRoutePasskeys(t *testing.T, st *sqlite.Store) *mfasvc.Service {
 	t.Helper()
 
@@ -45,6 +54,30 @@ func newRoutePasskeys(t *testing.T, st *sqlite.Store) *mfasvc.Service {
 
 	svc, err := mfasvc.New(mfasvc.Config{
 		Store: st, RP: rp, Audit: st, Now: nil, Log: slog.New(slog.DiscardHandler),
+		Authorizer: nil, Guard: nil, FreshWindow: testFreshWindow,
+	})
+	if err != nil {
+		t.Fatalf("passkey service: %v", err)
+	}
+
+	return svc
+}
+
+// newRoutePasskeysGuarded is newRoutePasskeys with the authorizer and the
+// guard of the fixture, like the server wires the passkey service.
+func newRoutePasskeysGuarded(
+	t *testing.T, st *sqlite.Store, authz identity.Authorizer, guard principal.Guard,
+) *mfasvc.Service {
+	t.Helper()
+
+	rp, err := gowebauthn.New(relyingOrigin)
+	if err != nil {
+		t.Fatalf("relying party: %v", err)
+	}
+
+	svc, err := mfasvc.New(mfasvc.Config{
+		Store: st, RP: rp, Audit: st, Now: nil, Log: slog.New(slog.DiscardHandler),
+		Authorizer: authz, Guard: guard, FreshWindow: testFreshWindow,
 	})
 	if err != nil {
 		t.Fatalf("passkey service: %v", err)
@@ -479,17 +512,17 @@ type fakePasskeys struct {
 	mu      sync.Mutex
 	err     error
 	calls   int
-	actors  []mfasvc.Actor
+	actors  []*mfasvc.Actor
 	people  []mfa.Person
 	removed []string
 }
 
-func (p *fakePasskeys) BeginRegistration(_ context.Context, a mfasvc.Actor, person mfa.Person) ([]byte, error) {
+func (p *fakePasskeys) BeginRegistration(_ context.Context, a *mfasvc.Actor, person mfa.Person) ([]byte, error) {
 	return []byte(`{"publicKey":{}}`), p.record(a, person)
 }
 
 func (p *fakePasskeys) FinishRegistration(
-	_ context.Context, a mfasvc.Actor, person mfa.Person, name string, _ []byte,
+	_ context.Context, a *mfasvc.Actor, person mfa.Person, name string, _ []byte,
 ) (mfa.Passkey, error) {
 	var key mfa.Passkey
 
@@ -498,13 +531,13 @@ func (p *fakePasskeys) FinishRegistration(
 	return key, p.record(a, person)
 }
 
-func (p *fakePasskeys) Passkeys(_ context.Context, a mfasvc.Actor) ([]mfa.Passkey, error) {
+func (p *fakePasskeys) Passkeys(_ context.Context, a *mfasvc.Actor) ([]mfa.Passkey, error) {
 	var nobody mfa.Person
 
 	return nil, p.record(a, nobody)
 }
 
-func (p *fakePasskeys) RemovePasskey(_ context.Context, a mfasvc.Actor, id string) error {
+func (p *fakePasskeys) RemovePasskey(_ context.Context, a *mfasvc.Actor, id string) error {
 	p.mu.Lock()
 	p.removed = append(p.removed, id)
 	p.mu.Unlock()
@@ -514,8 +547,32 @@ func (p *fakePasskeys) RemovePasskey(_ context.Context, a mfasvc.Actor, id strin
 	return p.record(a, nobody)
 }
 
+func (p *fakePasskeys) AddBreakGlassPerson(
+	_ context.Context, a *mfasvc.Actor, in principal.Input, first mfa.Passkey,
+) (principal.Principal, mfa.Passkey, error) {
+	first.PersonID = "prn-fake"
+	if first.ID == "" {
+		first.ID = "pky-fake"
+	}
+
+	account := principal.Principal{
+		CreatedAt: time.Time{}, UpdatedAt: time.Time{}, DisabledAt: time.Time{},
+		ID: "prn-fake", Subject: in.Subject, DisplayName: in.DisplayName,
+		Kind: principal.KindPerson, Source: principal.SourceLocal, Namespace: "",
+		GroupCount: 0, BreakGlass: true,
+	}
+
+	return account, first, p.record(a, mfa.Person{ID: "prn-fake", Name: "", DisplayName: ""})
+}
+
+func (p *fakePasskeys) RotatePasskey(
+	_ context.Context, a *mfasvc.Actor, personID, _ string, _ mfa.Passkey,
+) error {
+	return p.record(a, mfa.Person{ID: personID, Name: "", DisplayName: ""})
+}
+
 // record counts one call and keeps its actor and person.
-func (p *fakePasskeys) record(a mfasvc.Actor, person mfa.Person) error {
+func (p *fakePasskeys) record(a *mfasvc.Actor, person mfa.Person) error {
 	p.mu.Lock()
 	defer p.mu.Unlock()
 

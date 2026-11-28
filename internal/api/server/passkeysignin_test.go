@@ -21,6 +21,7 @@ import (
 	"opendustpan.org/opendustpan/internal/store/sqlite"
 	"opendustpan.org/opendustpan/internal/webauthntest"
 	"opendustpan.org/opendustpan/pkg/audit"
+	"opendustpan.org/opendustpan/pkg/identity"
 	"opendustpan.org/opendustpan/pkg/mfa"
 	"opendustpan.org/opendustpan/pkg/mfa/gowebauthn"
 	"opendustpan.org/opendustpan/pkg/notify"
@@ -119,7 +120,15 @@ func (e *passkeySignInEnv) register(t *testing.T, id string) *webauthntest.Crede
 		Origin: nil,
 	}
 	// The helper stands for the person who completed a fresh step, so Fresh is true.
-	actor := mfasvc.Actor{Entry: entry, PrincipalID: id, SessionID: "ses-" + id, Fresh: true}
+	actor := &mfasvc.Actor{
+		Entry: entry, PrincipalID: id, SessionID: "ses-" + id,
+		Caller: identity.Principal{
+			TemporaryAdministrator: false, TemporaryExpiresAt: time.Time{}, Subject: "", DisplayName: "",
+			Admin: false, TokenID: "", TokenExpiresAt: time.Time{}, Kind: "", Credential: "", JobID: "",
+		},
+		SignedInAt: time.Time{},
+		Fresh:      true,
+	}
 	person := mfa.Person{ID: id, Name: id, DisplayName: id}
 
 	options, err := e.svc.BeginRegistration(t.Context(), actor, person)
@@ -232,6 +241,10 @@ func (e *passkeySignInEnv) signIn(
 // want fails unless rec has the status and, for an error, the error code.
 func want(t *testing.T, what string, rec *httptest.ResponseRecorder, status int, code string) {
 	t.Helper()
+
+	if rec == nil {
+		t.Fatalf("%s: no response", what)
+	}
 
 	if rec.Code != status {
 		t.Fatalf("%s: status %d, body %s, want %d", what, rec.Code, rec.Body, status)
@@ -690,6 +703,7 @@ func TestPasskeySignInChallengeCap(t *testing.T) {
 
 			svc, err := mfasvc.New(mfasvc.Config{
 				Store: capped, RP: rp, Audit: st, Now: nil, Log: slog.New(slog.DiscardHandler),
+				Authorizer: nil, Guard: nil, FreshWindow: nil,
 			})
 			if err != nil {
 				t.Fatalf("passkey service: %v", err)
@@ -859,6 +873,58 @@ func TestPasskeySignInBreakGlass(t *testing.T) {
 
 	checkBreakGlassAlert(t, e.alerts(t))
 	checkBreakGlassEntry(t, serverEntries(t, e.f.store))
+}
+
+// TestPasskeySignInBreakGlassDuringDisable checks that a break-glass sign-in
+// that runs while a disable of another break-glass account runs takes no guard
+// step: the sign-in ends with a session, the alert and the entry of the use,
+// and the disable leaves the signed-in account enabled.
+func TestPasskeySignInBreakGlassDuringDisable(t *testing.T) {
+	t.Parallel()
+
+	e := newPasskeySignInEnv(t)
+	e.seedPerson(t, "prn-bo", "break-glass:bo", true)
+	e.register(t, "prn-bo")
+
+	entry := audit.Entry{
+		At: time.Date(2026, time.October, 13, 12, 0, 0, 0, time.UTC), Namespace: audit.ServerScope,
+		Subject: "test", IDPSubject: "", TokenID: "", Action: "server:manage-principals",
+		Object: principal.Ref("prn-bo"), Version: "", ValuePath: "", ValueCount: nil, Changes: nil,
+		SourceIP: "192.0.2.1", UserAgent: "test", Channel: audit.ChannelAPI, Kind: audit.KindChange,
+		Outcome: audit.OutcomeSuccess, RequestID: "", ObjectID: "", PrevHash: "", Hash: "", Sequence: 0,
+		FenceVersion: 0, Reason: "", PrincipalKind: "", JobID: "", Origin: nil,
+	}
+
+	var (
+		wg         sync.WaitGroup
+		disableErr error
+		rec        *httptest.ResponseRecorder
+	)
+
+	wg.Go(func() {
+		disableErr = e.f.store.DisablePrincipal(t.Context(), "prn-bo", entry)
+	})
+	wg.Go(func() {
+		rec = e.signIn(t, e.ana, breakGlassReasonText, nil, nil)
+	})
+	wg.Wait()
+
+	if disableErr != nil {
+		t.Fatalf("disable of prn-bo: %v", disableErr)
+	}
+
+	signedIn(t, "break-glass sign-in during a disable", rec)
+	checkBreakGlassAlert(t, e.alerts(t))
+	checkBreakGlassEntry(t, serverEntries(t, e.f.store))
+
+	got, err := e.f.store.GetPrincipal(t.Context(), "prn-ana")
+	if err != nil {
+		t.Fatalf("read prn-ana: %v", err)
+	}
+
+	if !got.DisabledAt.IsZero() {
+		t.Fatalf("prn-ana disabled at %v, want enabled", got.DisabledAt)
+	}
 }
 
 // breakGlassReasonText is the reason that the break-glass tests type.

@@ -14,6 +14,7 @@ import (
 	"opendustpan.org/opendustpan/internal/store/sqlite"
 	"opendustpan.org/opendustpan/internal/webauthntest"
 	"opendustpan.org/opendustpan/pkg/audit"
+	"opendustpan.org/opendustpan/pkg/identity"
 	"opendustpan.org/opendustpan/pkg/mfa"
 	"opendustpan.org/opendustpan/pkg/mfa/gowebauthn"
 	"opendustpan.org/opendustpan/pkg/principal"
@@ -25,6 +26,17 @@ const (
 	alice       = "prn-alice"
 	bob         = "prn-bob"
 )
+
+// testFreshWindow is the freshness window of the services of the tests that
+// change a break-glass account: 15 minutes, the default of the session policy.
+func testFreshWindow(context.Context) time.Duration { return 15 * time.Minute }
+
+// clockStart returns the time the clock of a fixture starts at. The actor helper
+// signs its session in at it, so the fresh check of a rotation passes while
+// the clock of the test has not moved.
+func clockStart() time.Time {
+	return time.Date(2026, time.November, 5, 9, 0, 0, 0, time.UTC)
+}
 
 // clock is a time that a test moves.
 type clock struct {
@@ -86,9 +98,12 @@ func newFixture(t *testing.T) *fixture {
 		t.Fatalf("relying party: %v", err)
 	}
 
-	c := &clock{at: time.Date(2026, time.November, 5, 9, 0, 0, 0, time.UTC), mu: sync.Mutex{}}
+	c := &clock{at: clockStart(), mu: sync.Mutex{}}
 
-	svc, err := mfasvc.New(mfasvc.Config{Store: st, RP: rp, Audit: st, Now: c.now, Log: nil})
+	svc, err := mfasvc.New(mfasvc.Config{
+		Store: st, RP: rp, Audit: st, Now: c.now, Log: nil, Authorizer: nil, Guard: nil,
+		FreshWindow: testFreshWindow,
+	})
 	if err != nil {
 		t.Fatalf("service: %v", err)
 	}
@@ -108,14 +123,41 @@ func base(at time.Time, object string) audit.Entry {
 	}
 }
 
-// actor returns the caller id in the session session.
-func actor(id, session string) mfasvc.Actor {
-	return mfasvc.Actor{Entry: base(time.Now(), "x"), PrincipalID: id, SessionID: session, Fresh: true}
+// actor returns the caller id in the session session, signed in at the start
+// of the clock of the fixture. The caller is an administrator, so the checks
+// of the action and of the reach of a rotation pass; the fresh check reads
+// the sign-in time. The helper stands for a caller who completed a fresh
+// step, so Fresh is true.
+func actor(id, session string) *mfasvc.Actor {
+	return &mfasvc.Actor{
+		Entry:       base(time.Now(), "x"),
+		PrincipalID: id,
+		SessionID:   session,
+		Caller: identity.Principal{
+			TemporaryAdministrator: false, TemporaryExpiresAt: time.Time{},
+			Subject: id, DisplayName: id, Admin: true, TokenID: "", TokenExpiresAt: time.Time{},
+			Kind: identity.KindPerson, Credential: identity.CredentialSession, JobID: "",
+		},
+		SignedInAt: clockStart(),
+		Fresh:      true,
+	}
 }
 
 // anonymous returns the caller of a passkey sign-in.
-func anonymous() mfasvc.Actor {
-	return mfasvc.Actor{Entry: base(time.Now(), "x"), PrincipalID: "", SessionID: "", Fresh: true}
+func anonymous() *mfasvc.Actor {
+	return &mfasvc.Actor{
+		Entry: base(time.Now(), "x"), PrincipalID: "", SessionID: "",
+		Caller: noPrincipal(), SignedInAt: time.Time{}, Fresh: true,
+	}
+}
+
+// noPrincipal returns the principal record of a caller with no principal: every
+// field is zero.
+func noPrincipal() identity.Principal {
+	return identity.Principal{
+		TemporaryAdministrator: false, TemporaryExpiresAt: time.Time{}, Subject: "", DisplayName: "",
+		Admin: false, TokenID: "", TokenExpiresAt: time.Time{}, Kind: "", Credential: "", JobID: "",
+	}
 }
 
 // personOf returns the WebAuthn person of id.
@@ -160,7 +202,7 @@ func (f *fixture) register(t *testing.T, id, name string) (*webauthntest.Credent
 
 // step is the caller, the kind and the binding of an assertion ceremony.
 type step struct {
-	a    mfasvc.Actor
+	a    *mfasvc.Actor
 	b    mfasvc.Binding
 	kind mfa.Ceremony
 }
@@ -229,7 +271,7 @@ func (f *fixture) entries(t *testing.T, action string) []audit.Entry {
 		t.Fatalf("list entries: %v", err)
 	}
 
-	var out []audit.Entry
+	out := []audit.Entry{}
 
 	for i := range listing.Entries {
 		if listing.Entries[i].Action == action {
@@ -275,9 +317,9 @@ func TestNewNeedsEachDependency(t *testing.T) {
 	}
 
 	cases := []mfasvc.Config{
-		{Store: nil, RP: rp, Audit: f.store, Now: nil, Log: nil},
-		{Store: f.store, RP: nil, Audit: f.store, Now: nil, Log: nil},
-		{Store: f.store, RP: rp, Audit: nil, Now: nil, Log: nil},
+		{Store: nil, RP: rp, Audit: f.store, Now: nil, Log: nil, Authorizer: nil, Guard: nil, FreshWindow: nil},
+		{Store: f.store, RP: nil, Audit: f.store, Now: nil, Log: nil, Authorizer: nil, Guard: nil, FreshWindow: nil},
+		{Store: f.store, RP: rp, Audit: nil, Now: nil, Log: nil, Authorizer: nil, Guard: nil, FreshWindow: nil},
 	}
 
 	for i, c := range cases {
@@ -676,7 +718,11 @@ func TestRemovePasskey(t *testing.T) {
 		t.Fatalf("removed entries = %d, want 1", len(removed))
 	}
 
-	noCaller := mfasvc.Actor{Entry: a.Entry, PrincipalID: "", SessionID: "", Fresh: false}
+	noCaller := &mfasvc.Actor{
+		Entry: a.Entry, PrincipalID: "", SessionID: "", Caller: noPrincipal(), SignedInAt: time.Time{},
+		Fresh: false,
+	}
+
 	err := f.svc.RemovePasskey(t.Context(), noCaller, key.ID)
 	f.wantRefusal(t, "remove with no caller", err, mfa.ErrWrongPerson, mfasvc.ActionRemoveRefused)
 }
@@ -719,7 +765,10 @@ func TestFailsClosed(t *testing.T) {
 		t.Fatalf("relying party: %v", err)
 	}
 
-	svc, err := mfasvc.New(mfasvc.Config{Store: failingStore{f.store}, RP: rp, Audit: f.store, Now: nil, Log: nil})
+	svc, err := mfasvc.New(mfasvc.Config{
+		Store: failingStore{f.store}, RP: rp, Audit: f.store, Now: nil, Log: nil, Authorizer: nil, Guard: nil,
+		FreshWindow: nil,
+	})
 	if err != nil {
 		t.Fatalf("service: %v", err)
 	}
@@ -743,7 +792,10 @@ func TestFailsClosed(t *testing.T) {
 	_, err = svc.FinishAssertion(t.Context(), anonymous(), mfa.CeremonySignIn, signIn().b, response)
 	f.wantRefusal(t, "finish with no store", err, mfa.ErrUnavailable, mfasvc.ActionCeremonyRefused)
 
-	quiet, err := mfasvc.New(mfasvc.Config{Store: f.store, RP: rp, Audit: failingAuditor{}, Now: nil, Log: nil})
+	quiet, err := mfasvc.New(mfasvc.Config{
+		Store: f.store, RP: rp, Audit: failingAuditor{}, Now: nil, Log: nil, Authorizer: nil, Guard: nil,
+		FreshWindow: nil,
+	})
 	if err != nil {
 		t.Fatalf("service: %v", err)
 	}

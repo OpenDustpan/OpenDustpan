@@ -7,11 +7,13 @@ import (
 	"fmt"
 	"time"
 
+	"opendustpan.org/opendustpan/internal/store/codec"
 	"opendustpan.org/opendustpan/internal/store/passkeystore"
 	"opendustpan.org/opendustpan/internal/store/sqlite/internal/db"
 	"opendustpan.org/opendustpan/internal/store/storeerr"
 	"opendustpan.org/opendustpan/pkg/audit"
 	"opendustpan.org/opendustpan/pkg/mfa"
+	"opendustpan.org/opendustpan/pkg/principal"
 )
 
 var _ mfa.PasskeyStore = (*Store)(nil)
@@ -90,6 +92,53 @@ func (s *Store) RemovePasskey(ctx context.Context, personID, id string, e audit.
 
 	return s.inAuditedTx(ctx, e, func(q *db.Queries) error {
 		return passkeystore.RemovePasskey(ctx, passkeyTx{q: q}, personID, id)
+	})
+}
+
+// RotatePasskey implements mfa.PasskeyStore.
+func (s *Store) RotatePasskey(ctx context.Context, personID, oldID string, next mfa.Passkey, e audit.Entry) error {
+	if err := next.Validate(); err != nil {
+		return err
+	}
+
+	s.mu.RLock()
+	defer s.mu.RUnlock()
+
+	return s.inAuditedTx(ctx, e, func(q *db.Queries) error {
+		return passkeystore.RotatePasskey(ctx, passkeyTx{q: q}, personID, oldID, next)
+	})
+}
+
+// AddBreakGlassPerson implements mfa.PasskeyStore. The person, its first
+// passkey and both entries commit in one transaction, or none of them does.
+func (s *Store) AddBreakGlassPerson(
+	ctx context.Context, p principal.Principal, first mfa.Passkey, principalEntry, passkeyEntry audit.Entry,
+) error {
+	if err := validServerEntry(principalEntry); err != nil {
+		return err
+	}
+
+	if err := validServerEntry(passkeyEntry); err != nil {
+		return err
+	}
+
+	s.mu.RLock()
+	defer s.mu.RUnlock()
+
+	return s.inTx(ctx, func(q *db.Queries) error {
+		if err := passkeystore.AddBreakGlassPerson(ctx, passkeyTx{q: q}, p, first); err != nil {
+			return err
+		}
+
+		if _, err := appendAuditEntry(ctx, q, principalEntry); err != nil {
+			return fmt.Errorf("append audit entry: %w", err)
+		}
+
+		if _, err := appendAuditEntry(ctx, q, passkeyEntry); err != nil {
+			return fmt.Errorf("append audit entry: %w", err)
+		}
+
+		return nil
 	})
 }
 
@@ -194,6 +243,22 @@ func (t passkeyTx) CreatePasskey(ctx context.Context, r passkeystore.Row) (int64
 		SignCount:      r.SignCount,
 		BackupEligible: r.BackupEligible,
 		CreatedAtMs:    r.CreatedAtMs,
+	})
+
+	return n, passkeyErr(err)
+}
+
+func (t passkeyTx) CreatePrincipal(ctx context.Context, p principal.Principal) (int64, error) {
+	n, err := t.q.CreatePrincipal(ctx, db.CreatePrincipalParams{
+		ID:          p.ID,
+		Subject:     p.Subject,
+		DisplayName: p.DisplayName,
+		Kind:        string(p.Kind),
+		Source:      string(p.Source),
+		CreatedAtMs: codec.Millis(p.CreatedAt),
+		UpdatedAtMs: codec.Millis(p.UpdatedAt),
+		Namespace:   p.Namespace.String(),
+		BreakGlass:  p.BreakGlass,
 	})
 
 	return n, passkeyErr(err)

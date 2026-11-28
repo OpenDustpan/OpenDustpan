@@ -70,6 +70,121 @@ func testWorkingBreakGlassCount(t *testing.T, s principal.Store) {
 			}
 		})
 	}
+
+	t.Run("the count of one namespace holds only its principals", func(t *testing.T) {
+		testWorkingBreakGlassCountInNamespace(t, store)
+	})
+
+	t.Run("an empty namespace is ErrInvalid", func(t *testing.T) {
+		testWorkingBreakGlassCountEmptyNamespace(t, store)
+	})
+}
+
+// countScopeTeam and countScopeOther are the namespaces of the namespace
+// count cases. They are different from countNamespace of the installation
+// cases, so the two sets of rows do not mix.
+const (
+	countScopeTeam  = namespace.Name("count-scope-team")
+	countScopeOther = namespace.Name("count-scope-other")
+)
+
+// testWorkingBreakGlassCountInNamespace proves that the count of a namespace
+// holds only the working principals of that namespace. The team scope has one
+// below the floor while the other scope has two. The two principals of the
+// other scope are never counted as principals of the team scope.
+func testWorkingBreakGlassCountInNamespace(t *testing.T, s workingBreakGlassStore) {
+	t.Helper()
+
+	ctx := t.Context()
+
+	before, err := s.CountWorkingBreakGlass(ctx, at(59))
+	if err != nil {
+		t.Fatalf("installation count before the namespace accounts: %v", err)
+	}
+
+	countCreateNamespace(t, s, countScopeTeam)
+	countCreateNamespace(t, s, countScopeOther)
+
+	countNamespaceWorking(t, s, countScopeTeam, "prn-count-team-1")
+	countNamespaceWorking(t, s, countScopeOther, "prn-count-other-1")
+	countNamespaceWorking(t, s, countScopeOther, "prn-count-other-2")
+
+	got, err := s.CountWorkingBreakGlassInNamespace(ctx, countScopeTeam, at(59))
+	if err != nil || got != 1 {
+		t.Fatalf("working count of %q = %d, %v; want 1", countScopeTeam, got, err)
+	}
+
+	if missing := principal.FloorWorkingPaths - got; missing != 1 {
+		t.Fatalf("missing count of %q = %d, want 1", countScopeTeam, missing)
+	}
+
+	other, err := s.CountWorkingBreakGlassInNamespace(ctx, countScopeOther, at(59))
+	if err != nil || other != 2 {
+		t.Fatalf("working count of %q = %d, %v; want 2", countScopeOther, other, err)
+	}
+
+	// The installation count keeps the installation scope: the namespace
+	// accounts never enter it.
+	installation, err := s.CountWorkingBreakGlass(ctx, at(59))
+	if err != nil || installation != before {
+		t.Fatalf("installation count = %d, %v; want %d, the count before the namespace accounts",
+			installation, err, before)
+	}
+}
+
+// testWorkingBreakGlassCountEmptyNamespace proves that the namespace count
+// refuses an empty scope: the installation uses CountWorkingBreakGlass.
+func testWorkingBreakGlassCountEmptyNamespace(t *testing.T, s workingBreakGlassStore) {
+	t.Helper()
+
+	_, err := s.CountWorkingBreakGlassInNamespace(t.Context(), "", at(59))
+	wantErr(t, "count of an empty namespace", err, principal.ErrInvalid)
+}
+
+// countNamespaceBreakGlass stores an enabled local break-glass person of ns.
+func countNamespaceBreakGlass(t *testing.T, s workingBreakGlassStore, ns namespace.Name, id string) {
+	t.Helper()
+
+	p := newPrincipal(id, id+"@example.com", principal.KindPerson)
+	p.BreakGlass = true
+	p.Namespace = ns
+
+	if err := s.CreateNamespacePrincipal(t.Context(), p, fenceOf(ns), nsEntry(ns)); err != nil {
+		t.Fatalf("create namespace principal %q: %v", id, err)
+	}
+}
+
+// countNamespaceWorking stores a working break-glass account of ns: an enabled
+// local person of ns with a passkey and a grant of an administration role on
+// ns.
+func countNamespaceWorking(t *testing.T, s workingBreakGlassStore, ns namespace.Name, id string) {
+	t.Helper()
+
+	countNamespaceBreakGlass(t, s, ns, id)
+	countPasskey(t, s, id, "pky-"+id)
+	countGrant(t, s, namespaceGrantOn("grt-"+id, ns,
+		access.Subject{Kind: access.SubjectPrincipal, ID: id}, access.RoleAdmin))
+}
+
+// namespaceGrantOn returns a grant of an administration role on ns.
+func namespaceGrantOn(id string, ns namespace.Name, subject access.Subject, role string) countGrantSpec {
+	return countGrantSpec{
+		ID: id, Subject: subject, Role: role, Object: identity.NamespaceObject(ns),
+		Fence: fenceOf(ns), Condition: nil,
+	}
+}
+
+// countCreateNamespace stores the namespace ns with the failover version 1.
+func countCreateNamespace(t *testing.T, s workingBreakGlassStore, ns namespace.Name) {
+	t.Helper()
+
+	err := s.CreateNamespace(t.Context(), namespace.Namespace{
+		ID: namespace.NewID(), CreatedAt: at(0), Name: ns, PrimaryInstallation: "",
+		Overrides: namespace.Overrides{Forced: false, Unlocked: false}, FailoverVersion: 1,
+	})
+	if err != nil {
+		t.Fatalf("create namespace %q: %v", ns, err)
+	}
 }
 
 // countNamespaceRecord returns the namespace of the count suite.

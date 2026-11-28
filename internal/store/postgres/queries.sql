@@ -1760,17 +1760,18 @@ WHERE deleted_at_ms IS NULL
   AND (@namespace::text = '' OR namespace = @namespace::text);
 
 -- name: CountWorkingBreakGlassPrincipals :one
--- The working break-glass accounts of the installation: an enabled local
--- person of the installation with a passkey that is not suspended, and a
--- current grant without a condition of an administration role on the
--- installation, directly or through an active membership of a group that
--- exists. An installation-level IP allowlist must join this count when one
--- exists; the current allowlists are per namespace and do not apply to
--- installation sign-in.
+-- The working break-glass accounts of one scope: the installation (an empty
+-- namespace, with grants on the installation) or one namespace (its
+-- principals, with grants on its namespace object). An enabled local person
+-- of the scope with a passkey that is not suspended, and a current grant
+-- without a condition of an administration role on the scope, directly or
+-- through an active membership of a group that exists. An installation-level
+-- IP allowlist must join the installation count when one exists; the current
+-- allowlists are per namespace and do not apply to installation sign-in.
 SELECT COUNT(*) FROM principals p
 WHERE p.break_glass
   AND p.kind = 'person'
-  AND p.namespace = ''
+  AND p.namespace = @namespace::text
   AND p.deleted_at_ms IS NULL
   AND p.disabled_at_ms IS NULL
   AND p.source = 'local'
@@ -1782,8 +1783,12 @@ WHERE p.break_glass
   )
   AND EXISTS (
     SELECT 1 FROM grants g
-    WHERE g.object_kind = 'installation'
-      AND g.role IN ('site-administrator', 'account-administrator')
+    WHERE g.object_kind = @object_kind::text
+      AND g.namespace = @namespace::text
+      AND (
+        (g.object_kind = 'installation' AND g.role IN ('site-administrator', 'account-administrator'))
+        OR (g.object_kind = 'namespace' AND g.role = 'admin')
+      )
       AND g.revoked_at_ms IS NULL
       AND g.condition IS NULL
       AND g.created_at_ms <= @at_ms::bigint
@@ -1802,6 +1807,16 @@ WHERE p.break_glass
         ))
       )
   );
+
+-- name: ListBreakGlassNamespaceScopes :many
+-- The namespaces that hold a break-glass person: the scopes that the
+-- namespace count of a restore reads. The installation is no row: its empty
+-- namespace is the scope of CountWorkingBreakGlass.
+SELECT DISTINCT p.namespace FROM principals p
+WHERE p.break_glass
+  AND p.kind = 'person'
+  AND p.deleted_at_ms IS NULL
+  AND p.namespace <> '';
 
 -- name: GetPrincipalNamespace :one
 -- The namespace of a current principal: empty for a principal of the
@@ -2849,6 +2864,29 @@ WHERE kind = 'person' AND deleted_at_ms IS NULL AND disabled_at_ms IS NULL
   )
   AND id NOT IN (SELECT principal_id FROM temp_admins WHERE expires_at_ms > sqlc.arg('at_ms')::bigint)
 RETURNING id;
+
+-- name: ListSweepSkippedBreakGlassPrincipals :many
+-- The enabled break-glass persons that the inactivity disable of the same
+-- parameters would disable if the exemption did not keep them. The sweep
+-- writes one audit record for each of them in the transaction of its run.
+-- Every condition of DisableInactivePrincipals is here, with break_glass
+-- flipped, so a record names an account that the rule would have disabled.
+SELECT id FROM principals
+WHERE kind = 'person' AND deleted_at_ms IS NULL AND disabled_at_ms IS NULL
+  AND break_glass = TRUE
+  AND created_at_ms <= sqlc.arg('cutoff_ms')::bigint
+  AND last_active_at_ms <= sqlc.arg('cutoff_ms')::bigint
+  AND COALESCE(last_sign_in_at_ms, 0) <= sqlc.arg('cutoff_ms')::bigint
+  AND NOT EXISTS (
+    SELECT 1 FROM access_tokens t
+    WHERE t.principal_id = principals.id
+      AND (t.created_at_ms > sqlc.arg('cutoff_ms')::bigint OR t.last_used_at_ms > sqlc.arg('cutoff_ms')::bigint)
+  )
+  AND NOT EXISTS (
+    SELECT 1 FROM sessions s
+    WHERE s.principal_id = principals.id AND s.last_seen_at_ms > sqlc.arg('cutoff_ms')::bigint
+  )
+  AND id NOT IN (SELECT principal_id FROM temp_admins WHERE expires_at_ms > sqlc.arg('at_ms')::bigint);
 
 -- name: EnablePrincipal :execrows
 -- An enable also sets the activity baseline from the database clock, the

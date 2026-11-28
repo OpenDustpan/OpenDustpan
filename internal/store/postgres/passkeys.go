@@ -8,11 +8,13 @@ import (
 
 	"github.com/jackc/pgx/v5"
 
+	"opendustpan.org/opendustpan/internal/store/codec"
 	"opendustpan.org/opendustpan/internal/store/passkeystore"
 	"opendustpan.org/opendustpan/internal/store/postgres/internal/db"
 	"opendustpan.org/opendustpan/internal/store/storeerr"
 	"opendustpan.org/opendustpan/pkg/audit"
 	"opendustpan.org/opendustpan/pkg/mfa"
+	"opendustpan.org/opendustpan/pkg/principal"
 )
 
 var _ mfa.PasskeyStore = (*Store)(nil)
@@ -118,6 +120,48 @@ func (s *Store) RemovePasskey(ctx context.Context, personID, id string, e audit.
 	})
 }
 
+// RotatePasskey implements mfa.PasskeyStore.
+func (s *Store) RotatePasskey(ctx context.Context, personID, oldID string, next mfa.Passkey, e audit.Entry) error {
+	if err := next.Validate(); err != nil {
+		return err
+	}
+
+	return s.inAuditedTx(ctx, e, func(q *db.Queries) error {
+		return passkeystore.RotatePasskey(ctx, passkeyTx{q: q}, personID, oldID, next)
+	})
+}
+
+// AddBreakGlassPerson implements mfa.PasskeyStore. It takes the lock of the
+// scope @server first, so the person, its first passkey and both entries
+// commit in one transaction, or none of them does.
+func (s *Store) AddBreakGlassPerson(
+	ctx context.Context, p principal.Principal, first mfa.Passkey, principalEntry, passkeyEntry audit.Entry,
+) error {
+	if err := validServerEntry(principalEntry); err != nil {
+		return err
+	}
+
+	if err := validServerEntry(passkeyEntry); err != nil {
+		return err
+	}
+
+	return s.inServerAuditTx(ctx, func(tx serverAuditTx) error {
+		if err := passkeystore.AddBreakGlassPerson(ctx, passkeyTx(tx), p, first); err != nil {
+			return err
+		}
+
+		if _, err := appendServerEntry(ctx, tx, principalEntry); err != nil {
+			return fmt.Errorf("append audit entry: %w", err)
+		}
+
+		if _, err := appendServerEntry(ctx, tx, passkeyEntry); err != nil {
+			return fmt.Errorf("append audit entry: %w", err)
+		}
+
+		return nil
+	})
+}
+
 // CreateChallenge implements mfa.PasskeyStore.
 func (s *Store) CreateChallenge(ctx context.Context, c mfa.Challenge, d mfa.Digest) error {
 	if err := c.Validate(); err != nil {
@@ -213,6 +257,22 @@ func (t passkeyTx) CreatePasskey(ctx context.Context, r passkeystore.Row) (int64
 		SignCount:      r.SignCount,
 		BackupEligible: r.BackupEligible,
 		CreatedAtMs:    r.CreatedAtMs,
+	})
+
+	return n, passkeyErr(err)
+}
+
+func (t passkeyTx) CreatePrincipal(ctx context.Context, p principal.Principal) (int64, error) {
+	n, err := t.q.CreatePrincipal(ctx, db.CreatePrincipalParams{
+		ID:          p.ID,
+		Subject:     p.Subject,
+		DisplayName: p.DisplayName,
+		Kind:        string(p.Kind),
+		Source:      string(p.Source),
+		CreatedAtMs: codec.Millis(p.CreatedAt),
+		UpdatedAtMs: codec.Millis(p.UpdatedAt),
+		Namespace:   p.Namespace.String(),
+		BreakGlass:  p.BreakGlass,
 	})
 
 	return n, passkeyErr(err)

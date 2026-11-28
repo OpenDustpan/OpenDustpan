@@ -25,7 +25,9 @@ import (
 
 	"opendustpan.org/opendustpan/internal/authgate"
 	"opendustpan.org/opendustpan/internal/ident"
+	"opendustpan.org/opendustpan/internal/sessionauth"
 	"opendustpan.org/opendustpan/pkg/audit"
+	"opendustpan.org/opendustpan/pkg/identity"
 	"opendustpan.org/opendustpan/pkg/mfa"
 	"opendustpan.org/opendustpan/pkg/principal"
 )
@@ -34,9 +36,11 @@ import (
 const (
 	ActionPasskeyAdded     = "passkey.added"
 	ActionPasskeyRemoved   = "passkey.removed"
+	ActionPasskeyRotated   = "passkey.rotated"
 	ActionPasskeySuspended = "passkey.suspended"
 	ActionAddRefused       = "passkey.add-refused"
 	ActionRemoveRefused    = "passkey.remove-refused"
+	ActionRotateRefused    = "passkey.rotate-refused"
 	ActionListRefused      = "passkey.list-refused"
 	ActionCeremonyRefused  = "passkey.ceremony-refused"
 )
@@ -57,8 +61,9 @@ type Auditor interface {
 	AppendServer(ctx context.Context, e audit.Entry) (audit.Entry, error)
 }
 
-// Config holds the dependencies of a Service. Every field but Now and Log is
-// required.
+// Config holds the dependencies of a Service. Every field but Now, Guard,
+// Authorizer, FreshWindow and Log is required. A nil FreshWindow is
+// accepted and fails closed.
 type Config struct {
 	Store mfa.PasskeyStore
 	RP    mfa.RelyingParty
@@ -67,10 +72,36 @@ type Config struct {
 	// Log receives the errors of the refusals whose audit entry cannot be
 	// written. Nil means slog.Default().
 	Log *slog.Logger
+	// Authorizer decides the action of the route on the installation. Nil
+	// means that only an administrator of the identity layer passes the
+	// check of the action: the service fails closed.
+	Authorizer identity.Authorizer
+	// Guard checks that the caller holds the actions that the grants of the
+	// target account give, as the disable of a principal does. Nil means the
+	// AdminOnlyGuard: only an administrator passes the check. This fails
+	// closed.
+	Guard principal.Guard
+	// FreshWindow returns the token freshness window of the session policy: the
+	// oldest console sign-in that a change of a break-glass account accepts.
+	// Nil, or a window of 0, means that no sign-in is fresh: the service fails
+	// closed.
+	FreshWindow func(ctx context.Context) time.Duration
 }
 
 // ErrMissingDependency reports a Config with a required field that is nil.
 var ErrMissingDependency = errors.New("mfasvc: missing dependency")
+
+// ErrMissingActor reports a call with a nil Actor. The HTTP adapter always
+// passes one; this error keeps a new caller from reaching a nil dereference.
+//
+// Defense in depth: this refusal writes no audit entry, because the Actor
+// holds the base of every entry (the subject, the source address, the channel
+// and the request ID), and an entry without them names no caller. A nil Actor
+// never comes from a request: the HTTP adapter builds the Actor before it
+// calls the service and writes its own entry for each refusal of the request.
+// This check does not rely on the adapter; it stops the call before any store
+// or audit write.
+var ErrMissingActor = errors.New("mfasvc: missing actor")
 
 // Service is the service of the passkeys.
 type Service struct {
@@ -79,6 +110,14 @@ type Service struct {
 	audit Auditor
 	now   func() time.Time
 	log   *slog.Logger
+	// authz decides the action of the route on the installation. Nil means
+	// that only an administrator passes the check of the action.
+	authz identity.Authorizer
+	// guard checks that the caller holds the actions that the grants of the
+	// target account give. Nil means the AdminOnlyGuard.
+	guard principal.Guard
+	// freshWindow returns the freshness window. Nil means a window of 0.
+	freshWindow func(ctx context.Context) time.Duration
 	// watch counts the failed assertions for break-glass accounts. Nil
 	// counts nothing.
 	watch *breakGlassWatch
@@ -106,20 +145,35 @@ func New(cfg Config) (*Service, error) {
 		log = slog.Default()
 	}
 
-	return &Service{store: cfg.Store, rp: cfg.RP, audit: cfg.Audit, now: now, log: log, watch: nil}, nil
+	return &Service{
+		store: cfg.Store, rp: cfg.RP, audit: cfg.Audit, now: now, log: log,
+		authz: cfg.Authorizer, guard: cfg.Guard, freshWindow: cfg.FreshWindow, watch: nil,
+	}, nil
 }
 
 // Actor is the caller of a step: the audit entry that the HTTP adapter fills
-// (subject, source address, user agent, channel, request ID), and the
-// principal ID and the session ID of the caller from its console session.
-// Both IDs are empty for the start and the end of a passkey sign-in, which
-// has no session yet. Fresh is true when the caller passed a fresh step; the
-// handler sets it from a check that the installation setting never turns off.
+// (subject, source address, user agent, channel, request ID), the principal
+// ID and the session ID of the caller from its console session, the principal
+// record of the caller, and the time of the last sign-in of its console
+// session. Both IDs and the sign-in time are empty for the start and the end
+// of a passkey sign-in, which has no session yet. Fresh is true when the
+// caller passed a fresh step; the handler sets it from a check that the
+// installation setting never turns off.
 type Actor struct {
 	Entry       audit.Entry
 	PrincipalID string
 	SessionID   string
-	Fresh       bool
+	// Caller is the principal record of the caller. The service reads its
+	// subject and its administrator flag, never its ID. Zero for a caller
+	// with no principal.
+	Caller identity.Principal
+	// SignedInAt is the time of the last sign-in of the console session of
+	// the caller. Zero for an access token, which never gives a fresh
+	// sign-in.
+	SignedInAt time.Time
+	// Fresh is true when the caller passed a fresh step; the handler sets
+	// it from a check that the installation setting never turns off.
+	Fresh bool
 }
 
 // Binding names what an assertion ceremony belongs to: the person and the
@@ -133,7 +187,10 @@ type Binding struct {
 // BeginRegistration starts a register ceremony of the caller, who adds a
 // passkey to its own account in its session, and returns the JSON of the
 // creation options. p is the person of the caller.
-func (s *Service) BeginRegistration(ctx context.Context, a Actor, p mfa.Person) ([]byte, error) {
+func (s *Service) BeginRegistration(ctx context.Context, a *Actor, p mfa.Person) ([]byte, error) {
+	if a == nil {
+		return nil, ErrMissingActor
+	}
 	object := principal.Ref(p.ID)
 
 	if a.PrincipalID == "" || a.SessionID == "" || p.ID != a.PrincipalID {
@@ -175,20 +232,15 @@ func (s *Service) BeginRegistration(ctx context.Context, a Actor, p mfa.Person) 
 	return options, nil
 }
 
-// registerOfCaller reports whether the challenge c is a register ceremony of
-// the caller a, for the person p and the session of the caller. A caller with
-// no person or no session never matches.
-func registerOfCaller(c mfa.Challenge, a Actor, p mfa.Person) bool {
-	return c.Kind == mfa.CeremonyRegister && a.PrincipalID != "" && a.SessionID != "" &&
-		c.PersonID == a.PrincipalID && c.SessionID == a.SessionID && p.ID == a.PrincipalID
-}
-
 // FinishRegistration ends the register ceremony of the response, checks
 // it, and stores the passkey for the caller under the given name. p is the
 // person of the caller.
 func (s *Service) FinishRegistration(
-	ctx context.Context, a Actor, p mfa.Person, name string, response []byte,
+	ctx context.Context, a *Actor, p mfa.Person, name string, response []byte,
 ) (mfa.Passkey, error) {
+	if a == nil {
+		return mfa.Passkey{}, ErrMissingActor
+	}
 	var none mfa.Passkey
 
 	object := principal.Ref(p.ID)
@@ -217,7 +269,7 @@ func (s *Service) FinishRegistration(
 	// data. This check stays so that a challenge of another kind, or a caller
 	// with no person or no session, never reaches the check of a
 	// registration.
-	if !registerOfCaller(c, a, p) {
+	if !registerBoundToCaller(c, a, p) {
 		return none, s.refuse(ctx, a.Entry, on(ActionAddRefused, object), "ceremony of another person or session",
 			mfa.ErrWrongPerson)
 	}
@@ -263,11 +315,22 @@ func (s *Service) FinishRegistration(
 	return key, nil
 }
 
+// registerBoundToCaller reports whether the challenge c is a register ceremony
+// of the caller a, in its session, for the person p. A caller with no person
+// or no session is never bound.
+func registerBoundToCaller(c mfa.Challenge, a *Actor, p mfa.Person) bool {
+	return c.Kind == mfa.CeremonyRegister && a.PrincipalID != "" && a.SessionID != "" &&
+		c.PersonID == a.PrincipalID && c.SessionID == a.SessionID && p.ID == a.PrincipalID
+}
+
 // BeginAssertion starts an assertion ceremony of the kind k and returns the
 // JSON of the request options. A sign-in names no person. A second factor
 // names the person and the pending sign-in in b. A fresh step is of the
 // person and the session of the caller.
-func (s *Service) BeginAssertion(ctx context.Context, a Actor, k mfa.Ceremony, b Binding) ([]byte, error) {
+func (s *Service) BeginAssertion(ctx context.Context, a *Actor, k mfa.Ceremony, b Binding) ([]byte, error) {
+	if a == nil {
+		return nil, ErrMissingActor
+	}
 	var (
 		personID, pendingID, sessionID string
 		allow                          []mfa.Passkey
@@ -323,7 +386,7 @@ func (s *Service) BeginAssertion(ctx context.Context, a Actor, k mfa.Ceremony, b
 // bound reports whether the challenge c of a ceremony of the kind k belongs
 // to the caller a and the binding b: the stored person, pending sign-in and
 // session of c are the ones that the kind asks for.
-func bound(k mfa.Ceremony, c mfa.Challenge, a Actor, b Binding) bool {
+func bound(k mfa.Ceremony, c mfa.Challenge, a *Actor, b Binding) bool {
 	binds := map[mfa.Ceremony]mfa.Challenge{
 		mfa.CeremonySignIn: {
 			CreatedAt: time.Time{},
@@ -372,8 +435,11 @@ func bound(k mfa.Ceremony, c mfa.Challenge, a Actor, b Binding) bool {
 // session or gives a fresh step, the caller checks that the principal exists
 // and is not disabled.
 func (s *Service) FinishAssertion(
-	ctx context.Context, a Actor, k mfa.Ceremony, b Binding, response []byte,
+	ctx context.Context, a *Actor, k mfa.Ceremony, b Binding, response []byte,
 ) (mfa.Passkey, error) {
+	if a == nil {
+		return mfa.Passkey{}, ErrMissingActor
+	}
 	key, _, err := finishCeremony(ctx, s, &finishInput{response: response, bind: b, actor: a, kind: k})
 
 	return key, err
@@ -393,8 +459,11 @@ type SignedIn struct {
 // check it again. The person of the passkey is the person of the user handle
 // of the response. Before it makes a session, the caller checks that the
 // principal exists and is not disabled.
-func (s *Service) FinishSignIn(ctx context.Context, a Actor, response []byte) (SignedIn, error) {
+func (s *Service) FinishSignIn(ctx context.Context, a *Actor, response []byte) (SignedIn, error) {
 	var none SignedIn
+	if a == nil {
+		return none, ErrMissingActor
+	}
 
 	key, got, err := finishCeremony(ctx, s, &finishInput{
 		response: response, bind: Binding{PersonID: "", PendingID: ""}, actor: a, kind: mfa.CeremonySignIn,
@@ -411,7 +480,7 @@ func (s *Service) FinishSignIn(ctx context.Context, a Actor, response []byte) (S
 type finishInput struct {
 	response []byte
 	bind     Binding
-	actor    Actor
+	actor    *Actor
 	kind     mfa.Ceremony
 }
 
@@ -556,7 +625,10 @@ func owns(k mfa.Ceremony, c mfa.Challenge, h mfa.ResponseHead, key mfa.Passkey) 
 }
 
 // Passkeys returns the passkeys of the caller.
-func (s *Service) Passkeys(ctx context.Context, a Actor) ([]mfa.Passkey, error) {
+func (s *Service) Passkeys(ctx context.Context, a *Actor) ([]mfa.Passkey, error) {
+	if a == nil {
+		return nil, ErrMissingActor
+	}
 	if a.PrincipalID == "" {
 		return nil, s.refuse(ctx, a.Entry, on(ActionListRefused, unknownObject), "no caller", mfa.ErrWrongPerson)
 	}
@@ -572,7 +644,10 @@ func (s *Service) Passkeys(ctx context.Context, a Actor) ([]mfa.Passkey, error) 
 // RemovePasskey deletes the passkey id of the caller. The store refuses the
 // last passkey of a local user with no password, and of a break-glass
 // person.
-func (s *Service) RemovePasskey(ctx context.Context, a Actor, id string) error {
+func (s *Service) RemovePasskey(ctx context.Context, a *Actor, id string) error {
+	if a == nil {
+		return ErrMissingActor
+	}
 	object := Object(id)
 
 	if a.PrincipalID == "" {
@@ -596,6 +671,267 @@ func (s *Service) RemovePasskey(ctx context.Context, a Actor, id string) error {
 
 	if err := s.store.RemovePasskey(ctx, a.PrincipalID, id, e); err != nil {
 		return s.refuse(ctx, a.Entry, on(ActionRemoveRefused, object), "store refused the removal", err)
+	}
+
+	return nil
+}
+
+// AddBreakGlassPerson stores a new break-glass person and its first passkey in
+// one store transaction. It accepts the add whatever the current count. The
+// caller names the new person in its authorization. The service makes the ID
+// of the person, checks its input and the passkey, and writes two entries: one
+// for the person and one for the passkey. It calls the store once and never
+// adds the passkey on its own, so a failed passkey write leaves no person.
+func (s *Service) AddBreakGlassPerson(
+	ctx context.Context, a *Actor, in principal.Input, first mfa.Passkey,
+) (principal.Principal, mfa.Passkey, error) {
+	if err := s.checkAddCaller(ctx, a, in.Kind); err != nil {
+		return principal.Principal{}, mfa.Passkey{}, err
+	}
+
+	displayName := in.DisplayName
+	if displayName == "" {
+		displayName = in.Subject
+	}
+
+	at := s.now()
+	id := ident.NewID(principal.IDPrefix)
+	p := principal.Principal{
+		CreatedAt:   at,
+		UpdatedAt:   at,
+		DisabledAt:  time.Time{},
+		ID:          id,
+		Subject:     in.Subject,
+		DisplayName: displayName,
+		Kind:        principal.KindPerson,
+		Source:      principal.SourceLocal,
+		Namespace:   "",
+		GroupCount:  0,
+		BreakGlass:  true,
+	}
+
+	if err := p.Validate(); err != nil {
+		return principal.Principal{}, mfa.Passkey{},
+			s.refuse(ctx, a.Entry, on(ActionAddRefused, principal.Ref(id)), "the person is not valid", err)
+	}
+
+	first.PersonID = id
+	first.CreatedAt = s.now()
+	first.LastUsedAt = time.Time{}
+	first.SuspendedAt = time.Time{}
+
+	if first.ID == "" {
+		first.ID = ident.NewID(mfa.PasskeyIDPrefix)
+	}
+
+	// Defense in depth: the store checks the passkey again before it inserts
+	// it. This check stays so that a value that no store must hold never
+	// reaches the store or an audit entry.
+	if err := first.Validate(); err != nil {
+		return principal.Principal{}, mfa.Passkey{},
+			s.refuse(ctx, a.Entry, on(ActionAddRefused, principal.Ref(id)), "the passkey is not valid", err)
+	}
+
+	principalEntry := s.entry(a.Entry, a.Entry.Action, principal.Ref(id), audit.KindChange, audit.OutcomeSuccess)
+	passkeyEntry := s.entry(a.Entry, ActionPasskeyAdded, Object(first.ID), audit.KindChange, audit.OutcomeSuccess)
+
+	if err := s.store.AddBreakGlassPerson(ctx, p, first, principalEntry, passkeyEntry); err != nil {
+		return principal.Principal{}, mfa.Passkey{}, s.refuse(
+			ctx, a.Entry, on(ActionAddRefused, principal.Ref(id)), "store refused the add", err,
+		)
+	}
+
+	return p, first, nil
+}
+
+// RotatePasskey replaces the passkey oldID of the person personID with next,
+// in one transaction: the new passkey is stored before the old one ends, so
+// no commit leaves the person without a working credential. It calls the
+// rotation method of the store, never an add and then a remove. The caller
+// names the person in its authorization; the service checks the IDs, the
+// action of the route, the fresh sign-in of the session of the caller, that
+// the person is a break-glass account, and that the caller holds the actions
+// that the grants of the account give. It returns mfa.ErrNotFound for a
+// person that is not a break-glass account, and an error that wraps
+// identity.ErrDenied for a caller that fails the action, the fresh sign-in
+// or the reach check. Each refusal writes one denial entry.
+func (s *Service) RotatePasskey(ctx context.Context, a *Actor, personID, oldID string, next mfa.Passkey) error {
+	if a == nil {
+		return ErrMissingActor
+	}
+	object := Object(oldID)
+
+	if a.PrincipalID == "" {
+		return s.refuse(ctx, a.Entry, on(ActionRotateRefused, object), "no caller", mfa.ErrWrongPerson)
+	}
+
+	// Defense in depth: the HTTP adapter checks the IDs of the path and the
+	// body. These checks stay so that no invalid ID reaches the store or the
+	// audit object.
+	if !ident.Valid(personID, mfa.MaxIDLength) || !ident.Valid(oldID, mfa.MaxIDLength) {
+		return s.refuse(ctx, a.Entry, on(ActionRotateRefused, unknownObject), "ID not valid", mfa.ErrNotFound)
+	}
+
+	// The action, the fresh sign-in and the reach of the account: the route
+	// checks the action, and the HTTP adapter checks the fresh sign-in; each
+	// check here does not rely on them, so that a new caller of the service
+	// cannot skip one. The reach check is the check that the disable of a
+	// principal runs: a caller must hold every action that the grants of the
+	// account give, or the rotation would hand the caller the account.
+	if err := s.checkManagePrincipals(ctx, a, ActionRotateRefused, object); err != nil {
+		return err
+	}
+
+	if err := s.checkFreshSignIn(ctx, a, ActionRotateRefused, object); err != nil {
+		return err
+	}
+
+	// Defense in depth: the HTTP handler rotates only the passkey of a
+	// break-glass account, and the store checks the locked principal row
+	// again. This check does not rely on them. It stays so that a new caller
+	// cannot skip it and rotate the passkey of another person.
+	if err := s.checkBreakGlassPerson(ctx, a, ActionRotateRefused, personID); err != nil {
+		return err
+	}
+
+	if err := s.checkTargetReach(ctx, a, object, personID); err != nil {
+		return err
+	}
+
+	next.PersonID = personID
+	next.CreatedAt = s.now()
+	next.LastUsedAt = time.Time{}
+	next.SuspendedAt = time.Time{}
+
+	if next.ID == "" {
+		next.ID = ident.NewID(mfa.PasskeyIDPrefix)
+	}
+
+	// Defense in depth: the store checks the passkey again before it inserts
+	// it. This check stays so that a value that no store must hold never
+	// reaches the store or the audit entry.
+	if err := next.Validate(); err != nil {
+		return s.refuse(ctx, a.Entry, on(ActionRotateRefused, object), "the new passkey is not valid", err)
+	}
+
+	old, newID := oldID, next.ID
+	e := s.entry(a.Entry, ActionPasskeyRotated, Object(next.ID), audit.KindChange, audit.OutcomeSuccess)
+	e.Changes = []audit.Change{
+		{Key: "oldPasskey", Old: &old, New: "", Layer: "", TakesEffect: ""},
+		{Key: "newPasskey", Old: nil, New: newID, Layer: "", TakesEffect: ""},
+	}
+
+	if err := s.store.RotatePasskey(ctx, personID, oldID, next, e); err != nil {
+		return s.refuse(ctx, a.Entry, on(ActionRotateRefused, object), "store refused the rotation", err)
+	}
+
+	return nil
+}
+
+// checkAddCaller checks the caller and the kind of the add of a break-glass
+// person. Each refusal writes one entry of ActionAddRefused.
+func (s *Service) checkAddCaller(ctx context.Context, a *Actor, kind principal.Kind) error {
+	if a == nil {
+		return ErrMissingActor
+	}
+
+	if a.PrincipalID == "" {
+		return s.refuse(ctx, a.Entry, on(ActionAddRefused, unknownObject), "no caller", mfa.ErrWrongPerson)
+	}
+
+	// Defense in depth: the route checks the action and the HTTP adapter checks
+	// the fresh sign-in. Each check here does not rely on them, so that a new
+	// caller of the service cannot add a break-glass account with a passkey of
+	// its choice. The add makes the account, so there is no grant of it to reach.
+	if err := s.checkManagePrincipals(ctx, a, ActionAddRefused, unknownObject); err != nil {
+		return err
+	}
+
+	if err := s.checkFreshSignIn(ctx, a, ActionAddRefused, unknownObject); err != nil {
+		return err
+	}
+
+	// Defense in depth: the HTTP adapter sends a person only. This check stays
+	// so that no caller makes another kind of principal a break-glass account.
+	if kind != "" && kind != principal.KindPerson {
+		return s.refuse(
+			ctx, a.Entry, on(ActionAddRefused, unknownObject), "a break-glass account is a person",
+			fmt.Errorf("%w: a break-glass account is a person, not a %s", principal.ErrBreakGlassKind, kind),
+		)
+	}
+
+	return nil
+}
+
+// checkManagePrincipals refuses a caller that does not hold
+// server:manage-principals on the installation. The refusal entry has the
+// action refused. With no Authorizer wired, only an administrator of the
+// identity layer passes. This fails closed.
+func (s *Service) checkManagePrincipals(ctx context.Context, a *Actor, refused, object string) error {
+	if s.authz == nil {
+		// Defense in depth: the Config keeps the Authorizer optional, so a
+		// Service can be built without one. This check stays so that such a
+		// Service lets only an administrator rotate a break-glass passkey.
+		if a.Caller.Admin {
+			return nil
+		}
+
+		return s.refuse(ctx, a.Entry, on(refused, object), "the caller does not hold the action",
+			fmt.Errorf("%w: only an administrator changes a break-glass account "+
+				"when the service cannot check the action", identity.ErrDenied))
+	}
+
+	err := s.authz.Authorize(ctx, a.Caller, identity.ActionServerManagePrincipals, identity.ServerObject())
+	if err != nil {
+		return s.refuse(ctx, a.Entry, on(refused, object), "the caller does not hold the action",
+			fmt.Errorf("%w: %s does not hold %s on the installation: %w",
+				identity.ErrDenied, a.Caller.Subject, identity.ActionServerManagePrincipals, err))
+	}
+
+	return nil
+}
+
+// checkFreshSignIn refuses a caller whose console session has no sign-in in
+// the window: a zero time, a sign-in older than the window, and a sign-in
+// after now all refuse. The HTTP adapter checks the same session with the
+// window of the session policy; this check does not rely on it. The window
+// comes from Config.FreshWindow. With no window wired, or a window of 0, no
+// sign-in is fresh: this fails closed. The refusal entry has the action refused.
+func (s *Service) checkFreshSignIn(ctx context.Context, a *Actor, refused, object string) error {
+	var window time.Duration
+	if s.freshWindow != nil {
+		window = s.freshWindow(ctx)
+	}
+
+	if sessionauth.Fresh(s.now(), a.SignedInAt, window) {
+		return nil
+	}
+
+	return s.refuse(ctx, a.Entry, on(refused, object), "no fresh sign-in",
+		fmt.Errorf("%w: the sign-in of the console session of the caller is missing or older than %s",
+			identity.ErrDenied, window))
+}
+
+// checkTargetReach refuses a caller that does not hold every action that the
+// grants of the account personID give: the same check that the disable of a
+// principal runs. A rotation hands the caller the account at its next
+// sign-in, so the caller must already hold what the account holds. With no
+// Guard wired, only an administrator passes. This fails closed.
+func (s *Service) checkTargetReach(ctx context.Context, a *Actor, object, personID string) error {
+	guard := s.guard
+
+	// Defense in depth: New accepts a Config without a Guard. This check
+	// stays so that such a Service lets only an administrator rotate a
+	// break-glass passkey.
+	if guard == nil {
+		guard = principal.AdminOnlyGuard{}
+	}
+
+	if err := guard.CheckPrincipalGrants(ctx, a.Caller, personID); err != nil {
+		return s.refuse(ctx, a.Entry, on(ActionRotateRefused, object),
+			"the caller does not hold the rights of the account",
+			fmt.Errorf("%w: %s does not hold the actions that the grants of %s give: %w",
+				identity.ErrDenied, a.Caller.Subject, principal.Ref(personID), err))
 	}
 
 	return nil
@@ -765,4 +1101,32 @@ func (s *Service) usable(ctx context.Context, personID string) ([]mfa.Passkey, e
 	}
 
 	return out, nil
+}
+
+// checkBreakGlassPerson refuses a person that the add or the rotation of
+// another account's passkey must not change: an unknown principal, a
+// principal that is not a person of the installation, and a person that is
+// not a break-glass account. It answers mfa.ErrUnavailable when the store
+// cannot read the principal. The refusal entry has the action refusal.
+func (s *Service) checkBreakGlassPerson(ctx context.Context, a *Actor, refusal, personID string) error {
+	object := Object(personID)
+
+	reader, ok := s.store.(PrincipalReader)
+	if !ok {
+		return s.refuse(ctx, a.Entry, on(refusal, object), "the store cannot read the principal",
+			mfa.ErrUnavailable)
+	}
+
+	person, err := reader.GetPrincipal(ctx, personID)
+	if err != nil && !errors.Is(err, principal.ErrNotFound) {
+		return s.refuse(ctx, a.Entry, on(refusal, object), "the principal cannot be read",
+			mfa.ErrUnavailable)
+	}
+
+	if err != nil || !person.BreakGlass || person.Kind != principal.KindPerson || person.Namespace != "" {
+		return s.refuse(ctx, a.Entry, on(refusal, object), "the person is not a break-glass account",
+			mfa.ErrNotFound)
+	}
+
+	return nil
 }

@@ -248,7 +248,12 @@ func endInstallationPrincipal(ctx context.Context, q *db.Queries, id string, at 
 		}
 
 		if enabledBreakGlass > 0 {
-			return 0, principal.ErrNoWorkingBreakGlass
+			// The conditional update kept the account. Its WHERE clause keeps
+			// an enabled break-glass account only when no other enabled
+			// break-glass account of the installation exists, in this
+			// transaction. So the count that the change leaves is 0, and the
+			// literal 0 is that count, not a guess. The rule names the refusal.
+			return 0, principal.CheckBreakGlassNotLast(0)
 		}
 
 		return 0, nil
@@ -325,7 +330,12 @@ func (s *Store) DisablePrincipal(ctx context.Context, id string, e audit.Entry) 
 		}
 
 		if enabledBreakGlass > 0 {
-			return principal.ErrNoWorkingBreakGlass
+			// The conditional update kept the account. Its WHERE clause keeps
+			// an enabled break-glass account only when no other enabled
+			// break-glass account of the installation exists, in this
+			// transaction. So the count that the change leaves is 0, and the
+			// literal 0 is that count, not a guess. The rule names the refusal.
+			return principal.CheckBreakGlassNotLast(0)
 		}
 
 		return principal.ErrDisabled

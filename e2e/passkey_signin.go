@@ -147,7 +147,10 @@ func seedPasskey(ctx context.Context, st namespace.Store, in *passkeySeed) error
 		return fmt.Errorf("relying party: %w", err)
 	}
 
-	svc, err := mfasvc.New(mfasvc.Config{Store: rows, RP: rp, Audit: rows, Now: nil, Log: slog.Default()})
+	svc, err := mfasvc.New(mfasvc.Config{
+		Store: rows, RP: rp, Audit: rows, Now: nil, Log: slog.Default(), Authorizer: nil, Guard: nil,
+		FreshWindow: nil,
+	})
 	if err != nil {
 		return fmt.Errorf("passkey service: %w", err)
 	}
@@ -155,11 +158,17 @@ func seedPasskey(ctx context.Context, st namespace.Store, in *passkeySeed) error
 	at := time.Now().UTC().Truncate(time.Millisecond)
 	actor := mfasvc.Actor{
 		Entry:       freshAdminEntry(at, mfasvc.Object("seed")),
-		PrincipalID: principalID, SessionID: "ses-e2e-seed", Fresh: true,
+		PrincipalID: principalID, SessionID: "ses-e2e-seed",
+		Caller: identity.Principal{
+			TemporaryAdministrator: false, TemporaryExpiresAt: time.Time{}, Subject: "", DisplayName: "",
+			Admin: false, TokenID: "", TokenExpiresAt: time.Time{}, Kind: "", Credential: "", JobID: "",
+		},
+		SignedInAt: time.Time{},
+		Fresh:      true,
 	}
 	person := mfa.Person{ID: principalID, Name: principalID, DisplayName: principalID}
 
-	options, err := svc.BeginRegistration(ctx, actor, person)
+	options, err := svc.BeginRegistration(ctx, &actor, person)
 	if err != nil {
 		return fmt.Errorf("begin the registration: %w", err)
 	}
@@ -174,7 +183,7 @@ func seedPasskey(ctx context.Context, st namespace.Store, in *passkeySeed) error
 		return fmt.Errorf("register: %w", err)
 	}
 
-	if _, err := svc.FinishRegistration(ctx, actor, person, "e2e-key", response); err != nil {
+	if _, err := svc.FinishRegistration(ctx, &actor, person, "e2e-key", response); err != nil {
 		return fmt.Errorf("finish the registration: %w", err)
 	}
 

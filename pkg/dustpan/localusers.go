@@ -65,7 +65,21 @@ func newServerExtras(cfg *settings, deps installationDeps, principals *principal
 		}
 	}
 
-	passkeys, err := newPasskeyService(cfg.namespaceStore, cfg.publicURL, serverAudit, cfg.now, cfg.logger)
+	// Without grants, only an administrator rotates a break-glass passkey.
+	var guard principal.Guard = principal.AdminOnlyGuard{}
+	if deps.services.access != nil {
+		guard = deps.services.access
+	}
+
+	passkeys, err := newPasskeyService(
+		cfg.namespaceStore, cfg.publicURL, cfg.now, cfg.logger,
+		passkeyAccess{
+			entries: serverAudit, authz: cfg.authorizer, guard: guard,
+			window: func(ctx context.Context) time.Duration {
+				return freshnessWindowOf(ctx, deps.policies, cfg.logger)
+			},
+		},
+	)
 	if err != nil {
 		return none, err
 	}

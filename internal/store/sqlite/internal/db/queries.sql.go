@@ -20135,6 +20135,58 @@ func (q *Queries) ListSupersededMarks(ctx context.Context, arg ListSupersededMar
 	return items, nil
 }
 
+const listSweepSkippedBreakGlassPrincipals = `-- name: ListSweepSkippedBreakGlassPrincipals :many
+SELECT id FROM principals
+WHERE kind = 'person' AND deleted_at_ms IS NULL AND disabled_at_ms IS NULL
+  AND break_glass = 1
+  AND created_at_ms <= CAST(?1 AS INTEGER)
+  AND last_active_at_ms <= CAST(?1 AS INTEGER)
+  AND COALESCE(last_sign_in_at_ms, 0) <= CAST(?1 AS INTEGER)
+  AND NOT EXISTS (
+    SELECT 1 FROM access_tokens t
+    WHERE t.principal_id = principals.id
+      AND (t.created_at_ms > CAST(?1 AS INTEGER) OR t.last_used_at_ms > CAST(?1 AS INTEGER))
+  )
+  AND NOT EXISTS (
+    SELECT 1 FROM sessions s
+    WHERE s.principal_id = principals.id AND s.last_seen_at_ms > CAST(?1 AS INTEGER)
+  )
+  AND id NOT IN (SELECT principal_id FROM temp_admins WHERE expires_at_ms > CAST(?2 AS INTEGER))
+`
+
+type ListSweepSkippedBreakGlassPrincipalsParams struct {
+	CutoffMs int64
+	AtMs     int64
+}
+
+// The enabled break-glass persons that the inactivity disable of the same
+// parameters would disable if the exemption did not keep them. The sweep
+// writes one audit record for each of them in the transaction of its run.
+// Every condition of DisableInactivePrincipals is here, with break_glass
+// flipped, so a record names an account that the rule would have disabled.
+func (q *Queries) ListSweepSkippedBreakGlassPrincipals(ctx context.Context, arg ListSweepSkippedBreakGlassPrincipalsParams) ([]string, error) {
+	rows, err := q.db.QueryContext(ctx, listSweepSkippedBreakGlassPrincipals, arg.CutoffMs, arg.AtMs)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	var items []string
+	for rows.Next() {
+		var id string
+		if err := rows.Scan(&id); err != nil {
+			return nil, err
+		}
+		items = append(items, id)
+	}
+	if err := rows.Close(); err != nil {
+		return nil, err
+	}
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+	return items, nil
+}
+
 const listTempAdmins = `-- name: ListTempAdmins :many
 SELECT principal_id, subject, expires_at_ms, created_at_ms, created_by, reason, ended_at_ms, review_opened_at_ms
 FROM temp_admins ORDER BY expires_at_ms, principal_id

@@ -2534,23 +2534,27 @@ const countWorkingBreakGlassPrincipals = `-- name: CountWorkingBreakGlassPrincip
 SELECT COUNT(*) FROM principals p
 WHERE p.break_glass
   AND p.kind = 'person'
-  AND p.namespace = ''
+  AND p.namespace = $1::text
   AND p.deleted_at_ms IS NULL
   AND p.disabled_at_ms IS NULL
   AND p.source = 'local'
-  AND p.created_at_ms <= $1::bigint
+  AND p.created_at_ms <= $2::bigint
   AND EXISTS (
     SELECT 1 FROM passkeys pk
     WHERE pk.principal_id = p.id AND pk.suspended_at_ms = 0
-      AND pk.created_at_ms <= $1::bigint
+      AND pk.created_at_ms <= $2::bigint
   )
   AND EXISTS (
     SELECT 1 FROM grants g
-    WHERE g.object_kind = 'installation'
-      AND g.role IN ('site-administrator', 'account-administrator')
+    WHERE g.object_kind = $3::text
+      AND g.namespace = $1::text
+      AND (
+        (g.object_kind = 'installation' AND g.role IN ('site-administrator', 'account-administrator'))
+        OR (g.object_kind = 'namespace' AND g.role = 'admin')
+      )
       AND g.revoked_at_ms IS NULL
       AND g.condition IS NULL
-      AND g.created_at_ms <= $1::bigint
+      AND g.created_at_ms <= $2::bigint
       AND (
         (g.subject_kind = 'principal' AND g.subject_id = p.id)
         OR (g.subject_kind = 'group' AND EXISTS (
@@ -2561,22 +2565,29 @@ WHERE p.break_glass
             AND m.removed_at_ms IS NULL
             AND m.state = 'active'
             AND pg.deleted_at_ms IS NULL
-            AND m.added_at_ms <= $1::bigint
-            AND pg.created_at_ms <= $1::bigint
+            AND m.added_at_ms <= $2::bigint
+            AND pg.created_at_ms <= $2::bigint
         ))
       )
   )
 `
 
-// The working break-glass accounts of the installation: an enabled local
-// person of the installation with a passkey that is not suspended, and a
-// current grant without a condition of an administration role on the
-// installation, directly or through an active membership of a group that
-// exists. An installation-level IP allowlist must join this count when one
-// exists; the current allowlists are per namespace and do not apply to
-// installation sign-in.
-func (q *Queries) CountWorkingBreakGlassPrincipals(ctx context.Context, atMs int64) (int64, error) {
-	row := q.db.QueryRow(ctx, countWorkingBreakGlassPrincipals, atMs)
+type CountWorkingBreakGlassPrincipalsParams struct {
+	Namespace  string
+	AtMs       int64
+	ObjectKind string
+}
+
+// The working break-glass accounts of one scope: the installation (an empty
+// namespace, with grants on the installation) or one namespace (its
+// principals, with grants on its namespace object). An enabled local person
+// of the scope with a passkey that is not suspended, and a current grant
+// without a condition of an administration role on the scope, directly or
+// through an active membership of a group that exists. An installation-level
+// IP allowlist must join the installation count when one exists; the current
+// allowlists are per namespace and do not apply to installation sign-in.
+func (q *Queries) CountWorkingBreakGlassPrincipals(ctx context.Context, arg CountWorkingBreakGlassPrincipalsParams) (int64, error) {
+	row := q.db.QueryRow(ctx, countWorkingBreakGlassPrincipals, arg.Namespace, arg.AtMs, arg.ObjectKind)
 	var count int64
 	err := row.Scan(&count)
 	return count, err
@@ -15552,6 +15563,37 @@ func (q *Queries) ListBlobPurgesAfter(ctx context.Context, arg ListBlobPurgesAft
 	return items, nil
 }
 
+const listBreakGlassNamespaceScopes = `-- name: ListBreakGlassNamespaceScopes :many
+SELECT DISTINCT p.namespace FROM principals p
+WHERE p.break_glass
+  AND p.kind = 'person'
+  AND p.deleted_at_ms IS NULL
+  AND p.namespace <> ''
+`
+
+// The namespaces that hold a break-glass person: the scopes that the
+// namespace count of a restore reads. The installation is no row: its empty
+// namespace is the scope of CountWorkingBreakGlass.
+func (q *Queries) ListBreakGlassNamespaceScopes(ctx context.Context) ([]string, error) {
+	rows, err := q.db.Query(ctx, listBreakGlassNamespaceScopes)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	var items []string
+	for rows.Next() {
+		var namespace string
+		if err := rows.Scan(&namespace); err != nil {
+			return nil, err
+		}
+		items = append(items, namespace)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+	return items, nil
+}
+
 const listCollectionUnitIDs = `-- name: ListCollectionUnitIDs :many
 SELECT m.unit_id
 FROM collection_members AS m
@@ -20605,6 +20647,55 @@ func (q *Queries) ListSupersededMarks(ctx context.Context, arg ListSupersededMar
 			return nil, err
 		}
 		items = append(items, i)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+	return items, nil
+}
+
+const listSweepSkippedBreakGlassPrincipals = `-- name: ListSweepSkippedBreakGlassPrincipals :many
+SELECT id FROM principals
+WHERE kind = 'person' AND deleted_at_ms IS NULL AND disabled_at_ms IS NULL
+  AND break_glass = TRUE
+  AND created_at_ms <= $1::bigint
+  AND last_active_at_ms <= $1::bigint
+  AND COALESCE(last_sign_in_at_ms, 0) <= $1::bigint
+  AND NOT EXISTS (
+    SELECT 1 FROM access_tokens t
+    WHERE t.principal_id = principals.id
+      AND (t.created_at_ms > $1::bigint OR t.last_used_at_ms > $1::bigint)
+  )
+  AND NOT EXISTS (
+    SELECT 1 FROM sessions s
+    WHERE s.principal_id = principals.id AND s.last_seen_at_ms > $1::bigint
+  )
+  AND id NOT IN (SELECT principal_id FROM temp_admins WHERE expires_at_ms > $2::bigint)
+`
+
+type ListSweepSkippedBreakGlassPrincipalsParams struct {
+	CutoffMs int64
+	AtMs     int64
+}
+
+// The enabled break-glass persons that the inactivity disable of the same
+// parameters would disable if the exemption did not keep them. The sweep
+// writes one audit record for each of them in the transaction of its run.
+// Every condition of DisableInactivePrincipals is here, with break_glass
+// flipped, so a record names an account that the rule would have disabled.
+func (q *Queries) ListSweepSkippedBreakGlassPrincipals(ctx context.Context, arg ListSweepSkippedBreakGlassPrincipalsParams) ([]string, error) {
+	rows, err := q.db.Query(ctx, listSweepSkippedBreakGlassPrincipals, arg.CutoffMs, arg.AtMs)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	var items []string
+	for rows.Next() {
+		var id string
+		if err := rows.Scan(&id); err != nil {
+			return nil, err
+		}
+		items = append(items, id)
 	}
 	if err := rows.Err(); err != nil {
 		return nil, err

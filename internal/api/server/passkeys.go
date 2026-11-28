@@ -75,16 +75,24 @@ const (
 type PasskeyService interface {
 	// BeginRegistration starts a register ceremony and returns the JSON of the
 	// creation options.
-	BeginRegistration(ctx context.Context, a mfasvc.Actor, p mfa.Person) ([]byte, error)
+	BeginRegistration(ctx context.Context, a *mfasvc.Actor, p mfa.Person) ([]byte, error)
 	// FinishRegistration ends the register ceremony of the response and stores
 	// the passkey under the name.
 	FinishRegistration(
-		ctx context.Context, a mfasvc.Actor, p mfa.Person, name string, response []byte,
+		ctx context.Context, a *mfasvc.Actor, p mfa.Person, name string, response []byte,
 	) (mfa.Passkey, error)
 	// Passkeys returns the passkeys of the caller.
-	Passkeys(ctx context.Context, a mfasvc.Actor) ([]mfa.Passkey, error)
+	Passkeys(ctx context.Context, a *mfasvc.Actor) ([]mfa.Passkey, error)
 	// RemovePasskey removes the passkey id of the caller.
-	RemovePasskey(ctx context.Context, a mfasvc.Actor, id string) error
+	RemovePasskey(ctx context.Context, a *mfasvc.Actor, id string) error
+	// AddBreakGlassPerson stores a new break-glass person and its first
+	// passkey in one transaction, and returns both.
+	AddBreakGlassPerson(
+		ctx context.Context, a *mfasvc.Actor, in principal.Input, first mfa.Passkey,
+	) (principal.Principal, mfa.Passkey, error)
+	// RotatePasskey replaces the passkey oldID of the person personID with
+	// next, in one transaction.
+	RotatePasskey(ctx context.Context, a *mfasvc.Actor, personID, oldID string, next mfa.Passkey) error
 }
 
 // finishPasskeyRequest is the body of the end of a register ceremony.
@@ -254,16 +262,25 @@ func (h *Handler) passkeyCaller(
 	return caller, person, true
 }
 
+// zeroPrincipal returns the principal record of a caller with no principal:
+// every field is zero. The passkey service reads no field of it for a sign-in.
+func zeroPrincipal() identity.Principal {
+	return identity.Principal{
+		TemporaryAdministrator: false, TemporaryExpiresAt: time.Time{}, Subject: "", DisplayName: "",
+		Admin: false, TokenID: "", TokenExpiresAt: time.Time{}, Kind: "", Credential: "", JobID: "",
+	}
+}
+
 // passkeyActor returns the actor of a step of the caller: the audit entry of
 // the request, and the principal and the session of the console session. Fresh
 // is the result of the same sign-in age check that the route runs, and it does
 // not follow the setting freshAuthEnabled.
 func (h *Handler) passkeyActor(
 	r *http.Request, p identity.Principal, caller sessionCaller, action identity.Action,
-) mfasvc.Actor {
-	return mfasvc.Actor{
+) *mfasvc.Actor {
+	return &mfasvc.Actor{
 		Entry: callerEntry(r, p, action), PrincipalID: caller.Match.Owner.ID, SessionID: caller.Match.Session.ID,
-		Fresh: h.requireAlwaysFresh(r) == nil,
+		Caller: zeroPrincipal(), SignedInAt: time.Time{}, Fresh: h.requireAlwaysFresh(r) == nil,
 	}
 }
 

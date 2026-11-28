@@ -184,7 +184,9 @@ func coveragePasskeys(tb testing.TB, st *sqlite.Store) *mfasvc.Service {
 		tb.Fatalf("relying party: %v", err)
 	}
 
-	svc, err := mfasvc.New(mfasvc.Config{Store: st, RP: rp, Audit: st, Now: nil, Log: nil})
+	svc, err := mfasvc.New(
+		mfasvc.Config{Store: st, RP: rp, Audit: st, Now: nil, Log: nil, Authorizer: nil, Guard: nil, FreshWindow: nil},
+	)
 	if err != nil {
 		tb.Fatalf("passkey service: %v", err)
 	}

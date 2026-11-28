@@ -3,6 +3,8 @@ package principal
 import (
 	"context"
 	"time"
+
+	"opendustpan.org/opendustpan/pkg/namespace"
 )
 
 // The floors of the break-glass accounts of an installation.
@@ -28,4 +30,12 @@ type WorkingBreakGlassCounter interface {
 	// exists. The current allowlists are per namespace and do not apply to
 	// installation sign-in.
 	CountWorkingBreakGlass(ctx context.Context, at time.Time) (int64, error)
+
+	// CountWorkingBreakGlassInNamespace returns the number of working
+	// break-glass accounts of the namespace scope ns at the time at. The
+	// scope holds the principals of ns and the grants on ns, and no
+	// principal or grant of another scope. It returns ErrInvalid for an
+	// empty ns: the installation uses CountWorkingBreakGlass. It returns
+	// ErrBreakGlassUnavailable when the store cannot count.
+	CountWorkingBreakGlassInNamespace(ctx context.Context, ns namespace.Name, at time.Time) (int64, error)
 }

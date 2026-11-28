@@ -24,6 +24,7 @@ import (
 	"time"
 
 	"opendustpan.org/opendustpan/pkg/audit"
+	"opendustpan.org/opendustpan/pkg/principal"
 	"opendustpan.org/opendustpan/pkg/session"
 )
 
@@ -225,6 +226,38 @@ type PasskeyStore interface {
 	// passkey of another person, and localuser.ErrDemoFixed for the demo
 	// person.
 	RemovePasskey(ctx context.Context, personID, id string, e audit.Entry) error
+	// RotatePasskey inserts next and ends the passkey oldID of the person
+	// personID, and appends e, in one transaction: the new passkey exists
+	// before the old one ends, and no commit leaves the person without one.
+	// It locks the row of the person first, so two rotations of one account
+	// run one after the other. It returns ErrInvalid for next that
+	// Validate refuses or that belongs to another person, ErrAlreadyExists
+	// for a passkey ID or a credential ID that any person holds, ErrNotFound
+	// for oldID that is not a passkey of personID and for a person that is
+	// not a break-glass account, and localuser.ErrDemoFixed for the demo
+	// person. A failed insert changes nothing.
+	RotatePasskey(ctx context.Context, personID, oldID string, next Passkey, e audit.Entry) error
+	// AddBreakGlassPerson stores the break-glass person p and its first
+	// passkey, and appends principalEntry for the person and passkeyEntry for
+	// the passkey, in one transaction. The person and the passkey are stored
+	// together or not at all: a failed passkey insert leaves no person and no
+	// entry. It returns ErrInvalid for a person that is not a break-glass
+	// person of the installation, and for a passkey that Passkey.Validate
+	// refuses or that belongs to another person. It returns
+	// principal.ErrAlreadyExists for a person ID or a subject that a principal
+	// holds, and the errors of AddPasskey for the passkey.
+	AddBreakGlassPerson(
+		ctx context.Context, p principal.Principal, first Passkey, principalEntry, passkeyEntry audit.Entry,
+	) error
+	// SignInChallengeStore holds the challenges of the ceremonies.
+	SignInChallengeStore
+}
+
+// SignInChallengeStore is the persistence port of the ceremony challenges.
+// It is a separate interface that PasskeyStore embeds because the interfacebloat
+// linter allows at most 8 methods in one interface, and PasskeyStore with the
+// rotation and the add of a break-glass person would have 9.
+type SignInChallengeStore interface {
 	// CreateChallenge deletes the challenges that expired at c.CreatedAt and
 	// stores c keyed by d. It returns ErrInvalid for a value that
 	// Challenge.Validate refuses, and ErrAlreadyExists when d is taken. For a

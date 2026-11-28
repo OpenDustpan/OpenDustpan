@@ -86,6 +86,59 @@ func passkeyCases() []passkeyCase {
 				"keeps a credential",
 			test: testRemoveRace,
 		},
+		{
+			name: "an add of a break-glass person stores the person and its first passkey, with one entry each",
+			test: testAddBreakGlassPerson,
+		},
+		{
+			name: "an add of a break-glass person whose passkey insert fails stores no person and no entry",
+			test: testAddBreakGlassPersonInsertFails,
+		},
+		{
+			name: "an add of a break-glass person whose subject is taken is refused and stores nothing",
+			test: testAddBreakGlassPersonSubjectTaken,
+		},
+		{
+			name: "an add of a hostile principal or passkey is refused and stores nothing",
+			test: testAddBreakGlassPersonGuards,
+		},
+		{
+			name: "an add of a break-glass person with an invalid principal or passkey entry is refused and " +
+				"stores nothing",
+			test: testAddBreakGlassPersonInvalidEntry,
+		},
+		{name: "a rotation ends the old passkey and stores the new one", test: testRotate},
+		{
+			name: "a rotation whose insert fails keeps the old passkey",
+			test: testRotateInsertFails,
+		},
+		{
+			name: "a rotation of an unknown passkey or of a passkey of another person fails with ErrNotFound",
+			test: testRotateUnknown,
+		},
+		{
+			name: "a rotation of a passkey of a person that is not a break-glass account fails with ErrNotFound " +
+				"and keeps the old passkey",
+			test: testRotateNotBreakGlass,
+		},
+		{
+			name: "a rotation to a new passkey of another person fails with ErrInvalid, keeps the old passkey " +
+				"and stores nothing",
+			test: testRotateOtherPerson,
+		},
+		{
+			name: "two rotations of one passkey at the same time: one wins and one working credential stays",
+			test: testRotateRace,
+		},
+		{
+			name: "a rotation of a suspended passkey fails with ErrSuspended and keeps the suspension",
+			test: testRotateSuspended,
+		},
+		{
+			name: "a rotation to an invalid new passkey fails with ErrInvalid, keeps the old passkey and " +
+				"stores nothing",
+			test: testRotateInvalid,
+		},
 		{name: "a challenge works once", test: testChallengeOnce},
 		{
 			name: "a sign-in challenge over the cap of open ones stores no row, and the cap counts sign-ins only",
@@ -221,6 +274,18 @@ func mustPerson(t *testing.T, s PasskeyStore, n int) string {
 
 	id := "prn-" + strconv.Itoa(n)
 	mustPrincipal(t, s, principalOf(id, "person"+strconv.Itoa(n), principal.KindPerson))
+
+	return id
+}
+
+// mustBreakGlass creates the person prn-<n> as a break-glass account.
+func mustBreakGlass(t *testing.T, s PasskeyStore, n int) string {
+	t.Helper()
+
+	id := "prn-" + strconv.Itoa(n)
+	p := principalOf(id, "break-glass-"+strconv.Itoa(n), principal.KindPerson)
+	p.BreakGlass = true
+	mustPrincipal(t, s, p)
 
 	return id
 }
@@ -988,6 +1053,519 @@ func testRemoveRace(t *testing.T, s PasskeyStore) {
 
 	if !keeps && c.Hash == "" {
 		t.Fatalf("the person has no credential after the removals (passkey: %v, password: %v)", passkeyErr, pwdErr)
+	}
+}
+
+// breakGlassPrincipal returns the break-glass person prn-1, as an add of a
+// break-glass account builds it.
+func breakGlassPrincipal() principal.Principal {
+	p := principalOf("prn-1", "break-glass-1", principal.KindPerson)
+	p.BreakGlass = true
+
+	return p
+}
+
+// testAddBreakGlassPerson proves that one call stores the break-glass person
+// and its first passkey, with one entry for each change.
+func testAddBreakGlassPerson(t *testing.T, s PasskeyStore) {
+	t.Helper()
+
+	p := breakGlassPrincipal()
+	first := passkeyOf(1, p.ID)
+
+	err := s.AddBreakGlassPerson(t.Context(), p, first,
+		entry(principal.Ref(p.ID), at(0)), entry(passkeyObject(1), at(11)))
+	if err != nil {
+		t.Fatalf("add break-glass person: %v", err)
+	}
+
+	got, err := s.GetPrincipal(t.Context(), p.ID)
+	if err != nil || !got.BreakGlass || got.Kind != principal.KindPerson {
+		t.Fatalf("principal = %+v, %v; want the break-glass person %q", got, err, p.ID)
+	}
+
+	stored, err := s.PasskeyByCredentialID(t.Context(), credential(1))
+	if err != nil || stored.ID != first.ID || stored.PersonID != p.ID {
+		t.Fatalf("passkey = %+v, %v; want %q of %q", stored, err, first.ID, p.ID)
+	}
+
+	wantEntries(t, s, principal.Ref(p.ID), 1)
+	wantEntries(t, s, passkeyObject(1), 1)
+}
+
+// testAddBreakGlassPersonInsertFails proves that a failed passkey insert
+// stores no person and no entry: the whole transaction rolls back.
+func testAddBreakGlassPersonInsertFails(t *testing.T, s PasskeyStore) {
+	t.Helper()
+
+	owner := mustBreakGlass(t, s, 2)
+	mustAdd(t, s, 1, owner)
+
+	p := breakGlassPrincipal()
+	first := passkeyOf(2, p.ID)
+	first.CredentialID = credential(1)
+
+	err := s.AddBreakGlassPerson(t.Context(), p, first,
+		entry(principal.Ref(p.ID), at(0)), entry(passkeyObject(2), at(12)))
+	wantErr(t, "add a break-glass person whose credential ID another person holds", err, mfa.ErrAlreadyExists)
+
+	if _, err := s.GetPrincipal(t.Context(), p.ID); !errors.Is(err, principal.ErrNotFound) {
+		t.Fatalf("principal after the failed add: err = %v, want ErrNotFound", err)
+	}
+
+	wantEntries(t, s, principal.Ref(p.ID), 0)
+	wantEntries(t, s, passkeyObject(2), 0)
+}
+
+// testAddBreakGlassPersonSubjectTaken proves that a subject that another
+// principal holds is refused with principal.ErrAlreadyExists at the principal
+// insert, before any passkey insert: the store stores no passkey and no entry.
+func testAddBreakGlassPersonSubjectTaken(t *testing.T, s PasskeyStore) {
+	t.Helper()
+
+	p := breakGlassPrincipal()
+	mustPrincipal(t, s, principalOf("prn-2", p.Subject, principal.KindPerson))
+
+	first := passkeyOf(1, p.ID)
+
+	err := s.AddBreakGlassPerson(t.Context(), p, first,
+		entry(principal.Ref(p.ID), at(0)), entry(passkeyObject(1), at(11)))
+	wantErr(t, "add a break-glass person whose subject another principal holds", err, principal.ErrAlreadyExists)
+
+	if _, err := s.GetPrincipal(t.Context(), p.ID); !errors.Is(err, principal.ErrNotFound) {
+		t.Fatalf("principal after the refused add: err = %v, want ErrNotFound", err)
+	}
+
+	if _, err := s.PasskeyByCredentialID(t.Context(), credential(1)); !errors.Is(err, mfa.ErrNotFound) {
+		t.Fatalf("passkey after the refused add: err = %v, want ErrNotFound", err)
+	}
+
+	wantEntries(t, s, principal.Ref(p.ID), 0)
+	wantEntries(t, s, passkeyObject(1), 0)
+}
+
+// breakGlassPersonGuardCase is one hostile input of AddBreakGlassPerson.
+type breakGlassPersonGuardCase struct {
+	name    string
+	setup   func(t *testing.T, s PasskeyStore)
+	person  func() principal.Principal
+	mutate  func(next *mfa.Passkey)
+	wantErr error
+}
+
+// testAddBreakGlassPersonGuards sends the hostile principals and passkeys of
+// the store guards of AddBreakGlassPerson to the store alone. Each refusal
+// stores no person, no passkey and no entry: every guard runs before the
+// first insert of the transaction.
+func testAddBreakGlassPersonGuards(t *testing.T, s PasskeyStore) {
+	t.Helper()
+
+	cases := []breakGlassPersonGuardCase{
+		{
+			name:    "a principal of another kind",
+			setup:   nil,
+			person:  func() principal.Principal { p := breakGlassPrincipal(); p.Kind = principal.KindService; return p },
+			mutate:  nil,
+			wantErr: mfa.ErrInvalid,
+		},
+		{
+			name:    "a person that is not a break-glass account",
+			setup:   nil,
+			person:  func() principal.Principal { p := breakGlassPrincipal(); p.BreakGlass = false; return p },
+			mutate:  nil,
+			wantErr: mfa.ErrInvalid,
+		},
+		{
+			name:    "a person of a namespace",
+			setup:   nil,
+			person:  func() principal.Principal { p := breakGlassPrincipal(); p.Namespace = "team"; return p },
+			mutate:  nil,
+			wantErr: mfa.ErrInvalid,
+		},
+		{
+			name:    "a first passkey of another person",
+			setup:   func(t *testing.T, s PasskeyStore) { t.Helper(); mustPerson(t, s, 5) },
+			person:  breakGlassPrincipal,
+			mutate:  func(next *mfa.Passkey) { next.PersonID = "prn-5" },
+			wantErr: mfa.ErrInvalid,
+		},
+		{
+			name:    "an invalid person",
+			setup:   nil,
+			person:  func() principal.Principal { p := breakGlassPrincipal(); p.Subject = ""; return p },
+			mutate:  nil,
+			wantErr: principal.ErrInvalid,
+		},
+		{
+			name:    "an invalid first passkey",
+			setup:   nil,
+			person:  breakGlassPrincipal,
+			mutate:  func(next *mfa.Passkey) { next.CredentialID = nil },
+			wantErr: mfa.ErrInvalid,
+		},
+	}
+
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			checkBreakGlassPersonGuard(t, s, tc)
+		})
+	}
+}
+
+// checkBreakGlassPersonGuard sends one hostile input to the store alone and
+// checks the refusal and the absence of a row.
+func checkBreakGlassPersonGuard(t *testing.T, s PasskeyStore, tc breakGlassPersonGuardCase) {
+	t.Helper()
+
+	if tc.setup != nil {
+		tc.setup(t, s)
+	}
+
+	p := tc.person()
+	first := passkeyOf(1, p.ID)
+
+	if tc.mutate != nil {
+		tc.mutate(&first)
+	}
+
+	err := s.AddBreakGlassPerson(t.Context(), p, first,
+		entry(principal.Ref(p.ID), at(0)), entry(passkeyObject(1), at(11)))
+	wantErr(t, "add "+tc.name, err, tc.wantErr)
+
+	if _, err := s.GetPrincipal(t.Context(), p.ID); !errors.Is(err, principal.ErrNotFound) {
+		t.Fatalf("%s: principal after the refused add: err = %v, want ErrNotFound", tc.name, err)
+	}
+
+	if _, err := s.PasskeyByCredentialID(t.Context(), credential(1)); !errors.Is(err, mfa.ErrNotFound) {
+		t.Fatalf("%s: passkey after the refused add: err = %v, want ErrNotFound", tc.name, err)
+	}
+
+	if n := count(t, s, "prn-5"); n != 0 {
+		t.Fatalf("%s: passkeys of the other person = %d, want 0", tc.name, n)
+	}
+
+	wantEntries(t, s, principal.Ref(p.ID), 0)
+	wantEntries(t, s, passkeyObject(1), 0)
+}
+
+// testAddBreakGlassPersonInvalidEntry sends an invalid principal entry and an
+// invalid passkey entry to the store alone. Each refusal stores no person, no
+// passkey and no entry.
+func testAddBreakGlassPersonInvalidEntry(t *testing.T, s PasskeyStore) {
+	t.Helper()
+
+	p := breakGlassPrincipal()
+	cases := []struct {
+		name           string
+		principalEntry audit.Entry
+		passkeyEntry   audit.Entry
+		wantErr        error
+	}{
+		{
+			name:           "a principal entry with no subject",
+			principalEntry: refused(principal.Ref(p.ID), at(0)),
+			passkeyEntry:   entry(passkeyObject(1), at(11)),
+			wantErr:        audit.ErrInvalidEntry,
+		},
+		{
+			name:           "a principal entry of a namespace",
+			principalEntry: otherScope(principal.Ref(p.ID), at(0)),
+			passkeyEntry:   entry(passkeyObject(1), at(11)),
+			wantErr:        audit.ErrInvalidEntry,
+		},
+		{
+			name:           "a passkey entry with no subject",
+			principalEntry: entry(principal.Ref(p.ID), at(0)),
+			passkeyEntry:   refused(passkeyObject(1), at(11)),
+			wantErr:        audit.ErrInvalidEntry,
+		},
+		{
+			name:           "a passkey entry of a namespace",
+			principalEntry: entry(principal.Ref(p.ID), at(0)),
+			passkeyEntry:   otherScope(passkeyObject(1), at(11)),
+			wantErr:        audit.ErrInvalidEntry,
+		},
+	}
+
+	for i := range cases {
+		tc := &cases[i]
+		err := s.AddBreakGlassPerson(t.Context(), p, passkeyOf(1, p.ID), tc.principalEntry, tc.passkeyEntry)
+		wantErr(t, "add with "+tc.name, err, tc.wantErr)
+
+		if _, err := s.GetPrincipal(t.Context(), p.ID); !errors.Is(err, principal.ErrNotFound) {
+			t.Fatalf("%s: principal after the refused add: err = %v, want ErrNotFound", tc.name, err)
+		}
+
+		if _, err := s.PasskeyByCredentialID(t.Context(), credential(1)); !errors.Is(err, mfa.ErrNotFound) {
+			t.Fatalf("%s: passkey after the refused add: err = %v, want ErrNotFound", tc.name, err)
+		}
+
+		wantEntries(t, s, principal.Ref(p.ID), 0)
+		wantEntries(t, s, passkeyObject(1), 0)
+	}
+}
+
+// testRotateInvalid proves that a rotation to an invalid new passkey fails
+// with ErrInvalid before the transaction: the old passkey stays, no new one
+// is stored and no entry is appended.
+func testRotateInvalid(t *testing.T, s PasskeyStore) {
+	t.Helper()
+
+	pid := mustBreakGlass(t, s, 1)
+	mustAdd(t, s, 1, pid)
+
+	next := passkeyOf(2, pid)
+	next.CredentialID = nil
+
+	err := s.RotatePasskey(t.Context(), pid, "pky-1", next, entry(passkeyObject(2), at(60)))
+	wantErr(t, "rotate to a passkey with no credential ID", err, mfa.ErrInvalid)
+
+	if _, err := s.PasskeyByCredentialID(t.Context(), credential(1)); err != nil {
+		t.Fatalf("old passkey after the refused rotation: %v", err)
+	}
+
+	if n := count(t, s, pid); n != 1 {
+		t.Fatalf("passkeys = %d, want 1", n)
+	}
+
+	wantEntries(t, s, passkeyObject(2), 0)
+}
+
+// testRotate proves that one rotation ends the old passkey and stores the
+// new one, with one entry for the new passkey.
+func testRotate(t *testing.T, s PasskeyStore) {
+	t.Helper()
+
+	pid := mustBreakGlass(t, s, 1)
+	mustAdd(t, s, 1, pid)
+
+	next := passkeyOf(2, pid)
+	next.CreatedAt = at(60)
+
+	if err := s.RotatePasskey(t.Context(), pid, "pky-1", next, entry(passkeyObject(2), at(60))); err != nil {
+		t.Fatalf("rotate: %v", err)
+	}
+
+	if _, err := s.PasskeyByCredentialID(t.Context(), credential(1)); !errors.Is(err, mfa.ErrNotFound) {
+		t.Fatalf("old passkey: err = %v, want ErrNotFound", err)
+	}
+
+	got, err := s.PasskeyByCredentialID(t.Context(), credential(2))
+	if err != nil {
+		t.Fatalf("new passkey: %v", err)
+	}
+
+	if got.ID != next.ID || got.PersonID != pid {
+		t.Fatalf("new passkey = %+v, want %q of %q", got, next.ID, pid)
+	}
+
+	if n := count(t, s, pid); n != 1 {
+		t.Fatalf("passkeys = %d, want 1", n)
+	}
+
+	wantEntries(t, s, passkeyObject(2), 1)
+}
+
+// testRotateInsertFails proves that a rotation whose insert fails changes
+// nothing, so the old passkey stays.
+func testRotateInsertFails(t *testing.T, s PasskeyStore) {
+	t.Helper()
+
+	pid := mustBreakGlass(t, s, 1)
+	mustAdd(t, s, 1, pid)
+	mustAdd(t, s, 2, pid)
+
+	next := passkeyOf(3, pid)
+	next.CredentialID = credential(2)
+
+	err := s.RotatePasskey(t.Context(), pid, "pky-1", next, entry(passkeyObject(3), at(60)))
+	wantErr(t, "rotate onto a credential ID that another passkey holds", err, mfa.ErrAlreadyExists)
+
+	if n := count(t, s, pid); n != 2 {
+		t.Fatalf("passkeys = %d, want 2", n)
+	}
+
+	if _, err := s.PasskeyByCredentialID(t.Context(), credential(1)); err != nil {
+		t.Fatalf("old passkey after the failed insert: %v", err)
+	}
+
+	wantEntries(t, s, passkeyObject(3), 0)
+}
+
+// testRotateUnknown proves that a rotation of an unknown passkey, or of a
+// passkey of another person, fails with ErrNotFound and changes nothing.
+func testRotateUnknown(t *testing.T, s PasskeyStore) {
+	t.Helper()
+
+	first := mustBreakGlass(t, s, 1)
+	second := mustBreakGlass(t, s, 2)
+	mustAdd(t, s, 1, first)
+	mustAdd(t, s, 2, second)
+
+	err := s.RotatePasskey(t.Context(), second, "pky-1", passkeyOf(3, second), entry(passkeyObject(3), at(60)))
+	wantErr(t, "rotate a passkey of another person", err, mfa.ErrNotFound)
+
+	err = s.RotatePasskey(t.Context(), first, "pky-missing", passkeyOf(3, first), entry(passkeyObject(3), at(61)))
+	wantErr(t, "rotate an unknown passkey", err, mfa.ErrNotFound)
+
+	if n := count(t, s, first); n != 1 {
+		t.Fatalf("passkeys of the first person = %d, want 1", n)
+	}
+
+	if n := count(t, s, second); n != 1 {
+		t.Fatalf("passkeys of the second person = %d, want 1", n)
+	}
+
+	wantEntries(t, s, passkeyObject(3), 0)
+}
+
+// testRotateNotBreakGlass proves that a rotation of a passkey of a person
+// that is not a break-glass account fails with ErrNotFound, keeps the old
+// passkey, stores no new one and appends no entry.
+func testRotateNotBreakGlass(t *testing.T, s PasskeyStore) {
+	t.Helper()
+
+	pid := mustPerson(t, s, 1)
+	mustAdd(t, s, 1, pid)
+
+	err := s.RotatePasskey(t.Context(), pid, "pky-1", passkeyOf(2, pid), entry(passkeyObject(2), at(60)))
+	wantErr(t, "rotate a passkey of a person that is not a break-glass account", err, mfa.ErrNotFound)
+
+	if _, err := s.PasskeyByCredentialID(t.Context(), credential(1)); err != nil {
+		t.Fatalf("old passkey after the refused rotation: %v", err)
+	}
+
+	if _, err := s.PasskeyByCredentialID(t.Context(), credential(2)); !errors.Is(err, mfa.ErrNotFound) {
+		t.Fatalf("new passkey after the refused rotation: err = %v, want ErrNotFound", err)
+	}
+
+	if n := count(t, s, pid); n != 1 {
+		t.Fatalf("passkeys = %d, want 1", n)
+	}
+
+	wantEntries(t, s, passkeyObject(2), 0)
+}
+
+// testRotateOtherPerson proves that a rotation whose new passkey names
+// another person fails with ErrInvalid, keeps the old passkey, stores no
+// passkey for the other person and appends no entry.
+func testRotateOtherPerson(t *testing.T, s PasskeyStore) {
+	t.Helper()
+
+	pid := mustBreakGlass(t, s, 1)
+	other := mustBreakGlass(t, s, 2)
+	mustAdd(t, s, 1, pid)
+
+	err := s.RotatePasskey(t.Context(), pid, "pky-1", passkeyOf(3, other), entry(passkeyObject(3), at(60)))
+	wantErr(t, "rotate into a passkey of another person", err, mfa.ErrInvalid)
+
+	if _, err := s.PasskeyByCredentialID(t.Context(), credential(1)); err != nil {
+		t.Fatalf("old passkey after the refused rotation: %v", err)
+	}
+
+	if _, err := s.PasskeyByCredentialID(t.Context(), credential(3)); !errors.Is(err, mfa.ErrNotFound) {
+		t.Fatalf("new passkey after the refused rotation: err = %v, want ErrNotFound", err)
+	}
+
+	if n := count(t, s, pid); n != 1 {
+		t.Fatalf("passkeys of the person = %d, want 1", n)
+	}
+
+	if n := count(t, s, other); n != 0 {
+		t.Fatalf("passkeys of the other person = %d, want 0", n)
+	}
+
+	wantEntries(t, s, passkeyObject(3), 0)
+}
+
+// testRotateSuspended proves that a rotation of a suspended passkey fails with
+// ErrSuspended. The new passkey would clear the suspension, so no row changes:
+// the old passkey stays suspended, no new passkey is stored and no entry is
+// appended.
+func testRotateSuspended(t *testing.T, s PasskeyStore) {
+	t.Helper()
+
+	pid := mustBreakGlass(t, s, 1)
+	mustAdd(t, s, 5, pid)
+	mustAdd(t, s, 6, pid)
+
+	err := s.RecordUse(t.Context(), use(5, 1, 100), regressedEntry(5, 100))
+	wantErr(t, "regression", err, mfa.ErrCounterRegressed)
+
+	next := passkeyOf(7, pid)
+	next.CreatedAt = at(60)
+
+	err = s.RotatePasskey(t.Context(), pid, "pky-5", next, entry(passkeyObject(7), at(60)))
+	wantErr(t, "rotate a suspended passkey", err, mfa.ErrSuspended)
+
+	if got := byCredential(t, s, 5); !got.SuspendedAt.Equal(at(100)) {
+		t.Fatalf("suspended passkey = %+v, want suspended at %s", got, at(100))
+	}
+
+	if n := count(t, s, pid); n != 2 {
+		t.Fatalf("passkeys = %d, want 2", n)
+	}
+
+	wantEntries(t, s, passkeyObject(7), 0)
+}
+
+// testRotateRace proves that two rotations of one passkey at the same time
+// leave exactly one working credential, and that the credential of the
+// rotation that won is the one that stays.
+func testRotateRace(t *testing.T, s PasskeyStore) {
+	t.Helper()
+
+	pid := mustBreakGlass(t, s, 1)
+	mustAdd(t, s, 1, pid)
+
+	first := passkeyOf(2, pid)
+	second := passkeyOf(3, pid)
+	results := make([]error, 2)
+
+	ctx := context.WithoutCancel(t.Context())
+
+	var wg sync.WaitGroup
+
+	wg.Go(func() {
+		results[0] = s.RotatePasskey(ctx, pid, "pky-1", first, entry(passkeyObject(2), at(60)))
+	})
+	wg.Go(func() {
+		results[1] = s.RotatePasskey(ctx, pid, "pky-1", second, entry(passkeyObject(3), at(61)))
+	})
+	wg.Wait()
+
+	passed := 0
+
+	for _, err := range results {
+		switch {
+		case err == nil:
+			passed++
+		case errors.Is(err, mfa.ErrNotFound):
+		default:
+			t.Fatalf("rotation = %v, want nil or ErrNotFound", err)
+		}
+	}
+
+	if passed != 1 {
+		t.Fatalf("rotations that passed = %d, want 1", passed)
+	}
+
+	keys, err := s.Passkeys(t.Context(), pid)
+	if err != nil {
+		t.Fatalf("list passkeys: %v", err)
+	}
+
+	if len(keys) != 1 {
+		t.Fatalf("passkeys = %d, want 1", len(keys))
+	}
+
+	want := first.ID
+	if results[1] == nil {
+		want = second.ID
+	}
+
+	if keys[0].ID != want {
+		t.Fatalf("passkey that stays = %q, want %q of the rotation that won", keys[0].ID, want)
 	}
 }
 

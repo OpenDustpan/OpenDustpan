@@ -109,6 +109,7 @@ const (
 	ErrorCodeBackupRegistryFilesTooLarge           ErrorCode = "backup.registry-files-too-large"
 	ErrorCodeBackupStillRunning                    ErrorCode = "backup.still-running"
 	ErrorCodeBackupTooManyUnverified               ErrorCode = "backup.too-many-unverified"
+	ErrorCodeBreakGlassNotFound                    ErrorCode = "break-glass.not-found"
 	ErrorCodeBreakGlassSelfReview                  ErrorCode = "break-glass.self-review"
 	ErrorCodeCollectionAlreadyExists               ErrorCode = "collection.already-exists"
 	ErrorCodeCollectionChanged                     ErrorCode = "collection.changed"
