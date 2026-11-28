@@ -90,7 +90,8 @@ func TestSignInChallengeSource(t *testing.T) {
 
 			_, err = svc.BeginAssertion(
 				t.Context(), &mfasvc.Actor{
-					Entry: entry, PrincipalID: "", SessionID: "", Caller: noPrincipal(), SignedInAt: time.Time{},
+					Entry: entry, PrincipalID: "", SessionID: "", Caller: noPrincipal(),
+					SignedInAt: time.Time{}, Fresh: true,
 				}, mfa.CeremonySignIn,
 				mfasvc.Binding{PersonID: "", PendingID: ""},
 			)
@@ -124,7 +125,8 @@ func TestSignInChallengeSourceRefusal(t *testing.T) {
 
 		_, err := f.svc.BeginAssertion(
 			t.Context(), &mfasvc.Actor{
-				Entry: entry, PrincipalID: "", SessionID: "", Caller: noPrincipal(), SignedInAt: time.Time{},
+				Entry: entry, PrincipalID: "", SessionID: "", Caller: noPrincipal(),
+				SignedInAt: time.Time{}, Fresh: true,
 			}, mfa.CeremonySignIn,
 			mfasvc.Binding{PersonID: "", PendingID: ""},
 		)

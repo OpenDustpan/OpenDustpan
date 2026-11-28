@@ -142,6 +142,42 @@ func WriteSettingInTx(ctx context.Context, s *Store, w SettingWrite) error {
 	return outputSharingSettings{s: s}.writeSetting(ctx, w.Namespace, w.Value, w.Fence, w.Entry)
 }
 
+// SetSettingRow writes the row of the installation setting key with value. It
+// is a fixture: it skips the checks and the audit entry of the setting store.
+func SetSettingRow(ctx context.Context, s *Store, key, value string) error {
+	const stmt = `INSERT INTO settings (scope_id, key, value, updated_at_ms) VALUES (?, ?, ?, ?)
+ON CONFLICT (scope_id, key) DO UPDATE SET value = excluded.value, updated_at_ms = excluded.updated_at_ms`
+
+	updatedAt := time.Date(2026, time.January, 1, 0, 0, 0, 0, time.UTC).UnixMilli()
+	if _, err := s.conn.ExecContext(ctx, stmt, serverScopeID, key, value, updatedAt); err != nil {
+		return fmt.Errorf("write setting %s: %w", key, err)
+	}
+
+	return nil
+}
+
+// ReadSettingInTx reads the installation setting key through the read
+// transaction of the job stores, so a test reaches the Tx read alone.
+func ReadSettingInTx(ctx context.Context, s *Store, key string) (string, bool, error) {
+	var (
+		value string
+		found bool
+	)
+
+	err := jobRunner{s: s}.Read(ctx, func(tx jobstore.Tx) error {
+		v, ok, err := tx.SettingValue(ctx, key)
+		if err != nil {
+			return fmt.Errorf("read setting %s: %w", key, err)
+		}
+
+		value, found = v, ok
+
+		return nil
+	})
+
+	return value, found, err
+}
+
 // SourceFilterWrite is the input of WriteSourceFilterInTx.
 type SourceFilterWrite struct {
 	Namespace namespace.Name

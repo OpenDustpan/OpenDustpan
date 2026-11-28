@@ -86,7 +86,7 @@ func newIssuerService(svc services, cfg *settings) (*issuersvc.Service, error) {
 		PublicURL:     host.public,
 		Now:           cfg.now,
 		Log:           cfg.logger,
-	})
+	}, issuersvc.WithFreshPolicy(freshPolicyOf(cfg)))
 	if err != nil {
 		return nil, fmt.Errorf("issuer service: %w", err)
 	}
@@ -129,6 +129,8 @@ func newIssuerHandler(
 	if err != nil {
 		return nil, fmt.Errorf("issuer api: %w", err)
 	}
+
+	handler.SetFreshPolicy(freshPolicyOf(cfg))
 
 	return handler, nil
 }

@@ -126,7 +126,8 @@ func base(at time.Time, object string) audit.Entry {
 // actor returns the caller id in the session session, signed in at the start
 // of the clock of the fixture. The caller is an administrator, so the checks
 // of the action and of the reach of a rotation pass; the fresh check reads
-// the sign-in time.
+// the sign-in time. The helper stands for a caller who completed a fresh
+// step, so Fresh is true.
 func actor(id, session string) *mfasvc.Actor {
 	return &mfasvc.Actor{
 		Entry:       base(time.Now(), "x"),
@@ -138,6 +139,7 @@ func actor(id, session string) *mfasvc.Actor {
 			Kind: identity.KindPerson, Credential: identity.CredentialSession, JobID: "",
 		},
 		SignedInAt: clockStart(),
+		Fresh:      true,
 	}
 }
 
@@ -145,7 +147,7 @@ func actor(id, session string) *mfasvc.Actor {
 func anonymous() *mfasvc.Actor {
 	return &mfasvc.Actor{
 		Entry: base(time.Now(), "x"), PrincipalID: "", SessionID: "",
-		Caller: noPrincipal(), SignedInAt: time.Time{},
+		Caller: noPrincipal(), SignedInAt: time.Time{}, Fresh: true,
 	}
 }
 
@@ -716,9 +718,12 @@ func TestRemovePasskey(t *testing.T) {
 		t.Fatalf("removed entries = %d, want 1", len(removed))
 	}
 
-	err := f.svc.RemovePasskey(t.Context(), &mfasvc.Actor{
+	noCaller := &mfasvc.Actor{
 		Entry: a.Entry, PrincipalID: "", SessionID: "", Caller: noPrincipal(), SignedInAt: time.Time{},
-	}, key.ID)
+		Fresh: false,
+	}
+
+	err := f.svc.RemovePasskey(t.Context(), noCaller, key.ID)
 	f.wantRefusal(t, "remove with no caller", err, mfa.ErrWrongPerson, mfasvc.ActionRemoveRefused)
 }
 

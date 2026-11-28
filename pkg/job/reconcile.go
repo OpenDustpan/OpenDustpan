@@ -9,6 +9,7 @@ import (
 
 	"opendustpan.org/opendustpan/pkg/audit"
 	"opendustpan.org/opendustpan/pkg/durable"
+	"opendustpan.org/opendustpan/pkg/freshstep"
 	"opendustpan.org/opendustpan/pkg/gate"
 	"opendustpan.org/opendustpan/pkg/history"
 	"opendustpan.org/opendustpan/pkg/identity"
@@ -67,6 +68,10 @@ type ReconcilerConfig struct {
 	// production installation that matches no dev subject, and then no
 	// signature counts: fail closed.
 	Approvers gate.ApproverPolicy
+	// FreshGuard tells whether the gate of a queued job counts an approval that
+	// records auth none. Make it with NewFreshGuard. The zero value requires
+	// the step: fail closed.
+	FreshGuard freshstep.Guard
 	// Batch is the number of jobs that one query reads. Zero takes
 	// DefaultReconcileBatch.
 	Batch int
@@ -369,7 +374,7 @@ func (run *reconcileRun) dispatchJob(ctx context.Context, j *Job) error {
 
 	p := &j.Phases[j.Current]
 
-	status := GatesStatus(p.Gates, p.Approvals, j.StartedBy, run.r.cfg.Approvers)
+	status := GatesStatus(p.Gates, p.Approvals, j.StartedBy, run.r.cfg.Approvers, run.r.cfg.FreshGuard.Required(ctx))
 	if status == GateOpen {
 		return run.dispatch(ctx, j)
 	}

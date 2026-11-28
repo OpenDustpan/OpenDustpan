@@ -12,6 +12,7 @@ import (
 	"opendustpan.org/opendustpan/internal/expr"
 	"opendustpan.org/opendustpan/internal/sessionauth"
 	"opendustpan.org/opendustpan/pkg/audit"
+	"opendustpan.org/opendustpan/pkg/freshstep"
 	"opendustpan.org/opendustpan/pkg/identity"
 	"opendustpan.org/opendustpan/pkg/namespace"
 	"opendustpan.org/opendustpan/pkg/profile"
@@ -72,6 +73,8 @@ type profileInputs struct {
 	onFailure     func()
 	logger        *slog.Logger
 	now           func() time.Time
+	// fresh decides whether a change asks for a fresh authentication.
+	fresh freshstep.Policy
 }
 
 // newProfileHandler builds the profile API, or returns nil when no profile
@@ -108,7 +111,7 @@ func newProfileHandler(in profileInputs) (http.Handler, error) {
 		Evaluator:  evaluator,
 		Now:        in.now,
 		Logger:     in.logger,
-	})
+	}, profile.WithFreshPolicy(in.fresh))
 	if err != nil {
 		return nil, fmt.Errorf("profile service: %w", err)
 	}
@@ -138,6 +141,8 @@ func newProfileHandler(in profileInputs) (http.Handler, error) {
 	if err != nil {
 		return nil, fmt.Errorf("profile api: %w", err)
 	}
+
+	handler.SetFreshPolicy(in.fresh)
 
 	return handler, nil
 }

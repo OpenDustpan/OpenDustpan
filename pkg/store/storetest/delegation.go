@@ -1,6 +1,7 @@
 package storetest
 
 import (
+	"context"
 	"errors"
 	"fmt"
 	"slices"
@@ -156,15 +157,19 @@ func newDelegation(t *testing.T, st DelegationStore) *delegation {
 		t.Fatalf("principal service: %v", err)
 	}
 
+	serverAudit, ok := st.(audit.ServerStore)
+	if !ok {
+		t.Fatal("delegation store: no server audit entries")
+	}
+
 	tokens, err := accesstoken.NewService(accesstoken.Config{
 		Makers:     nil,
 		TempAdmins: nil,
-		Store:      st, Principals: st, Freshness: nil, Authorizer: authz,
+		Store:      st, Principals: st, Audit: serverAudit, Guard: delegationFreshGuard(t), Authorizer: authz,
 		Reach: access.ReachConfig{
 			Grants: st, Roles: st, Callers: st, Principals: st, Collections: nil, Units: st,
 		},
 		Logger: nil, Now: nil, NewID: nil,
-		Guard: freshstep.Guard{},
 	})
 	if err != nil {
 		t.Fatalf("token service: %v", err)
@@ -180,6 +185,23 @@ func newDelegation(t *testing.T, st DelegationStore) *delegation {
 	}
 
 	return &delegation{st: st, authz: authz, access: svc, tokens: tokens, principals: principals}
+}
+
+// errDelegationNoFreshStep is the refusal of the guard of delegationFreshGuard.
+var errDelegationNoFreshStep = errors.New("the delegation suite gives no fresh step")
+
+// delegationFreshGuard returns the fresh step guard of the setting
+// freshAuthEnabled off: it asks for no step.
+func delegationFreshGuard(t *testing.T) freshstep.Guard {
+	t.Helper()
+
+	g, err := freshstep.NewGuard(freshstep.PolicyFunc(func(context.Context) bool { return false }),
+		func(context.Context, string) error { return errDelegationNoFreshStep })
+	if err != nil {
+		t.Fatalf("fresh step guard: %v", err)
+	}
+
+	return g
 }
 
 // bootstrap is the bootstrap admin token: it holds every action.

@@ -95,6 +95,7 @@ func newJobsHandler(svc services, cfg *settings, onFailure func(), starter job.S
 		DenialLimiter:  cfg.denialLimiter,
 		Sessions:       cfg.sessionCookies,
 		Logger:         cfg.logger,
+		FreshPolicy:    freshPolicyOf(cfg),
 	})
 	if err != nil {
 		return nil, fmt.Errorf("jobs api: %w", err)

@@ -118,7 +118,11 @@ type approvalDefaultBody struct {
 	Count            int           `json:"count"`
 	Approvers        approversBody `json:"approvers"`
 	FreshAuthSeconds *int          `json:"freshAuthSeconds"`
-	Version          int64         `json:"version,omitempty"`
+	// FreshAuthEnforced is false when the installation setting freshAuthEnabled
+	// is off: the stored window stays, and no approval asks for it. It is set
+	// on an answer and ignored on a request.
+	FreshAuthEnforced bool  `json:"enforced"`
+	Version           int64 `json:"version,omitempty"`
 }
 
 // approvalRuleBody is an approval rule on the wire.
@@ -128,8 +132,12 @@ type approvalRuleBody struct {
 	Approvers        approversBody `json:"approvers"`
 	AuthorMayApprove bool          `json:"authorMayApprove"`
 	FreshAuthSeconds *int          `json:"freshAuthSeconds"`
-	TimeoutSeconds   *int64        `json:"timeoutSeconds"`
-	Version          int64         `json:"version,omitempty"`
+	// FreshAuthEnforced is false when the installation setting freshAuthEnabled
+	// is off: the stored window stays, and no approval asks for it. It is set
+	// on an answer and ignored on a request.
+	FreshAuthEnforced bool   `json:"enforced"`
+	TimeoutSeconds    *int64 `json:"timeoutSeconds"`
+	Version           int64  `json:"version,omitempty"`
 }
 
 // approvalRuleListBody is the answer of the list route.
@@ -198,14 +206,22 @@ func freshBody(f gate.FreshAuth) *int {
 	return &seconds
 }
 
-func approvalDefaultOf(d gate.ApprovalDefault) approvalDefaultBody {
+// approvalDefaultOf returns the wire form of d. enforced is the answer of the
+// fresh step policy for the request. A null window is never enforced, so
+// enforced is false for it whatever the policy says.
+func approvalDefaultOf(d gate.ApprovalDefault, enforced bool) approvalDefaultBody {
+	window := freshBody(d.FreshAuth)
+
 	return approvalDefaultBody{
-		Count: d.Count, Approvers: approversOf(d.Approvers), FreshAuthSeconds: freshBody(d.FreshAuth),
-		Version: d.Version,
+		Count: d.Count, Approvers: approversOf(d.Approvers), FreshAuthSeconds: window,
+		FreshAuthEnforced: enforced && window != nil, Version: d.Version,
 	}
 }
 
-func approvalRuleOf(r gate.ApprovalRule) approvalRuleBody {
+// approvalRuleOf returns the wire form of r. enforced is the answer of the
+// fresh step policy for the request. A null window is never enforced, so
+// enforced is false for it whatever the policy says.
+func approvalRuleOf(r gate.ApprovalRule, enforced bool) approvalRuleBody {
 	var timeout *int64
 
 	if r.Timeout != 0 {
@@ -213,10 +229,12 @@ func approvalRuleOf(r gate.ApprovalRule) approvalRuleBody {
 		timeout = &seconds
 	}
 
+	window := freshBody(r.FreshAuth)
+
 	return approvalRuleBody{
 		ID: string(r.ID), Count: r.Count, Approvers: approversOf(r.Approvers),
-		AuthorMayApprove: r.AuthorMayApprove, FreshAuthSeconds: freshBody(r.FreshAuth), TimeoutSeconds: timeout,
-		Version: r.Version,
+		AuthorMayApprove: r.AuthorMayApprove, FreshAuthSeconds: window,
+		FreshAuthEnforced: enforced && window != nil, TimeoutSeconds: timeout, Version: r.Version,
 	}
 }
 
@@ -312,7 +330,7 @@ func (h *Handler) readApprovalDefault(
 	}
 
 	w.Header().Set("ETag", etag(d.Version))
-	h.writeJSON(ctx, w, http.StatusOK, approvalDefaultOf(d))
+	h.writeJSON(ctx, w, http.StatusOK, approvalDefaultOf(d, h.freshRequired(ctx)))
 }
 
 // writeApprovalDefault serves PUT /api/dustpan/v1/namespaces/{namespace}/approval-default.
@@ -375,7 +393,7 @@ func (h *Handler) writeApprovalDefault(
 	}
 
 	w.Header().Set("ETag", etag(stored.Version))
-	h.writeJSON(ctx, w, http.StatusOK, approvalDefaultOf(stored))
+	h.writeJSON(ctx, w, http.StatusOK, approvalDefaultOf(stored, h.freshRequired(ctx)))
 }
 
 // removeApprovalDefault serves DELETE /api/dustpan/v1/namespaces/{namespace}/approval-default.
@@ -449,9 +467,11 @@ func (h *Handler) listApprovalRules(
 		return
 	}
 
+	enforced := h.freshRequired(ctx)
 	out := approvalRuleListBody{Rules: make([]approvalRuleBody, 0, len(rules))}
+
 	for i := range rules {
-		out.Rules = append(out.Rules, approvalRuleOf(rules[i]))
+		out.Rules = append(out.Rules, approvalRuleOf(rules[i], enforced))
 	}
 
 	h.writeJSON(ctx, w, http.StatusOK, out)
@@ -500,7 +520,7 @@ func (h *Handler) readApprovalRule(
 	}
 
 	w.Header().Set("ETag", etag(rule.Version))
-	h.writeJSON(ctx, w, http.StatusOK, approvalRuleOf(rule))
+	h.writeJSON(ctx, w, http.StatusOK, approvalRuleOf(rule, h.freshRequired(ctx)))
 }
 
 // writeApprovalRule serves PUT /api/dustpan/v1/namespaces/{namespace}/approval-rules/{id}.
@@ -557,7 +577,7 @@ func (h *Handler) writeApprovalRule(
 	}
 
 	w.Header().Set("ETag", etag(stored.Version))
-	h.writeJSON(ctx, w, http.StatusOK, approvalRuleOf(stored))
+	h.writeJSON(ctx, w, http.StatusOK, approvalRuleOf(stored, h.freshRequired(ctx)))
 }
 
 // approvalRuleFrom builds the rule of a request body.

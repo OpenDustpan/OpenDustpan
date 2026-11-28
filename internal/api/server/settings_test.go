@@ -266,6 +266,52 @@ func TestSettingsReadShowsEachSettingWithItsSource(t *testing.T) {
 	}
 }
 
+// TestFreshAuthEnabledDefault checks that the settings read shows freshAuthEnabled
+// as off, with the default off and the source default.
+func TestFreshAuthEnabledDefault(t *testing.T) {
+	t.Parallel()
+
+	reg, err := setting.NewRegistry([]setting.Declaration{setting.FreshAuthEnabledDeclaration()})
+	if err != nil {
+		t.Fatalf("registry: %v", err)
+	}
+
+	e := newSettingsEnvWith(t, reg, nil)
+
+	r := e.do(t, getCall(settingsURL))
+	wantSettingsStatus(t, r, http.StatusOK)
+
+	item := decodeSettings(t, r)[setting.SettingFreshAuthEnabled]
+	if item == nil {
+		t.Fatalf("the read has no freshAuthEnabled: %s", r.body)
+	}
+
+	if !isFalse(item["value"]) || !isFalse(item["default"]) || item["source"] != "default" ||
+		item["kind"] != "bool" || !isTrue(item["mayReduceSecurity"]) || isTrue(item["locked"]) {
+		t.Fatalf("freshAuthEnabled = %v, want off, default off, source default, may reduce security", item)
+	}
+}
+
+// TestFreshAuthEnabledShowsAStaticSource checks that the settings read shows the
+// source file and the lock when the configuration file turns freshAuthEnabled on.
+func TestFreshAuthEnabledShowsAStaticSource(t *testing.T) {
+	t.Parallel()
+
+	reg, err := setting.NewRegistry([]setting.Declaration{setting.FreshAuthEnabledDeclaration()})
+	if err != nil {
+		t.Fatalf("registry: %v", err)
+	}
+
+	withFile := newSettingsEnvWith(t, reg, settingtest.StaticMap{
+		setting.SettingFreshAuthEnabled: settingtest.File("true"),
+	})
+
+	got := decodeSettings(t, withFile.do(t, getCall(settingsURL)))[setting.SettingFreshAuthEnabled]
+	if !isTrue(got["value"]) || !isFalse(got["default"]) || got["source"] != "file" || !isTrue(got["locked"]) {
+		t.Fatalf("freshAuthEnabled with a file value = %v, want on, default off, source file, locked", got)
+	}
+}
+
 // checkSettingFields checks the fields of the limit, the secret and the switch
 // of the read test.
 func checkSettingFields(t *testing.T, got map[string]map[string]any) {

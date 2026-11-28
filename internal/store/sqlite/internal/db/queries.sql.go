@@ -9850,6 +9850,25 @@ func (q *Queries) GetSessionPrincipal(ctx context.Context, id string) (GetSessio
 	return i, err
 }
 
+const getSettingValue = `-- name: GetSettingValue :one
+SELECT value
+FROM settings
+WHERE scope_id = ?1 AND key = ?2
+`
+
+type GetSettingValueParams struct {
+	ScopeID string
+	Key     string
+}
+
+// The database value of one key of one scope. No row means no database value.
+func (q *Queries) GetSettingValue(ctx context.Context, arg GetSettingValueParams) (string, error) {
+	row := q.db.QueryRowContext(ctx, getSettingValue, arg.ScopeID, arg.Key)
+	var value string
+	err := row.Scan(&value)
+	return value, err
+}
+
 const getSettingsState = `-- name: GetSettingsState :one
 SELECT revision, static_digest
 FROM settings_state
@@ -20434,6 +20453,53 @@ func (q *Queries) ListTrustBundleVersions(ctx context.Context, bundleID string) 
 			&i.CreatedAtMs,
 			&i.OverlapEndsAtMs,
 		); err != nil {
+			return nil, err
+		}
+		items = append(items, i)
+	}
+	if err := rows.Close(); err != nil {
+		return nil, err
+	}
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+	return items, nil
+}
+
+const listTrustRulesNamingSpiffeID = `-- name: ListTrustRulesNamingSpiffeID :many
+SELECT id, CAST(COALESCE(bundle_id, '') AS TEXT) AS bundle_id, spiffe_id_pattern
+FROM trust_rules
+WHERE namespace = ?1
+  AND bundle_id = CAST(?2 AS TEXT)
+  AND spiffe_id_pattern = ?3
+LIMIT 2
+`
+
+type ListTrustRulesNamingSpiffeIDParams struct {
+	Namespace       string
+	BundleID        string
+	SpiffeIDPattern string
+}
+
+type ListTrustRulesNamingSpiffeIDRow struct {
+	ID              string
+	BundleID        string
+	SpiffeIDPattern string
+}
+
+// The recheck of an mTLS exchange reads at most 2 rules: the rules of the
+// bundle that name the same SPIFFE ID. Two rows already refuse the exchange,
+// so the read stops at 2. No ORDER BY: no row order changes the answer.
+func (q *Queries) ListTrustRulesNamingSpiffeID(ctx context.Context, arg ListTrustRulesNamingSpiffeIDParams) ([]ListTrustRulesNamingSpiffeIDRow, error) {
+	rows, err := q.db.QueryContext(ctx, listTrustRulesNamingSpiffeID, arg.Namespace, arg.BundleID, arg.SpiffeIDPattern)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	var items []ListTrustRulesNamingSpiffeIDRow
+	for rows.Next() {
+		var i ListTrustRulesNamingSpiffeIDRow
+		if err := rows.Scan(&i.ID, &i.BundleID, &i.SpiffeIDPattern); err != nil {
 			return nil, err
 		}
 		items = append(items, i)

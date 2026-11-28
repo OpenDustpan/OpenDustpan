@@ -21,6 +21,7 @@ import (
 	"sync"
 	"time"
 
+	"opendustpan.org/opendustpan/pkg/freshstep"
 	"opendustpan.org/opendustpan/pkg/identity"
 	"opendustpan.org/opendustpan/pkg/namespace"
 	"opendustpan.org/opendustpan/pkg/notify"
@@ -74,9 +75,59 @@ type Service struct {
 	publicURL  string
 	now        func() time.Time
 	log        *slog.Logger
+	// freshGuard says if a change of the issuer settings needs a fresh
+	// authentication. Its check returns profile.ErrFreshRequired, so a
+	// refusal of the guard means that the change needs the check of the
+	// caller.
+	freshGuard freshstep.Guard
 
 	mu    sync.Mutex
 	cache map[cacheKey]cachedKey
+}
+
+// options holds the values that the options of NewService set.
+type options struct {
+	freshPolicy freshstep.Policy
+}
+
+// Option changes a Service that NewService makes.
+type Option func(*options)
+
+// WithFreshPolicy sets the policy that says if a change of the issuer
+// settings needs a fresh authentication. With no policy, or a nil policy,
+// each change needs the step.
+func WithFreshPolicy(p freshstep.Policy) Option {
+	return func(o *options) { o.freshPolicy = p }
+}
+
+// refuseFresh is the check of the fresh step guard. The check of the caller
+// needs the old and the next settings, so the guard only says that a step is
+// needed.
+func refuseFresh(context.Context, string) error {
+	return profile.ErrFreshRequired
+}
+
+// newFreshGuard runs opts and returns the fresh step guard of their policy.
+// A nil policy requires a step (fail closed).
+func newFreshGuard(opts []Option) (freshstep.Guard, error) {
+	o := options{freshPolicy: nil}
+	for _, opt := range opts {
+		if opt != nil {
+			opt(&o)
+		}
+	}
+
+	policy := o.freshPolicy
+	if policy == nil {
+		policy = freshstep.PolicyFunc(nil)
+	}
+
+	guard, err := freshstep.NewGuard(policy, refuseFresh)
+	if err != nil {
+		return freshstep.Guard{}, fmt.Errorf("%w: fresh step guard: %w", ErrMissingDependency, err)
+	}
+
+	return guard, nil
 }
 
 var _ profile.Issuer = (*Service)(nil)
@@ -96,7 +147,7 @@ type cachedKey struct {
 
 // NewService returns a Service. It returns ErrMissingDependency when a
 // required port is missing.
-func NewService(cfg Config) (*Service, error) {
+func NewService(cfg Config, opts ...Option) (*Service, error) {
 	if cfg.Store == nil || cfg.Namespaces == nil || cfg.Sealer == nil || cfg.Authorizer == nil {
 		return nil, fmt.Errorf("%w: store, namespaces, sealer and authorizer", ErrMissingDependency)
 	}
@@ -124,11 +175,19 @@ func NewService(cfg Config) (*Service, error) {
 		return nil, err
 	}
 
-	return &Service{
+	guard, err := newFreshGuard(opts)
+	if err != nil {
+		return nil, err
+	}
+
+	s := &Service{
 		store: cfg.Store, namespaces: cfg.Namespaces, sealer: cfg.Sealer, authz: cfg.Authorizer,
 		notifier: cfg.Notifier, fetcher: cfg.Fetcher, issuerBase: cfg.IssuerBaseURL,
-		publicURL: publicURL, now: now, log: log, mu: sync.Mutex{}, cache: map[cacheKey]cachedKey{},
-	}, nil
+		publicURL: publicURL, now: now, log: log, freshGuard: guard,
+		mu: sync.Mutex{}, cache: map[cacheKey]cachedKey{},
+	}
+
+	return s, nil
 }
 
 // checkPublicURL trims raw as the server does for its public URL and checks

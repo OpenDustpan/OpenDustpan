@@ -189,9 +189,13 @@ func profileScenario(t *testing.T, env *e2e.Env, tool string) {
 }
 
 // profileReads reads the profile in each way, and checks that no read holds
-// the plain text of the secret, except the reveal.
+// the plain text of the secret, except the reveal. The step turns
+// freshAuthEnabled on first: with the default off, the access token reveals.
 func profileReads(t *testing.T, env *e2e.Env, one, tool string) {
 	t.Helper()
+
+	restoreFreshAuth := env.EnableFreshAuth(t.Context(), t)
+	defer restoreFreshAuth()
 
 	profileStep(t, env, profileRequest("read the profile", http.MethodGet, one, http.StatusOK).
 		checking(profileMasked(`"name":"e2e-`+tool+`"`)))

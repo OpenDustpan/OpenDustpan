@@ -29,7 +29,7 @@ If the audit write, the redaction record, the item key shred or the fence check 
 #### Scenario: Fence moved
 - **GIVEN** a redaction with a fence that the namespace moved past
 - **WHEN** the redaction runs
-- **THEN** it answers `namespace.ErrFenceStale` and writes nothing
+- **THEN** it answers `namespace.ErrFenced` and writes nothing
 
 ### Requirement: A retry redacts only the older version
 If the next version exists and the older version is not redacted, then a repeat of the same request SHALL redact only the older version and SHALL NOT write another version.

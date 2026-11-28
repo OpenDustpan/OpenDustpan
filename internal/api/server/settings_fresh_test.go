@@ -1,6 +1,7 @@
 package server_test
 
 import (
+	"context"
 	"crypto/rand"
 	"log/slog"
 	"net/http"
@@ -11,6 +12,7 @@ import (
 
 	"opendustpan.org/opendustpan/internal/api/idempotent"
 	"opendustpan.org/opendustpan/internal/store/sqlite"
+	"opendustpan.org/opendustpan/pkg/freshstep"
 	"opendustpan.org/opendustpan/pkg/idempotency/idempotencytest"
 	"opendustpan.org/opendustpan/pkg/identity"
 	"opendustpan.org/opendustpan/pkg/namespace"
@@ -62,10 +64,8 @@ func newKeyedSettingsEnvAs(t *testing.T, reg *setting.Registry, authz identity.A
 		}
 	}
 
-	cfg := settingsConfig(
-		t, st, namespaces, authz,
-		setting.NewService(st.SettingStore(), reg, nil, st, nil),
-	)
+	svc := setting.NewService(st.SettingStore(), reg, nil, st, nil)
+	cfg := settingsConfig(t, st, namespaces, authz, svc)
 
 	signIn, sessions := signInOf(t, st)
 	cfg.SignIn = signIn
@@ -75,10 +75,24 @@ func newKeyedSettingsEnvAs(t *testing.T, reg *setting.Registry, authz identity.A
 
 	cfg.Idempotency = mw
 
+	// The policy reads the setting freshAuthEnabled from the same service, as
+	// the server does. A registry with no such setting fails closed: the step
+	// is required.
+	policy := freshstep.NewPolicy(func(ctx context.Context) (bool, error) {
+		item, readErr := svc.Effective(ctx, setting.InstallationScope(), setting.SettingFreshAuthEnabled)
+		if readErr != nil {
+			return false, readErr
+		}
+
+		return item.Value == "true", nil
+	})
+
 	h, err := newCheckedHandler(t, cfg)
 	if err != nil {
 		t.Fatalf("handler: %v", err)
 	}
+
+	h.SetFreshPolicy(policy)
 
 	return keyedSettingsEnv{h: h, st: st, sessions: sessions}
 }
@@ -324,4 +338,114 @@ func TestSettingsPatchSessionLimitFreshStep(t *testing.T) {
 	}
 
 	wantSettingsStatus(t, e.patch(t, sessionPatch(`"1"`, longer, 0)), http.StatusOK)
+}
+
+// freshAuthChange returns the change entry of the key freshAuthEnabled that
+// holds old and next, or fails the test.
+func (e keyedSettingsEnv) freshAuthChange(t *testing.T, old, next string) {
+	t.Helper()
+
+	entries := serverEntries(t, e.st)
+	for i := range entries {
+		for _, c := range entries[i].Changes {
+			if c.Key == setting.SettingFreshAuthEnabled && c.Old != nil && *c.Old == old && c.New == next {
+				return
+			}
+		}
+	}
+
+	t.Fatalf("no audit entry holds the change of %s from %s to %s: %+v",
+		setting.SettingFreshAuthEnabled, old, next, entries)
+}
+
+// TestFreshAuthEnabledChangeNeedsStep checks the change of the setting
+// freshAuthEnabled. The change from on to off reduces security, so an access
+// token and a session with an old sign-in get 403 mfa.fresh-step-required and
+// change nothing, and a session with a young sign-in changes the value. The
+// change from off to on needs no step. Each change writes one audit entry with
+// the old and the new value. With the setting off, a weaker change of another
+// setting needs no step.
+func TestFreshAuthEnabledChangeNeedsStep(t *testing.T) {
+	t.Parallel()
+
+	reg, err := setting.NewRegistry(append(settingtest.Declarations(), setting.FreshAuthEnabledDeclaration()))
+	if err != nil {
+		t.Fatalf("registry: %v", err)
+	}
+
+	e := newKeyedSettingsEnvWith(t, reg)
+
+	// The setting is off by default: a weaker change of another setting needs no
+	// step and writes no step of its own.
+	wantSettingsStatus(
+		t, e.patch(t, tokenPatch(settingsURL, `"0"`, "key-on-first", `{"test.enabled":true}`)), http.StatusOK,
+	)
+	wantSettingsStatus(
+		t, e.patch(t, tokenPatch(settingsURL, `"1"`, "key-off-weaker", `{"test.enabled":false}`)), http.StatusOK,
+	)
+
+	// Off to on needs no step.
+	turnOn := e.patch(t, tokenPatch(settingsURL, `"2"`, "key-turn-on", `{"freshAuthEnabled":true}`))
+	wantSettingsStatus(t, turnOn, http.StatusOK)
+	e.freshAuthChange(t, "false", "true")
+
+	// On to off needs a step.
+	turnOff := `{"freshAuthEnabled":false}`
+	stale := session.DefaultTokenFreshness + time.Minute
+
+	refused := map[string]keyedPatch{
+		"an access token":               tokenPatch(settingsURL, `"3"`, "key-turn-off-token", turnOff),
+		"a session with an old sign-in": sessionPatch(`"3"`, turnOff, stale),
+	}
+
+	for name, p := range refused {
+		r := e.patch(t, p)
+		wantSettingsStatus(t, r, http.StatusForbidden)
+
+		if !strings.Contains(r.body, settingsFreshCode) {
+			t.Fatalf("%s: body = %s, want the code mfa.fresh-step-required", name, r.body)
+		}
+	}
+
+	got := e.read(t)
+	if got.header.Get("ETag") != `"3"` || !isTrue(decodeSettings(t, got)[setting.SettingFreshAuthEnabled]["value"]) {
+		t.Fatalf("a refused change moved the setting: ETag %q, body %s", got.header.Get("ETag"), got.body)
+	}
+
+	wantSettingsStatus(t, e.patch(t, sessionPatch(`"3"`, turnOff, 0)), http.StatusOK)
+	e.freshAuthChange(t, "true", "false")
+
+	// With the setting off again, a weaker change needs no step.
+	wantSettingsStatus(
+		t, e.patch(t, tokenPatch(settingsURL, `"4"`, "key-on-again", `{"test.enabled":true}`)), http.StatusOK,
+	)
+	wantSettingsStatus(
+		t, e.patch(t, tokenPatch(settingsURL, `"5"`, "key-weaker-again", `{"test.enabled":false}`)), http.StatusOK,
+	)
+}
+
+// TestFreshAuthEnabledOnKeepsTheWeakerChangeStep checks that with the setting
+// on, a weaker change of another setting from an access token still needs a
+// step: the guard of the settings handler asks the policy and does not skip.
+func TestFreshAuthEnabledOnKeepsTheWeakerChangeStep(t *testing.T) {
+	t.Parallel()
+
+	reg, err := setting.NewRegistry(append(settingtest.Declarations(), setting.FreshAuthEnabledDeclaration()))
+	if err != nil {
+		t.Fatalf("registry: %v", err)
+	}
+
+	e := newKeyedSettingsEnvWith(t, reg)
+
+	wantSettingsStatus(
+		t, e.patch(t, tokenPatch(settingsURL, `"0"`, "key-on", `{"freshAuthEnabled":true,"test.enabled":true}`)),
+		http.StatusOK,
+	)
+
+	r := e.patch(t, tokenPatch(settingsURL, `"1"`, "key-weaker", `{"test.enabled":false}`))
+	wantSettingsStatus(t, r, http.StatusForbidden)
+
+	if !strings.Contains(r.body, settingsFreshCode) {
+		t.Fatalf("body = %s, want the code mfa.fresh-step-required", r.body)
+	}
 }

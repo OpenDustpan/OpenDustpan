@@ -219,6 +219,9 @@ func confirmRefusals() []confirmCase {
 			cActor(actorAt(func(r *rig, a *job.Actor) { a.AuthAt = r.now.Add(time.Minute) }))),
 		confirmRefuses("step of an unknown kind", job.ErrAuthStale,
 			cActor(actorAt(func(_ *rig, a *job.Actor) { a.ConfirmAuth = "sms" }))),
+		// The step time is recent, so only the kind of the step refuses none.
+		confirmRefuses("step of the authentication none", job.ErrAuthStale,
+			cActor(actorAt(func(_ *rig, a *job.Actor) { a.ConfirmAuth = job.ConfirmAuthNone }))),
 	}
 }
 

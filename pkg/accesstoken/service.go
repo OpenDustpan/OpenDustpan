@@ -45,24 +45,13 @@ type PrincipalReader interface {
 	GetPrincipalBySubject(ctx context.Context, subject string) (principal.Principal, error)
 }
 
-// Freshness asks for a recent MFA step before an operation that shows a
-// secret (ADR 56). Built-in MFA (ADR 46) does not exist yet, so the server
-// wires no Freshness: with MFA off, ADR 56 adds no step (decision 5).
-type Freshness interface {
-	// RequireFresh returns nil when the caller subject passed an MFA step
-	// inside the freshness window of token creation. Otherwise it returns
-	// an error that asks for a new MFA step. The session of the caller
-	// comes from ctx.
-	RequireFresh(ctx context.Context, subject string) error
-}
-
 // Config holds the dependencies of a Service.
 type Config struct {
 	Store      Store
 	Principals PrincipalReader
-	// Freshness checks the MFA step before a create or a rotation. Nil
-	// adds no step: MFA does not exist yet (ADR 56, decision 5).
-	Freshness Freshness
+	// Audit appends the denial entry of a refused change, in the server scope.
+	// It is required: a refused change is always recorded (fail closed).
+	Audit audit.ServerStore
 	// Guard asks for a fresh step when the fresh step policy requires one.
 	// The zero value requires a fresh step.
 	Guard freshstep.Guard
@@ -108,7 +97,9 @@ type Config struct {
 type Service struct {
 	store      Store
 	principals PrincipalReader
-	freshness  Freshness
+	audit      audit.ServerStore
+	// freshGuard asks for a fresh step before a create or a rotation.
+	freshGuard freshstep.Guard
 	authz      identity.Authorizer
 	reach      access.ReachConfig
 	makers     MakerChecker
@@ -120,13 +111,18 @@ type Service struct {
 
 var _ identity.Authenticator = (*Service)(nil)
 
-// NewService returns a Service. Store and Principals are required.
+// NewService returns a Service. Store, Principals, Audit and Guard are
+// required. A zero Guard is an ErrMissingDependency (fail closed).
 func NewService(cfg Config) (*Service, error) {
 	switch {
 	case cfg.Store == nil:
 		return nil, fmt.Errorf("%w: access token store", ErrMissingDependency)
 	case cfg.Principals == nil:
 		return nil, fmt.Errorf("%w: principal reader", ErrMissingDependency)
+	case cfg.Audit == nil:
+		return nil, fmt.Errorf("%w: audit store", ErrMissingDependency)
+	case cfg.Guard.IsZero():
+		return nil, fmt.Errorf("%w: fresh step guard", ErrMissingDependency)
 	}
 
 	now := cfg.Now
@@ -144,10 +140,11 @@ func NewService(cfg Config) (*Service, error) {
 		logger = slog.New(slog.DiscardHandler)
 	}
 
-	return &Service{
+	s := &Service{
 		store:      cfg.Store,
 		principals: cfg.Principals,
-		freshness:  cfg.Freshness,
+		audit:      cfg.Audit,
+		freshGuard: cfg.Guard,
 		authz:      cfg.Authorizer,
 		reach:      cfg.Reach,
 		makers:     cfg.Makers,
@@ -155,7 +152,9 @@ func NewService(cfg Config) (*Service, error) {
 		logger:     logger,
 		now:        now,
 		newID:      newID,
-	}, nil
+	}
+
+	return s, nil
 }
 
 // Now returns the time of the Service clock, in UTC to the millisecond:
@@ -182,7 +181,7 @@ type Input struct {
 func (s *Service) Create(
 	ctx context.Context, caller identity.Principal, e audit.Entry, scope Scope, in Input,
 ) (Token, Secret, error) {
-	if err := s.requireFresh(ctx, e.Subject); err != nil {
+	if err := s.requireFresh(ctx, e, createObject(in, e.Subject)); err != nil {
 		return Token{}, Secret{}, err
 	}
 
@@ -460,7 +459,9 @@ type Rotation struct {
 func (s *Service) Rotate(
 	ctx context.Context, caller identity.Principal, e audit.Entry, in RotateInput,
 ) (Rotation, Secret, error) {
-	if err := s.requireFresh(ctx, e.Subject); err != nil {
+	// The principal of the token is read after the check, so the denial names
+	// the token ID of the request.
+	if err := s.requireFresh(ctx, e, in.ID); err != nil {
 		return Rotation{}, Secret{}, err
 	}
 
@@ -873,17 +874,33 @@ func (s *Service) expiry(ctx context.Context, at, want time.Time) (time.Time, er
 	return expiry(p, at, want)
 }
 
-// requireFresh runs the MFA freshness check when one is wired.
-func (s *Service) requireFresh(ctx context.Context, subject string) error {
-	if s.freshness == nil {
+// requireFresh runs the fresh step guard. The guard asks for a step only when
+// its policy requires one. A refusal writes a denial entry of the change to
+// the server scope, with the subject, the request ID and the action of the
+// caller entry e, and a slog warning. A zero guard refuses (fail closed). When
+// the denial entry cannot be written, the error wraps both the refusal and
+// the audit error, and the change still does not run.
+//
+// Defense in depth: the handler and the store ask the same policy too, and the
+// handler writes a failure entry for a refused change. This guard stays so that
+// a new caller of the service cannot skip the check, and it writes the denial
+// entry at this layer. It does not rely on the handler entry.
+func (s *Service) requireFresh(ctx context.Context, e audit.Entry, object string) error {
+	err := s.freshGuard.Require(ctx, e.Subject)
+	if err == nil {
 		return nil
 	}
 
-	if err := s.freshness.RequireFresh(ctx, subject); err != nil {
-		return fmt.Errorf("mfa freshness: %w", err)
+	s.logger.WarnContext(ctx, "access token change denied: a fresh step is required",
+		slog.String("subject", e.Subject), slog.String("error", err.Error()))
+
+	refusal := fmt.Errorf("mfa freshness: %w", err)
+
+	if _, appendErr := s.audit.AppendServer(ctx, denied(e, s.Now(), object)); appendErr != nil {
+		return fmt.Errorf("%w: write denial entry: %w", refusal, appendErr)
 	}
 
-	return nil
+	return refusal
 }
 
 // change completes the entry of the caller for one change of the record
@@ -893,6 +910,29 @@ func change(e audit.Entry, at time.Time, object string) audit.Entry {
 	e.Namespace = audit.ServerScope
 	e.Kind = audit.KindChange
 	e.Outcome = audit.OutcomeSuccess
+	e.Object = object
+
+	return e
+}
+
+// createObject returns the object of a refused create: the principal that the
+// request names. The own scope names none, so the object is the person of the
+// caller, whose subject is subject.
+func createObject(in Input, subject string) string {
+	if in.PrincipalID != "" {
+		return in.PrincipalID
+	}
+
+	return subject
+}
+
+// denied returns e as the audit entry of a refused change of the record object
+// at the time at. It keeps the changes of the caller, as change does.
+func denied(e audit.Entry, at time.Time, object string) audit.Entry {
+	e.At = at
+	e.Namespace = audit.ServerScope
+	e.Kind = audit.KindChange
+	e.Outcome = audit.OutcomeDenied
 	e.Object = object
 
 	return e

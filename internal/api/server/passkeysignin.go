@@ -214,6 +214,7 @@ func (h *Handler) beginPasskeySignIn(w http.ResponseWriter, r *http.Request, _ i
 		SessionID:   "",
 		Caller:      zeroPrincipal(),
 		SignedInAt:  time.Time{},
+		Fresh:       false,
 	}
 
 	options, err := h.signIn.passkeySignIn.BeginAssertion(ctx, actor, mfa.CeremonySignIn, mfasvc.Binding{
@@ -264,6 +265,7 @@ func (h *Handler) finishPasskeySignIn(w http.ResponseWriter, r *http.Request, _ 
 		SessionID:   "",
 		Caller:      zeroPrincipal(),
 		SignedInAt:  time.Time{},
+		Fresh:       false,
 	}
 
 	signed, err := h.signIn.passkeySignIn.FinishSignIn(

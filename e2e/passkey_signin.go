@@ -155,7 +155,7 @@ func seedPasskey(ctx context.Context, st namespace.Store, in *passkeySeed) error
 	at := time.Now().UTC().Truncate(time.Millisecond)
 	actor := mfasvc.Actor{
 		Entry:       freshAdminEntry(at, mfasvc.Object("seed")),
-		PrincipalID: principalID, SessionID: "ses-e2e-seed",
+		PrincipalID: principalID, SessionID: "ses-e2e-seed", Fresh: true,
 	}
 	person := mfa.Person{ID: principalID, Name: principalID, DisplayName: principalID}
 

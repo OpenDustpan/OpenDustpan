@@ -7,6 +7,7 @@ import (
 	"encoding/json"
 	"net/http"
 	"slices"
+	"strconv"
 	"strings"
 	"testing"
 
@@ -174,11 +175,57 @@ func settingsScenario(t *testing.T, env *e2e.Env) {
 	settingsRemovalAlert(ctx, t, env)
 	settingsNamespace(ctx, t, env)
 	settingsAudit(ctx, t, env)
-	settingsFreshStep(ctx, t, env)
+	settingsFreshAuthEnabled(ctx, t, env)
 }
 
-// settingsFreshStep proves the fresh step of a change that reduces security.
-// Allowing plain connections is weaker. An access token never gives the step,
+// settingsFreshAuthEnabled proves the setting freshAuthEnabled through the
+// API. The first read shows the default false. A console session of an
+// administrator turns it on, and the fresh step of a weaker change runs while
+// it is on. The same session turns it off again. Each read after a change
+// shows the effective value and the database as its source.
+func settingsFreshAuthEnabled(ctx context.Context, t *testing.T, env *e2e.Env) {
+	t.Helper()
+
+	read, doc := settingsRead(ctx, t, env, settingsRoute)
+	settingsWantFreshAuth(t, doc, false, "default")
+
+	settingsFreshAuthPatch(ctx, t, env, read.Header.Get("ETag"), true)
+	settingsFreshStep(ctx, t, env)
+
+	read, _ = settingsRead(ctx, t, env, settingsRoute)
+	settingsFreshAuthPatch(ctx, t, env, read.Header.Get("ETag"), false)
+}
+
+// settingsFreshAuthPatch sets freshAuthEnabled to on with a console session of
+// an administrator that has a fresh sign-in, at the revision tag. It then
+// reads the effective value and its source.
+func settingsFreshAuthPatch(ctx context.Context, t *testing.T, env *e2e.Env, tag string, on bool) {
+	t.Helper()
+
+	body := `{"freshAuthEnabled":` + strconv.FormatBool(on) + `}`
+	if status, answer := env.FreshAdminMergePatch(ctx, t, settingsRoute, tag, body); status != http.StatusOK {
+		t.Fatalf("PATCH %s with a fresh console session answers %d %s, want 200", body, status, answer)
+	}
+
+	_, doc := settingsRead(ctx, t, env, settingsRoute)
+	settingsWantFreshAuth(t, doc, on, "database")
+}
+
+// settingsWantFreshAuth fails unless doc shows freshAuthEnabled with the
+// bool value want from the source.
+func settingsWantFreshAuth(t *testing.T, doc settingsDoc, want any, source string) {
+	t.Helper()
+
+	fresh := settingFor(t, doc, "freshAuthEnabled")
+	if fresh.Value != want || fresh.Source != source || fresh.Locked || !fresh.DatabaseLayer {
+		t.Fatalf("freshAuthEnabled = %+v, want %v from the source %s, unlocked, with a database layer",
+			fresh, want, source)
+	}
+}
+
+// settingsFreshStep proves the fresh step of a change that reduces security,
+// while the setting freshAuthEnabled is on. Allowing plain connections is
+// weaker. An access token never gives the step,
 // so the change answers 403 and the revision stays. A console session with a
 // fresh sign-in makes the same change. The step runs after the audit counts,
 // because it writes one more failure entry.

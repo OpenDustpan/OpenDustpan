@@ -154,7 +154,9 @@ func TestRegistrationRefusesEmptyIDs(t *testing.T) {
 
 	nobody := &mfasvc.Actor{
 		Entry: base(time.Now(), "x"), PrincipalID: "", SessionID: "",
-		Caller: noPrincipal(), SignedInAt: time.Time{},
+		Caller:     noPrincipal(),
+		SignedInAt: time.Time{},
+		Fresh:      true,
 	}
 
 	_, err = svc.FinishRegistration(t.Context(), nobody, mfa.Person{ID: "", Name: "x", DisplayName: ""}, "key",

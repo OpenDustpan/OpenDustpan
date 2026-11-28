@@ -22,7 +22,6 @@ import (
 	"opendustpan.org/opendustpan/pkg/access"
 	"opendustpan.org/opendustpan/pkg/accesstoken"
 	"opendustpan.org/opendustpan/pkg/audit"
-	"opendustpan.org/opendustpan/pkg/freshstep"
 	"opendustpan.org/opendustpan/pkg/namespace"
 	"opendustpan.org/opendustpan/pkg/principal"
 	"opendustpan.org/opendustpan/pkg/trustrule"
@@ -262,9 +261,8 @@ func newMtlsEnv(t *testing.T) *mtlsEnv {
 		Reach: access.ReachConfig{
 			Grants: s, Roles: s, Callers: s, Principals: s, Collections: nil, Units: s,
 		},
-		Store: s, Principals: s, Freshness: nil, Authorizer: nil, TempAdmins: nil, Logger: nil,
+		Store: s, Principals: s, Audit: s, Guard: noFreshStepGuard(t), Authorizer: nil, TempAdmins: nil, Logger: nil,
 		Now: e.now, NewID: nil,
-		Guard: freshstep.Guard{},
 	})
 	if err != nil {
 		t.Fatalf("token service: %v", err)

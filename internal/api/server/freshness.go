@@ -11,6 +11,7 @@ import (
 	"opendustpan.org/opendustpan/internal/errcode"
 	"opendustpan.org/opendustpan/internal/sessionauth"
 	"opendustpan.org/opendustpan/pkg/audit"
+	"opendustpan.org/opendustpan/pkg/freshstep"
 	"opendustpan.org/opendustpan/pkg/identity"
 	"opendustpan.org/opendustpan/pkg/localuser"
 	"opendustpan.org/opendustpan/pkg/session"
@@ -76,6 +77,25 @@ const freshStepRequiredCode = sessionauth.FreshStepRequiredCode
 // freshnessKey carries the freshness check of a token change.
 type freshnessKey struct{}
 
+// freshGuardKey carries the fresh step guard of the handler.
+type freshGuardKey struct{}
+
+// withFreshness returns ctx with the freshness check and the fresh step
+// guard of h. A handler that asks for a step calls it before requireFresh.
+// For a console session, ctx also carries the session and its sign-in, so the
+// fresh step guard of a service sees them.
+func (h *Handler) withFreshness(ctx context.Context) context.Context {
+	if caller, ok := ctx.Value(sessionKey{}).(sessionCaller); ok {
+		ctx = sessionauth.WithSignIn(sessionauth.WithSession(ctx), sessionauth.SignIn{
+			At: caller.Match.Session.AuthTime, Provider: caller.Match.Session.Provider,
+		})
+	}
+
+	ctx = context.WithValue(ctx, freshnessKey{}, h.checkTokenFreshness)
+
+	return context.WithValue(ctx, freshGuardKey{}, h.freshGuard)
+}
+
 // freshWindow is the token freshness window that a check may compare: 0,
 // or a whole count of seconds from session.MinTokenFreshness to
 // session.MaxTokenFreshness. newFreshWindow is the only constructor, so no
@@ -108,8 +128,19 @@ func (w freshWindow) duration() time.Duration { return time.Duration(w) }
 // requireFresh runs the freshness check of a change on a request with a
 // console session. A request with no session, for example one with an
 // access token, returns errFreshStepRequired. A request with a session and
-// no check in its context returns errNoFreshnessCheck.
+// no check in its context returns errNoFreshnessCheck. With the setting
+// freshAuthEnabled off, it asks for no step and returns nil.
 func requireFresh(r *http.Request) error {
+	// Defense in depth: each handler that asks for a step asks the guard
+	// through this function, and the services and the store hold the same
+	// policy. This guard does not rely on the route table, the services or the
+	// store. A request context with no guard requires the step (fail closed).
+	ctx := r.Context()
+
+	if guard, ok := ctx.Value(freshGuardKey{}).(freshstep.Guard); ok && guard.Require(ctx, "") == nil {
+		return nil
+	}
+
 	if _, ok := sessionFromRequest(r); !ok {
 		return errFreshStepRequired
 	}
@@ -177,7 +208,58 @@ func (h *Handler) freshnessWindow(ctx context.Context) freshWindow {
 // errFreshStepRequired. A sign-in after now is too old. A window of 0 asks
 // at each step, so no sign-in passes. With no session policy
 // service, the window is session.DefaultTokenFreshness.
+//
+// With the setting freshAuthEnabled off, it returns nil: nothing is asked.
 func (h *Handler) checkTokenFreshness(r *http.Request) error {
+	// Defense in depth: requireFresh asks the guard too. This guard stays, so
+	// that a caller of this check, for example a service through the context,
+	// cannot skip the setting. It does not rely on the services or the store.
+	if !h.freshRequired(r.Context()) {
+		return nil
+	}
+
+	return h.checkSignInFreshness(r)
+}
+
+// SetFreshPolicy sets the policy that says if a change needs a fresh
+// authentication. The server sets it once, before the handler serves a
+// request. With no policy, each change needs the step.
+func (h *Handler) SetFreshPolicy(p freshstep.Policy) {
+	if p == nil {
+		// NewGuard refuses a nil policy. The nil PolicyFunc is a policy
+		// that always requires the step, so a nil policy fails closed.
+		p = freshstep.PolicyFunc(nil)
+	}
+
+	h.freshGuard = newFreshGuard(p)
+}
+
+// newFreshGuard returns the fresh step guard of p. Its check returns
+// errFreshStepRequired, so Require returns nil only when p asks for no step.
+// Each site that gets a refusal runs its own check of the request.
+func newFreshGuard(p freshstep.Policy) freshstep.Guard {
+	guard, err := freshstep.NewGuard(p, func(context.Context, string) error { return errFreshStepRequired })
+	if err != nil {
+		// NewGuard refuses only a nil policy or a nil check, and both are
+		// set here. The zero Guard runs its check and refuses, so this also
+		// fails closed.
+		return freshstep.Guard{}
+	}
+
+	return guard
+}
+
+// freshRequired reports whether the installation requires a fresh step. A
+// handler with no policy, or a guard that cannot answer, requires it (fail
+// closed).
+func (h *Handler) freshRequired(ctx context.Context) bool {
+	return h.freshGuard.Require(ctx, "") != nil
+}
+
+// checkSignInFreshness runs the sign-in age check of checkTokenFreshness with
+// no policy. It is the proof of a person, and the setting does not turn it
+// off. A caller that uses it for a step asks the policy first.
+func (h *Handler) checkSignInFreshness(r *http.Request) error {
 	caller, ok := sessionFromRequest(r)
 	if !ok {
 		return errFreshStepRequired
@@ -220,7 +302,7 @@ func (h *Handler) checkTokenFreshness(r *http.Request) error {
 // object, best effort.
 func (h *Handler) fresh(action identity.Action, serve RouteHandler) RouteHandler {
 	return func(w http.ResponseWriter, r *http.Request, p identity.Principal, obj identity.Object) {
-		ctx := context.WithValue(r.Context(), freshnessKey{}, h.checkTokenFreshness)
+		ctx := h.withFreshness(r.Context())
 
 		r = r.WithContext(ctx)
 
@@ -239,4 +321,43 @@ func (h *Handler) fresh(action identity.Action, serve RouteHandler) RouteHandler
 
 		serve(w, r, p, obj)
 	}
+}
+
+// freshAlways wraps a write that always needs a fresh authentication, whatever
+// the setting freshAuthEnabled says: a passkey change and a local-user reset.
+// A request with an access token gets 403 with the error code
+// mfa.fresh-step-required, and a session with an old sign-in gets the same 403
+// with the path of a new sign-in. The refusal is audited as in fresh.
+func (h *Handler) freshAlways(action identity.Action, serve RouteHandler) RouteHandler {
+	return func(w http.ResponseWriter, r *http.Request, p identity.Principal, obj identity.Object) {
+		ctx := h.withFreshness(r.Context())
+
+		r = r.WithContext(ctx)
+
+		if err := h.requireAlwaysFresh(r); err != nil {
+			h.appendObjectChange(r, p, obj, serverChange{
+				at: h.now(), action: action, object: obj.String(), outcome: audit.OutcomeFailure,
+			})
+			h.writeError(ctx, w, err)
+
+			return
+		}
+
+		serve(w, r, p, obj)
+	}
+}
+
+// requireAlwaysFresh runs the sign-in age check of a write that always needs a
+// fresh authentication. It reads no setting and no policy of the installation,
+// so the setting freshAuthEnabled cannot turn it off. A request with no console
+// session, for example one with an access token, returns errFreshStepRequired.
+func (h *Handler) requireAlwaysFresh(r *http.Request) error {
+	// Defense in depth: checkSignInFreshness refuses a request with no console
+	// session too. This check stays, so that a caller cannot reach the age check
+	// with an access token if checkSignInFreshness changes.
+	if _, ok := sessionFromRequest(r); !ok {
+		return errFreshStepRequired
+	}
+
+	return h.checkSignInFreshness(r)
 }

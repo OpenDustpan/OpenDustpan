@@ -2,9 +2,12 @@ package trustruletest
 
 import (
 	"errors"
+	"strconv"
 	"testing"
 
 	"opendustpan.org/opendustpan/pkg/accesstoken"
+	"opendustpan.org/opendustpan/pkg/namespace"
+	"opendustpan.org/opendustpan/pkg/principal"
 	"opendustpan.org/opendustpan/pkg/trustrule"
 )
 
@@ -35,6 +38,9 @@ func mtlsExchangeCases() []suiteCase {
 		{"RecordExchangeRefusesAWildcardSPIFFEID", testMtlsWildcard},
 		{"RecordExchangeRefusesTheWrongRuleOfTheSPIFFEID", testMtlsWrongRule},
 		{"RecordExchangeRefusesASPIFFEIDOfNoRule", testMtlsNoRule},
+		{"RecordExchangeAcceptsTheOneRuleAmongManyRules", testMtlsManyRules},
+		{"RecordExchangeRefusesATwinAmongManyRules", testMtlsTwinAmongManyRules},
+		{"RecordExchangeIgnoresTheSameSPIFFEIDInAnotherNamespace", testMtlsOtherNamespaceSameSPIFFEID},
 	}
 }
 
@@ -261,4 +267,98 @@ func testMtlsNoRule(t *testing.T, h Harness) {
 
 	err := h.Exchanges.RecordExchange(t.Context(), x, fence, auditEntry(nsAcme, "exchange", r.ID))
 	mustRefuseMtls(t, h, &x, mtlsRefusal{err: err, want: trustrule.ErrNotFound, entries: twoRules})
+}
+
+// testMtlsManyRules fills one namespace to its cap of MaxPerNamespace rules
+// with other SPIFFE IDs and the one rule of the exchange. The exchange is
+// recorded, and the read of the recheck does not grow with the size of the
+// namespace. The port holds no more rules than the cap, so the proof with
+// more rules stays in the adapters.
+func testMtlsManyRules(t *testing.T, h Harness) {
+	t.Helper()
+
+	fence := h.Namespace(t, nsAcme)
+	for i := range trustrule.MaxPerNamespace - 1 {
+		mtlsRule(t, h, "other-"+fmtInt(i), "spiffe://example.org/ns/acme/sa/other-"+fmtInt(i))
+	}
+
+	r := mtlsRule(t, h, "deploy", mtlsSPIFFEID)
+	x := mtlsExchangeOf(t, h, &r, mtlsSPIFFEID)
+
+	if err := h.Exchanges.RecordExchange(t.Context(), x, fence, auditEntry(nsAcme, "exchange", r.ID)); err != nil {
+		t.Fatalf("RecordExchange = %v", err)
+	}
+
+	if _, ok := h.Token(t, x.Token.ID); !ok {
+		t.Fatal("token not stored")
+	}
+}
+
+// testMtlsTwinAmongManyRules fills one namespace to its cap of
+// MaxPerNamespace rules: other SPIFFE IDs, the rule of the exchange and a
+// twin of the same bundle. The exchange is refused.
+func testMtlsTwinAmongManyRules(t *testing.T, h Harness) {
+	t.Helper()
+
+	fence := h.Namespace(t, nsAcme)
+	for i := range trustrule.MaxPerNamespace - 2 {
+		mtlsRule(t, h, "other-"+fmtInt(i), "spiffe://example.org/ns/acme/sa/other-"+fmtInt(i))
+	}
+
+	r := mtlsRule(t, h, "deploy", mtlsSPIFFEID)
+	_ = mtlsRule(t, h, "twin", mtlsSPIFFEID)
+	x := mtlsExchangeOf(t, h, &r, mtlsSPIFFEID)
+
+	err := h.Exchanges.RecordExchange(t.Context(), x, fence, auditEntry(nsAcme, "exchange", r.ID))
+	mustRefuseMtls(t, h, &x, mtlsRefusal{err: err, want: trustrule.ErrNotFound, entries: trustrule.MaxPerNamespace})
+}
+
+// testMtlsOtherNamespaceSameSPIFFEID stores a rule of another namespace with
+// the same SPIFFE ID. The exchange in acme is recorded.
+func testMtlsOtherNamespaceSameSPIFFEID(t *testing.T, h Harness) {
+	t.Helper()
+
+	acme := h.Namespace(t, nsAcme)
+
+	_ = mtlsRuleIn(t, h, nsOther, "other", mtlsSPIFFEID)
+	r := mtlsRule(t, h, "deploy", mtlsSPIFFEID)
+	x := mtlsExchangeOf(t, h, &r, mtlsSPIFFEID)
+
+	if err := h.Exchanges.RecordExchange(t.Context(), x, acme, auditEntry(nsAcme, "exchange", r.ID)); err != nil {
+		t.Fatalf("RecordExchange = %v", err)
+	}
+
+	if _, ok := h.Token(t, x.Token.ID); !ok {
+		t.Fatal("token not stored")
+	}
+}
+
+// mtlsRuleIn makes the namespace ns when it does not exist, saves its bundle
+// and creates a rule of ns in that bundle with the SPIFFE ID pattern pattern.
+func mtlsRuleIn(t *testing.T, h Harness, ns, name, pattern string) trustrule.Rule {
+	t.Helper()
+
+	fence := h.Namespace(t, ns)
+	id := h.Principal(t, namespace.Name(ns), principal.KindService)
+
+	b, err := h.Bundles.GetBundle(t.Context(), namespace.Name(ns))
+	if errors.Is(err, trustrule.ErrNotFound) {
+		b, err = h.Bundles.SaveBundle(t.Context(), namespace.Name(ns), saveFields(testCA(t)), fence,
+			bundleEntry(namespace.Name(ns), "save"))
+	}
+	if err != nil {
+		t.Fatalf("bundle of %s: %v", ns, err)
+	}
+
+	r := newRule(namespace.Name(ns), name, id)
+	r.Bundle = string(b.ID)
+	r.SpiffeIDPattern = pattern
+	mustCreate(t, h, r)
+
+	return r
+}
+
+// fmtInt formats a small integer for test names and IDs.
+func fmtInt(i int) string {
+	return strconv.Itoa(i)
 }

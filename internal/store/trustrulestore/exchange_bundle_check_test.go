@@ -43,10 +43,8 @@ func TestCheckExchangeBundle(t *testing.T) {
 	twin.ID = "trb-other"
 
 	same := mtls(func(*trustrule.Exchange) {})
-	rules := func(bundle string) []trustrulestore.Row {
-		r := ruleRow(string(same.Rule), bundle, checkSPIFFEID)
-
-		return []trustrulestore.Row{r, ruleRow(string(trustrule.NewID()), id, "spiffe://example.org/ns/acme/sa/o")}
+	rule := func(bundle string) trustrulestore.Row {
+		return ruleRow(string(same.Rule), bundle, checkSPIFFEID)
 	}
 
 	cases := []struct {
@@ -55,53 +53,56 @@ func TestCheckExchangeBundle(t *testing.T) {
 		want error
 	}{
 		{"its bundle and its active version", func() error {
-			return trustrulestore.CheckExchangeBundle(row, rules(id), &same)
+			return trustrulestore.CheckExchangeBundle(row, rule(id), &same)
 		}, nil},
 		{"no bundle row", func() error {
-			return trustrulestore.CheckExchangeBundle(nil, rules(id), &same)
+			return trustrulestore.CheckExchangeBundle(nil, rule(id), &same)
 		}, trustrule.ErrNotFound},
 		{"a row of another bundle", func() error {
-			return trustrulestore.CheckExchangeBundle(&twin, rules(id), &same)
+			return trustrulestore.CheckExchangeBundle(&twin, rule(id), &same)
 		}, trustrule.ErrNotFound},
 		{"a rule that names another bundle", func() error {
-			return trustrulestore.CheckExchangeBundle(row, rules("trb-other"), &same)
+			return trustrulestore.CheckExchangeBundle(row, rule("trb-other"), &same)
 		}, trustrule.ErrNotFound},
 		{"a rule that names no bundle", func() error {
-			return trustrulestore.CheckExchangeBundle(row, rules(""), &same)
+			return trustrulestore.CheckExchangeBundle(row, rule(""), &same)
+		}, trustrule.ErrNotFound},
+		{"the row of another rule in the same bundle", func() error {
+			return trustrulestore.CheckExchangeBundle(row, ruleRow("trr-other", id, checkSPIFFEID), &same)
 		}, trustrule.ErrNotFound},
 		{"no row of the rule", func() error {
-			return trustrulestore.CheckExchangeBundle(row, nil, &same)
+			return trustrulestore.CheckExchangeBundle(row, zeroRow(), &same)
 		}, trustrule.ErrNotFound},
 		{"a new active version", func() error {
-			return trustrulestore.CheckExchangeBundle(&rotated, rules(id), &same)
+			return trustrulestore.CheckExchangeBundle(&rotated, rule(id), &same)
 		}, trustrule.ErrNotFound},
 		{"an older active version", func() error {
-			return trustrulestore.CheckExchangeBundle(&older, rules(id), &same)
+			return trustrulestore.CheckExchangeBundle(&older, rule(id), &same)
 		}, trustrule.ErrNotFound},
 		{"a jwt-exchange token with no bundle row", func() error {
 			x := jwt(func(*trustrule.Exchange) {})
 
-			return trustrulestore.CheckExchangeBundle(nil, nil, &x)
+			return trustrulestore.CheckExchangeBundle(nil, zeroRow(), &x)
 		}, nil},
 		{"a personal token", func() error {
 			x := jwt(func(x *trustrule.Exchange) { x.Token.Kind = accesstoken.KindPersonal })
 
-			return trustrulestore.CheckExchangeBundle(row, rules(id), &x)
+			return trustrulestore.CheckExchangeBundle(row, rule(id), &x)
 		}, trustrule.ErrInvalid},
 		{"a service token", func() error {
 			x := jwt(func(x *trustrule.Exchange) { x.Token.Kind = accesstoken.KindService })
 
-			return trustrulestore.CheckExchangeBundle(row, rules(id), &x)
+			return trustrulestore.CheckExchangeBundle(row, rule(id), &x)
 		}, trustrule.ErrInvalid},
 		{"a token kind that no code knows", func() error {
 			x := jwt(func(x *trustrule.Exchange) { x.Token.Kind = accesstoken.Kind("other") })
 
-			return trustrulestore.CheckExchangeBundle(row, rules(id), &x)
+			return trustrulestore.CheckExchangeBundle(row, rule(id), &x)
 		}, trustrule.ErrInvalid},
 		{"an empty token kind", func() error {
 			x := jwt(func(x *trustrule.Exchange) { x.Token.Kind = "" })
 
-			return trustrulestore.CheckExchangeBundle(row, rules(id), &x)
+			return trustrulestore.CheckExchangeBundle(row, rule(id), &x)
 		}, trustrule.ErrInvalid},
 		{"the kind rule for an unknown kind", func() error {
 			need, err := trustrulestore.ExchangeKindNeedsBundle(accesstoken.Kind("other"))

@@ -450,10 +450,12 @@ func (h *Handler) answerJobList(w http.ResponseWriter, r *http.Request, p *jobPa
 	ctx := r.Context()
 	out := listJobsResponse{Jobs: make([]jobResponse, 0, len(p.jobs)), NextPageToken: "", Damaged: p.damaged}
 	names := map[string]string{}
+	// One read of the setting for the page: each job shows the same answer.
+	freshRequired := h.freshGuard.Required(ctx)
 
 	for i := range p.jobs {
 		j := &p.jobs[i]
-		doc := toJobResponse(j, h.approvers)
+		doc := toJobResponse(j, h.approvers, freshRequired)
 
 		if j.Spec.Pool != "" {
 			name, seen := names[j.Spec.Pool]

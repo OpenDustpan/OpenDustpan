@@ -109,12 +109,12 @@ func checkDevJobAfterStrip(t *testing.T, dst DevDataStore) {
 	gates, approvals := got.Phases[0].Gates, got.Phases[0].Approvals
 
 	production := gate.ApproverPolicy{Production: true, IsDev: principal.IsDevSubject}
-	if s := job.GatesStatus(gates, approvals, got.StartedBy, production); s != job.GateWaiting {
+	if s := job.GatesStatus(gates, approvals, got.StartedBy, production, true); s != job.GateWaiting {
 		t.Fatalf("status of the dev approval on production = %s, want %s", s, job.GateWaiting)
 	}
 
 	dev := gate.ApproverPolicy{Production: false, IsDev: principal.IsDevSubject}
-	if s := job.GatesStatus(gates, approvals, got.StartedBy, dev); s != job.GateOpen {
+	if s := job.GatesStatus(gates, approvals, got.StartedBy, dev, true); s != job.GateOpen {
 		t.Fatalf("status of the dev approval on a dev installation = %s, want %s", s, job.GateOpen)
 	}
 }

@@ -2014,7 +2014,11 @@ func checkPulumiReveal(ctx context.Context, tb testing.TB, env *e2e.Env, rc reve
 
 	body := `{"path":` + strconv.Quote(path) + `}`
 
-	// An access token never gives the fresh authentication that a reveal needs.
+	// An access token never gives the fresh authentication that a reveal needs,
+	// while freshAuthEnabled is on. With the default off, the token reveals.
+	restoreFreshAuth := env.EnableFreshAuth(ctx, tb)
+	defer restoreFreshAuth()
+
 	tokenStatus, tokenBody, tokenErr := env.APIStatus(ctx, http.MethodPost, base+"/state/latest/reveal", body)
 	if tokenErr != nil {
 		return fmt.Errorf("%w: POST reveal with a token: %w", errUnexpected, tokenErr)
@@ -7461,9 +7465,13 @@ func checkTFEReveal(ctx context.Context, t *testing.T, env *e2e.Env, base, path 
 
 // checkTFERevealTokenRefused proves an access token never gives the fresh
 // authentication that the reveal call needs: the call answers 403 with
-// mfa.fresh-step-required and no-store, and no value.
+// mfa.fresh-step-required and no-store, and no value. The step turns
+// freshAuthEnabled on first: with the default off, the token reveals.
 func checkTFERevealTokenRefused(ctx context.Context, t *testing.T, env *e2e.Env, base, path string) {
 	t.Helper()
+
+	restoreFreshAuth := env.EnableFreshAuth(ctx, t)
+	defer restoreFreshAuth()
 
 	refused, err := env.TFEStatusHeaders(
 		ctx, env.TokenA(), http.MethodPost, base+"/actions/reveal", revealRequestBody(t, path),

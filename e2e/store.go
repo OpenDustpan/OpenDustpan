@@ -213,9 +213,45 @@ func dropSchema(ctx context.Context, tb testing.TB, base, schema string) {
 
 	// The store keeps its control tables in a second schema, <name>_control.
 	for _, name := range []string{schema, schema + "_control"} {
+		dropSchemaTables(ctx, tb, conn, name)
+
 		_, err = conn.Exec(ctx, "DROP SCHEMA IF EXISTS "+pgx.Identifier{name}.Sanitize()+" CASCADE")
 		if err != nil {
 			tb.Errorf("drop schema %s: %v", name, err)
+		}
+	}
+}
+
+// dropSchemaTables drops each table of schema in a statement of its own.
+// One DROP SCHEMA ... CASCADE takes a lock on each object in the schema in one
+// transaction, about a thousand with the types of the tables. The server holds
+// max_locks_per_transaction times max_connections locks for all sessions
+// together (6,400 with the defaults), so parallel drops filled the lock table
+// ("out of shared memory", SQLSTATE 53200). One table at a time holds only the
+// locks of that table and its indexes. The drop of the schema that follows then
+// has almost no object left to lock. A failure here is not an error of the
+// test: the drop of the schema removes what is left and reports its own error.
+func dropSchemaTables(ctx context.Context, tb testing.TB, conn *pgx.Conn, schema string) {
+	tb.Helper()
+
+	rows, err := conn.Query(ctx, "SELECT tablename FROM pg_tables WHERE schemaname = $1", schema)
+	if err != nil {
+		tb.Logf("list tables of schema %s: %v", schema, err)
+
+		return
+	}
+
+	tables, err := pgx.CollectRows(rows, pgx.RowTo[string])
+	if err != nil {
+		tb.Logf("read tables of schema %s: %v", schema, err)
+
+		return
+	}
+
+	for _, table := range tables {
+		_, err = conn.Exec(ctx, "DROP TABLE IF EXISTS "+pgx.Identifier{schema, table}.Sanitize()+" CASCADE")
+		if err != nil {
+			tb.Logf("drop table %s.%s: %v", schema, table, err)
 		}
 	}
 }
