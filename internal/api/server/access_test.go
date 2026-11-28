@@ -767,6 +767,194 @@ func checkGrantKindActions(t *testing.T, grantID string, manage, read identity.A
 	}
 }
 
+// TestStoredSiteAdministratorRevokesHousekeepingGrantsByRoute proves that a
+// stored site administrator revokes each grant of the built-in housekeeping
+// principals by its ID, on @server and on a namespace, and that each revoke
+// writes one audit entry. The site administrator holds none of the actions
+// that the housekeeping roles give, so the revoke needs only the
+// manage-access action of the grant's object.
+func TestStoredSiteAdministratorRevokesHousekeepingGrantsByRoute(t *testing.T) {
+	t.Parallel()
+
+	f := newAccessFixture(t)
+
+	f.seed(t, "site", access.RoleSiteAdministrator, identity.ServerObject())
+	f.as(t, "ann", apiCall{http.MethodPost, "/api/server/namespaces", `{"name":"gamma"}`, http.StatusCreated}, nil)
+
+	var serverList grantListDoc
+	f.as(t, "ann", apiCall{http.MethodGet, "/api/server/grants", "", http.StatusOK}, &serverList)
+
+	installation := grantsWithRolePrefix(serverList.Grants, "housekeeping-")
+
+	var namespaceList grantListDoc
+	f.as(t, "ann", apiCall{
+		http.MethodGet, "/api/server/namespaces/gamma/grants", "", http.StatusOK,
+	}, &namespaceList)
+
+	namespaces := grantsWithRolePrefix(namespaceList.Grants, "housekeeping-")
+
+	wantInstallation, wantNamespaces := 0, 0
+
+	for _, p := range principal.HousekeepingPurposes() {
+		if p.ActsOnInstallation() {
+			wantInstallation++
+		}
+
+		if p.ActsInsideNamespace() {
+			wantNamespaces++
+		}
+	}
+
+	if len(installation) != wantInstallation || len(namespaces) != wantNamespaces {
+		t.Fatalf("housekeeping grants = %d on @server and %d on gamma, want %d and %d",
+			len(installation), len(namespaces), wantInstallation, wantNamespaces)
+	}
+
+	checkRevokeByRoute(t, f, audit.ServerScope, installation)
+
+	for i := range namespaces {
+		checkRevokeByRoute(t, f, "gamma", []grantDoc{namespaces[i]})
+	}
+}
+
+// checkRevokeByRoute revokes each grant of grants as the stored site
+// administrator and checks that each revoke added one entry of the scope. A
+// grant of a namespace already has the entry of its creation.
+func checkRevokeByRoute(t *testing.T, f accessFixture, scope namespace.Name, grants []grantDoc) {
+	t.Helper()
+
+	count := func(grantID string) int {
+		listing, err := f.store.List(t.Context(), scope, audit.Page{Size: audit.MaxPageSize, Before: 0})
+		if err != nil {
+			t.Fatalf("list audit of %q: %v", scope, err)
+		}
+
+		found := 0
+
+		for j := range listing.Entries {
+			e := listing.Entries[j]
+			if strings.HasPrefix(e.Object, "grant:"+grantID+" ") && e.Outcome == audit.OutcomeSuccess {
+				found++
+			}
+		}
+
+		return found
+	}
+
+	for i := range grants {
+		g := grants[i]
+		before := count(g.ID)
+
+		f.as(t, "site", apiCall{http.MethodDelete, "/api/server/grants/" + g.ID, "", http.StatusNoContent}, nil)
+
+		if after := count(g.ID); after != before+1 {
+			t.Fatalf("entries of grant %s in %q went from %d to %d, want one more", g.ID, scope, before, after)
+		}
+	}
+}
+
+// grantsWithRolePrefix returns the grants whose role starts with prefix.
+func grantsWithRolePrefix(grants []grantDoc, prefix string) []grantDoc {
+	var out []grantDoc
+
+	for i := range grants {
+		if strings.HasPrefix(grants[i].Role, prefix) {
+			out = append(out, grants[i])
+		}
+	}
+
+	return out
+}
+
+// TestRevokeBuiltinWithoutManageAccessIsRefused proves that a caller with the
+// read action of @server but without its manage-access action cannot revoke
+// the grant of a built-in principal, and that the refusal writes an audit
+// entry.
+func TestRevokeBuiltinWithoutManageAccessIsRefused(t *testing.T) {
+	t.Parallel()
+
+	f := newAccessFixture(t)
+
+	f.seed(t, "reader", "", identity.Object{})
+
+	var role roleDoc
+	f.as(t, "ann", apiCall{
+		http.MethodPost, "/api/server/roles",
+		`{"name":"access-reader","actions":["server:read-access"]}`, http.StatusCreated,
+	}, &role)
+
+	f.as(t, "ann", apiCall{
+		http.MethodPost, "/api/server/grants",
+		fmt.Sprintf(`{"subject":"principal:prn-reader","role":%q}`, role.ID), http.StatusCreated,
+	}, nil)
+
+	var list grantListDoc
+	f.as(t, "ann", apiCall{http.MethodGet, "/api/server/grants", "", http.StatusOK}, &list)
+
+	grants := grantsWithRolePrefix(list.Grants, "housekeeping-")
+	if len(grants) == 0 {
+		t.Fatal("no housekeeping grant on @server")
+	}
+
+	f.as(t, "reader", apiCall{
+		http.MethodDelete, "/api/server/grants/" + grants[0].ID, "", http.StatusForbidden,
+	}, nil)
+
+	listing, err := f.store.List(t.Context(), audit.ServerScope, audit.Page{Size: audit.MaxPageSize, Before: 0})
+	if err != nil {
+		t.Fatalf("list audit: %v", err)
+	}
+
+	denied := 0
+
+	for i := range listing.Entries {
+		e := listing.Entries[i]
+		if e.Subject == "reader" && e.Action == string(identity.ActionServerManageAccess) &&
+			e.Outcome == audit.OutcomeDenied {
+			denied++
+		}
+	}
+
+	if denied != 1 {
+		t.Fatalf("denied entries of reader for server:manage-access = %d, want 1", denied)
+	}
+}
+
+// TestDeleteBuiltinPrincipalByRouteIsRefused proves that the route that
+// deletes a principal refuses a principal of the source builtin, and writes
+// one failure entry for the refusal.
+func TestDeleteBuiltinPrincipalByRouteIsRefused(t *testing.T) {
+	t.Parallel()
+
+	f := newAccessFixture(t)
+
+	const id = "prn-housekeeping-token-sweep"
+
+	f.as(t, "admin", apiCall{
+		http.MethodDelete, "/api/server/principals/" + id, "", http.StatusBadRequest,
+	}, nil)
+
+	f.as(t, "ann", apiCall{http.MethodGet, "/api/server/principals/" + id, "", http.StatusOK}, nil)
+
+	listing, err := f.store.List(t.Context(), audit.ServerScope, audit.Page{Size: audit.MaxPageSize, Before: 0})
+	if err != nil {
+		t.Fatalf("list audit: %v", err)
+	}
+
+	failures := 0
+
+	for i := range listing.Entries {
+		e := listing.Entries[i]
+		if e.Object == "principal:"+id && e.Outcome == audit.OutcomeFailure {
+			failures++
+		}
+	}
+
+	if failures != 1 {
+		t.Fatalf("failure entries of the delete of %s = %d, want 1", id, failures)
+	}
+}
+
 // TestOperatorRefusals checks the families over HTTP: an installation
 // operator cannot make a principal and cannot grant.
 func TestOperatorRefusals(t *testing.T) {
@@ -804,16 +992,21 @@ func TestNamespaceCreateGrantsTheCreator(t *testing.T) {
 	var list grantListDoc
 	f.as(t, "ann", apiCall{http.MethodGet, "/api/server/namespaces/gamma/grants", "", http.StatusOK}, &list)
 
-	if len(list.Grants) != 1 || list.Grants[0].Subject != "principal:prn-ann" ||
-		list.Grants[0].Role != access.RoleAdmin {
-		t.Fatalf("gamma grants = %+v, want admin to ann", list.Grants)
+	people := otherGrants(list.Grants)
+	if len(people) != 1 || people[0].Subject != "principal:prn-ann" || people[0].Role != access.RoleAdmin {
+		t.Fatalf("gamma grants = %+v, want admin to ann", people)
 	}
 
-	f.as(t, "admin", apiCall{http.MethodGet, "/api/server/namespaces/delta/grants", "", http.StatusOK}, &list)
+	checkHousekeepingGrants(t, "gamma", housekeepingGrants(list.Grants))
 
-	if len(list.Grants) != 0 {
-		t.Fatalf("delta grants = %+v, want none", list.Grants)
+	var deltaList grantListDoc
+	f.as(t, "admin", apiCall{http.MethodGet, "/api/server/namespaces/delta/grants", "", http.StatusOK}, &deltaList)
+
+	if people := otherGrants(deltaList.Grants); len(people) != 0 {
+		t.Fatalf("delta grants = %+v, want none", people)
 	}
+
+	checkHousekeepingGrants(t, "delta", housekeepingGrants(deltaList.Grants))
 
 	listing, err := f.store.List(t.Context(), audit.ServerScope, audit.Page{Size: audit.DefaultPageSize, Before: 0})
 	if err != nil {
@@ -835,14 +1028,87 @@ func TestNamespaceCreateGrantsTheCreator(t *testing.T) {
 	}
 }
 
-// list0 returns the one grant on gamma.
+// list0 returns the one grant on gamma that is not a housekeeping grant.
 func list0(t *testing.T, f accessFixture) grantDoc {
 	t.Helper()
 
 	var list grantListDoc
 	f.as(t, "ann", apiCall{http.MethodGet, "/api/server/namespaces/gamma/grants", "", http.StatusOK}, &list)
 
-	return list.Grants[0]
+	people := otherGrants(list.Grants)
+	if len(people) != 1 {
+		t.Fatalf("gamma grants = %+v, want one grant that is not a housekeeping grant", people)
+	}
+
+	return people[0]
+}
+
+// housekeepingNamespaceRoles maps the subject of each housekeeping principal
+// that acts inside a namespace to the role of its grant.
+func housekeepingNamespaceRoles() map[string]string {
+	roles := map[string]string{}
+
+	for _, p := range principal.HousekeepingPurposes() {
+		if p.ActsInsideNamespace() {
+			roles["principal:"+p.ID()] = p.NamespaceRole()
+		}
+	}
+
+	return roles
+}
+
+// housekeepingGrants returns the grants of the housekeeping principals that
+// act inside a namespace.
+func housekeepingGrants(grants []grantDoc) []grantDoc {
+	roles := housekeepingNamespaceRoles()
+
+	return grantsWhere(grants, func(subject string) bool {
+		_, ok := roles[subject]
+
+		return ok
+	})
+}
+
+// otherGrants returns the grants that are not grants of the housekeeping
+// principals that act inside a namespace.
+func otherGrants(grants []grantDoc) []grantDoc {
+	roles := housekeepingNamespaceRoles()
+
+	return grantsWhere(grants, func(subject string) bool {
+		_, ok := roles[subject]
+
+		return !ok
+	})
+}
+
+// grantsWhere returns the grants whose subject keep accepts.
+func grantsWhere(grants []grantDoc, keep func(subject string) bool) []grantDoc {
+	var out []grantDoc
+
+	for i := range grants {
+		if keep(grants[i].Subject) {
+			out = append(out, grants[i])
+		}
+	}
+
+	return out
+}
+
+// checkHousekeepingGrants checks that a created namespace has one grant for
+// each housekeeping principal that acts inside a namespace, with its role.
+func checkHousekeepingGrants(t *testing.T, name string, grants []grantDoc) {
+	t.Helper()
+
+	roles := housekeepingNamespaceRoles()
+	if len(grants) != len(roles) {
+		t.Fatalf("%s housekeeping grants = %+v, want %d", name, grants, len(roles))
+	}
+
+	for i := range grants {
+		if roles[grants[i].Subject] != grants[i].Role {
+			t.Errorf("%s grant %+v, want role %q", name, grants[i], roles[grants[i].Subject])
+		}
+	}
 }
 
 // TestGrantChangesWriteAuditEntries checks one entry for each grant and

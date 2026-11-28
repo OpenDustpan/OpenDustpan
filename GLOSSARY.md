@@ -1000,6 +1000,11 @@ The built-in principal of a namespace for a start that no person makes. Its subj
 _Avoid_: Trigger user, robot, bot account
 _Copy says_: "namespace service principal".
 
+**Housekeeping principal**:
+A built-in principal of the kind `service` and the source `builtin`. The server makes one for each automatic task, for example the sweep of expired tokens. Its subject is `housekeeping:<purpose>`. Each one holds one or two roles of its own, through stored grants that a user can list and revoke. Part 3, `housekeeping-principals`, refuses a token and a trust rule for it. A created namespace gets the grants of the housekeeping principals that act inside a namespace.
+_Avoid_: System user, robot, bot account
+_Copy says_: "housekeeping principal".
+
 **Follows trigger**:
 A trigger of the kind `follows`. It names a source unit. After the source applies, a plan of the unit of the trigger starts. A unit of one tool can follow a unit of another tool. The server refuses a cycle of follows triggers when a person saves one. A follows trigger is a declared dependency edge (ADR 153).
 _Avoid_: Downstream run, chained run, pipeline, dependency (an edge that a read of outputs makes is a dependency, ADR 153)

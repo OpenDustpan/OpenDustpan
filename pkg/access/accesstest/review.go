@@ -21,6 +21,7 @@ func reviewCases() []struct {
 		test func(t *testing.T, s access.Store)
 		name string
 	}{
+		{name: "review reads the install grants of the housekeeping principals", test: testReviewInstallGrants},
 		{name: "review reads each scope", test: testReviewScopes},
 		{name: "review filters by subject", test: testReviewSubject},
 		{name: "review pages in the order of grant time and ID", test: testReviewPaging},
@@ -148,13 +149,95 @@ func review(
 	return rows
 }
 
+// seededGrants returns the number of grants that the baseline seeds: one on
+// @server for each housekeeping purpose that acts on the installation.
+func seededGrants() int {
+	n := 0
+
+	for _, p := range principal.HousekeepingPurposes() {
+		if p.ActsOnInstallation() {
+			n++
+		}
+	}
+
+	return n
+}
+
+// installGrantIDs returns the IDs of the grants that the baseline seeds, in
+// the order of the review. Call it before the test adds a grant.
+func installGrantIDs(t *testing.T, rs access.ReviewStore) []string {
+	t.Helper()
+
+	rows, total, err := rs.ReviewGrants(t.Context(), everyRow(allScope()))
+	if err != nil {
+		t.Fatalf("read the install grants: %v", err)
+	}
+
+	want := seededGrants()
+	if total != int64(want) || len(rows) != want {
+		t.Fatalf("install grants = %d rows, total %d, want %d", len(rows), total, want)
+	}
+
+	out := make([]string, 0, len(rows))
+	for i := range rows {
+		out = append(out, rows[i].Grant.ID)
+	}
+
+	return out
+}
+
+// testReviewInstallGrants reads the grants that the baseline seeds: one grant
+// on @server of the role of each housekeeping purpose that acts on the
+// installation, with the server as the creator, and no other grant.
+func testReviewInstallGrants(t *testing.T, s access.Store) {
+	t.Helper()
+
+	rs := reviewStore(t, s)
+
+	rows, _, err := rs.ReviewGrants(t.Context(), everyRow(allScope()))
+	if err != nil {
+		t.Fatalf("read the install grants: %v", err)
+	}
+
+	byRole := map[string]access.Grant{}
+	for i := range rows {
+		byRole[rows[i].Grant.Role] = rows[i].Grant
+	}
+
+	if len(rows) != seededGrants() || len(byRole) != seededGrants() {
+		t.Fatalf("install grants = %d rows of %d roles, want %d", len(rows), len(byRole), seededGrants())
+	}
+
+	for _, p := range principal.HousekeepingPurposes() {
+		if _, ok := byRole[p.NamespaceRole()]; ok {
+			t.Fatalf("install grants hold the namespace role %q", p.NamespaceRole())
+		}
+
+		g, ok := byRole[p.InstallationRole()]
+		if ok != p.ActsOnInstallation() {
+			t.Fatalf("install grant of %s = %t, want %t", p.Subject(), ok, p.ActsOnInstallation())
+		}
+
+		if !ok {
+			continue
+		}
+
+		if g.Subject != principalSubject(p.ID()) || g.Object.String() != identity.ServerObject().String() ||
+			g.CreatedBy != "@server" {
+			t.Fatalf("install grant of %s = %+v, want %s on @server from @server", p.Subject(), g, p.InstallationRole())
+		}
+	}
+}
+
 func testReviewScopes(t *testing.T, s access.Store) {
 	t.Helper()
 
 	rs := reviewStore(t, s)
+	install := installGrantIDs(t, rs)
 	seedReview(t, s)
 
-	review(t, rs, "every grant", everyRow(allScope()), "grt-1", "grt-2", "grt-3", "grt-4", "grt-5", "grt-6")
+	review(t, rs, "every grant", everyRow(allScope()),
+		slices.Concat(install, []string{"grt-1", "grt-2", "grt-3", "grt-4", "grt-5", "grt-6"})...)
 
 	review(t, rs, "namespace acme", everyRow(access.ReviewScope{
 		Namespace: "acme", Object: identity.Object{}, Inside: nil, Containers: []string{"@server"},
@@ -261,6 +344,7 @@ func testReviewPaging(t *testing.T, s access.Store) {
 	t.Helper()
 
 	rs := reviewStore(t, s)
+	install := installGrantIDs(t, rs)
 
 	// Two grants in the same millisecond come in the order of their IDs.
 	grants := []access.Grant{
@@ -272,23 +356,33 @@ func testReviewPaging(t *testing.T, s access.Store) {
 		mustCreateGrant(t, s, grants[i])
 	}
 
+	want := slices.Concat(install, []string{"grt-a", "grt-b", "grt-c"})
+
 	q := everyRow(allScope())
 	q.Limit = 2
 
-	rows, total, err := rs.ReviewGrants(t.Context(), q)
-	if err != nil || len(rows) != 2 || total != 3 {
-		t.Fatalf("first page = %d rows, total %d, %v; want 2 of 3", len(rows), total, err)
+	var got []string
+
+	for {
+		rows, total, err := rs.ReviewGrants(t.Context(), q)
+		if err != nil || total != int64(len(want)) {
+			t.Fatalf("page after %+v = %d rows, total %d, %v; want %d rows in total",
+				q.After, len(rows), total, err, len(want))
+		}
+
+		for i := range rows {
+			got = append(got, rows[i].Grant.ID)
+		}
+
+		if len(rows) < q.Limit {
+			break
+		}
+
+		q.After = rows[len(rows)-1].Key()
 	}
 
-	if rows[0].Grant.ID != "grt-a" || rows[1].Grant.ID != "grt-b" {
-		t.Fatalf("first page = %s %s, want grt-a grt-b", rows[0].Grant.ID, rows[1].Grant.ID)
-	}
-
-	q.After = rows[1].Key()
-
-	rows, total, err = rs.ReviewGrants(t.Context(), q)
-	if err != nil || len(rows) != 1 || rows[0].Grant.ID != "grt-c" || total != 3 {
-		t.Fatalf("second page = %d rows, total %d, %v; want grt-c of 3", len(rows), total, err)
+	if !slices.Equal(got, want) {
+		t.Fatalf("pages = %v, want %v", got, want)
 	}
 }
 
@@ -296,6 +390,7 @@ func testReviewHistory(t *testing.T, s access.Store) {
 	t.Helper()
 
 	rs := reviewStore(t, s)
+	install := installGrantIDs(t, rs)
 	acme := identity.NamespaceObject("acme")
 
 	mustCreateGrant(t, s, grantAt(1, "grt-1", principalSubject("prn-a"), access.RoleViewer, acme))
@@ -305,7 +400,7 @@ func testReviewHistory(t *testing.T, s access.Store) {
 		t.Fatalf("revoke: %v", err)
 	}
 
-	review(t, rs, "snapshot", everyRow(allScope()), "grt-2")
+	review(t, rs, "snapshot", everyRow(allScope()), slices.Concat(install, []string{"grt-2"})...)
 
 	window := func(from, to int) access.ReviewQuery {
 		q := everyRow(allScope())
@@ -314,15 +409,16 @@ func testReviewHistory(t *testing.T, s access.Store) {
 		return q
 	}
 
-	rows := review(t, rs, "history of 0 to 9", window(0, 9), "grt-1", "grt-2")
-	if rows[0].RevokedAt == nil || !rows[0].RevokedAt.Equal(at(5)) || rows[0].RevokedBy != "admin" {
-		t.Fatalf("revoked row = %+v, want the revoke at minute 5 by admin", rows[0])
+	rows := review(t, rs, "history of 0 to 9", window(0, 9), slices.Concat(install, []string{"grt-1", "grt-2"})...)
+	revoked := rows[len(install)]
+	if revoked.RevokedAt == nil || !revoked.RevokedAt.Equal(at(5)) || revoked.RevokedBy != "admin" {
+		t.Fatalf("revoked row = %+v, want the revoke at minute 5 by admin", revoked)
 	}
 
-	review(t, rs, "history of 0 to 1", window(0, 1))
-	review(t, rs, "history of 0 to 2", window(0, 2), "grt-1")
-	review(t, rs, "history of 4 to 9", window(4, 9), "grt-1", "grt-2")
-	review(t, rs, "history of 5 to 9", window(5, 9), "grt-2")
+	review(t, rs, "history of 0 to 1", window(0, 1), install...)
+	review(t, rs, "history of 0 to 2", window(0, 2), slices.Concat(install, []string{"grt-1"})...)
+	review(t, rs, "history of 4 to 9", window(4, 9), slices.Concat(install, []string{"grt-1", "grt-2"})...)
+	review(t, rs, "history of 5 to 9", window(5, 9), slices.Concat(install, []string{"grt-2"})...)
 }
 
 func testReviewThroughGroups(t *testing.T, s access.Store) {

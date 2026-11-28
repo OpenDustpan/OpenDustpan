@@ -547,9 +547,19 @@ func deleteLifeCycleRecords(t *testing.T, h testHandler, group groupDoc, alice, 
 	mustCall(t, h, apiCall{http.MethodGet, "/api/server/principals", "", http.StatusOK}, &list)
 
 	// The person of the console session that the membership changes need is
-	// the other principal.
-	if len(list.Principals) != 2 || list.Principals[0].ID != deploy.ID || list.Principals[1].ID != "prn-tester" {
-		t.Fatalf("principals = %+v, want ci-deploy and the session person", list.Principals)
+	// the last principal. The principals that the installation makes sit
+	// between it and the deleted records.
+	want := 2 + len(principal.HousekeepingPurposes())
+	if len(list.Principals) != want || list.Principals[0].ID != deploy.ID ||
+		list.Principals[want-1].ID != "prn-tester" {
+		t.Fatalf("principals = %+v, want ci-deploy, %d install principals and the session person",
+			list.Principals, want-2)
+	}
+
+	for i, purpose := range principal.HousekeepingPurposes() {
+		if got := list.Principals[i+1].Subject; got != purpose.Subject() {
+			t.Fatalf("principal %d = %q, want %q", i+1, got, purpose.Subject())
+		}
 	}
 }
 
@@ -998,17 +1008,19 @@ func TestCreatePrincipalRefusesAgentAndUnknownKinds(t *testing.T) {
 				t.Fatalf("create of the kind %s = %s, want the code principal.invalid", tc.kind, body)
 			}
 
-			// The refusal stores no row. The only row is the person "tester",
-			// made by the sign-in.
+			// The refusal stores no row. The rows are the person "tester",
+			// made by the sign-in, and the principals that the installation
+			// makes.
 			page, err := principals.ListPrincipals(
-				t.Context(), principal.PageRequest{Prefix: "", Cursor: "", Limit: 0}, "",
+				t.Context(), principal.PageRequest{Prefix: "", Cursor: "", Limit: 0}, "", "",
 			)
 			if err != nil {
 				t.Fatalf("list principals: %v", err)
 			}
 
-			if page.Total != 1 {
-				t.Fatalf("the store holds %d principals, want only the person tester", page.Total)
+			if want := 1 + int64(len(principal.HousekeepingPurposes())); page.Total != want {
+				t.Fatalf("the store holds %d principals, want only the person tester and the install principals",
+					page.Total)
 			}
 		})
 	}
@@ -1070,6 +1082,115 @@ func TestListPrincipalsFiltersByKind(t *testing.T) {
 	})
 	if status != http.StatusBadRequest || !strings.Contains(body, `"errorCode":"principal.invalid"`) {
 		t.Fatalf("the list of the kind robot = %d %s, want 400 principal.invalid", status, body)
+	}
+}
+
+// TestListPrincipalsFiltersBySource proves that the list route filters by the
+// source: a source keeps the principals of that source, and a source that the
+// server does not know answers 400 principal.invalid.
+func TestListPrincipalsFiltersBySource(t *testing.T) {
+	t.Parallel()
+
+	svc, st := newTestPrincipalStore(t)
+	handler := newPrincipalHandler(t, svc)
+
+	at := time.Date(2026, time.November, 23, 12, 0, 0, 0, time.UTC)
+	seedSourcePrincipals(t, st, at)
+
+	checkSourcePage(t, handler, sourcePage{
+		path:    "/api/server/principals?source=oidc&prefix=ci-",
+		total:   1,
+		subject: "ci-oidc",
+		source:  "oidc",
+	})
+	checkSourcePage(t, handler, sourcePage{
+		path:    "/api/server/principals?source=local&prefix=ci-&kind=service",
+		total:   1,
+		subject: "ci-local",
+		source:  "local",
+	})
+	checkSourcePage(t, handler, sourcePage{
+		path:    "/api/server/principals?source=local&prefix=ci-&kind=person",
+		total:   0,
+		subject: "",
+		source:  "local",
+	})
+	checkSourcePage(t, handler, sourcePage{
+		path:    "/api/server/principals?source=builtin&kind=service",
+		total:   int64(len(principal.HousekeepingPurposes())),
+		subject: "",
+		source:  "builtin",
+	})
+
+	status, body := call(t, handler, apiCall{
+		http.MethodGet, "/api/server/principals?source=robot&prefix=ci-", "", http.StatusBadRequest,
+	})
+	if status != http.StatusBadRequest || !strings.Contains(body, `"errorCode":"principal.invalid"`) {
+		t.Fatalf("the list of the source robot = %d %s, want 400 principal.invalid", status, body)
+	}
+}
+
+// sourcePage is one expected page of the list with a source filter.
+type sourcePage struct {
+	path    string
+	total   int64
+	subject string
+	source  string
+}
+
+// checkSourcePage reads one page of the list with a source filter and checks
+// its total, its subject when want.subject is not empty, and the source of
+// every row.
+func checkSourcePage(t *testing.T, h testHandler, want sourcePage) {
+	t.Helper()
+
+	var page struct {
+		Principals []principalDoc `json:"principals"`
+		Total      int64          `json:"total"`
+	}
+	mustCall(t, h, apiCall{http.MethodGet, want.path, "", http.StatusOK}, &page)
+
+	if page.Total != want.total || int64(len(page.Principals)) != want.total {
+		t.Fatalf("the list %q = %+v, want %d principals", want.path, page, want.total)
+	}
+
+	if want.subject != "" && page.Principals[0].Subject != want.subject {
+		t.Fatalf("the list %q = %+v, want the subject %q", want.path, page, want.subject)
+	}
+
+	for i := range page.Principals {
+		if page.Principals[i].Source != want.source {
+			t.Fatalf("the list %q = %+v, want the source %q", want.path, page, want.source)
+		}
+	}
+}
+
+// seedSourcePrincipals writes one principal for each source that the test
+// reads, with the prefix ci- so that the seeded housekeeping principals stay
+// out of the reads.
+func seedSourcePrincipals(t *testing.T, st *sqlite.Store, at time.Time) {
+	t.Helper()
+
+	cases := []struct {
+		id      string
+		subject string
+		kind    principal.Kind
+		source  principal.Source
+	}{
+		{id: "prn-src-local", subject: "ci-local", kind: principal.KindService, source: principal.SourceLocal},
+		{id: "prn-src-oidc", subject: "ci-oidc", kind: principal.KindPerson, source: principal.SourceOIDC},
+		{id: "prn-src-scim", subject: "ci-scim", kind: principal.KindService, source: principal.SourceSCIM},
+	}
+
+	for _, tc := range cases {
+		p := principal.Principal{
+			CreatedAt: at, UpdatedAt: at, DisabledAt: time.Time{}, ID: tc.id, Subject: tc.subject,
+			DisplayName: "", Kind: tc.kind, Source: tc.source, Namespace: "", GroupCount: 0, BreakGlass: false,
+		}
+
+		if err := st.CreatePrincipal(t.Context(), p, storetest.ServerChange(at, "principal:"+tc.id)); err != nil {
+			t.Fatalf("seed principal %q: %v", tc.subject, err)
+		}
 	}
 }
 
@@ -1365,7 +1486,14 @@ func TestPrincipalPaging(t *testing.T) {
 		}
 	}
 
-	if want := []string{"alice", "bob", "carol", "dave"}; !slices.Equal(got, want) {
+	want := make([]string, 0, 4+len(principal.HousekeepingPurposes()))
+	want = append(want, "alice", "bob", "carol", "dave")
+
+	for _, purpose := range principal.HousekeepingPurposes() {
+		want = append(want, purpose.Subject())
+	}
+
+	if !slices.Equal(got, want) {
 		t.Fatalf("pages = %q, want %q", got, want)
 	}
 
@@ -1415,10 +1543,11 @@ func TestPrincipalCountsAndSource(t *testing.T) {
 	mustCall(t, h, apiCall{http.MethodGet, "/api/server/principals?limit=1", "", http.StatusOK}, &list)
 
 	// The total counts the person of the console session that the membership
-	// change needs.
-	if list.Total != 3 || len(list.Principals) != 1 || list.Principals[0].GroupCount != 1 ||
+	// change needs and the principals that the installation makes.
+	install := int64(len(principal.HousekeepingPurposes()))
+	if list.Total != 3+install || len(list.Principals) != 1 || list.Principals[0].GroupCount != 1 ||
 		list.Principals[0].Source != "local" || list.NextCursor == "" {
-		t.Fatalf("principal page = %+v, want alice in 1 group, local, of 3 with a cursor", list)
+		t.Fatalf("principal page = %+v, want alice in 1 group, local, of %d with a cursor", list, 3+install)
 	}
 
 	var groups struct {

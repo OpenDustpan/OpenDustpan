@@ -26,7 +26,9 @@ func TestAccessByIDReadsUseThePrimaryKey(t *testing.T) {
 
 	ctx := t.Context()
 	recorder := &sqlRecorder{sql: ""}
-	conn := genericPlanConn(ctx, t, openKeepLockStore(t, testPostgresURL(t)), recorder)
+	s := openKeepLockStore(t, testPostgresURL(t))
+	clearSeededAccessRows(ctx, t, s)
+	conn := genericPlanConn(ctx, t, s, recorder)
 
 	for i, tc := range accessPlanCases(ctx, db.New(conn)) {
 		// The database holds no row, so a read finds no row.
@@ -55,6 +57,7 @@ func TestReplayByIDStatementsUseThePrimaryKey(t *testing.T) {
 
 	ctx := t.Context()
 	s := openKeepLockStore(t, testPostgresURL(t))
+	clearSeededAccessRows(ctx, t, s)
 	conn := genericPlanConn(ctx, t, s, nil)
 	live := liveSchema(ctx, t, s)
 
@@ -82,6 +85,19 @@ func TestReplayByIDStatementsUseThePrimaryKey(t *testing.T) {
 		if !strings.Contains(lookup, tc.pkey) || usesLiveIndex(lookup) {
 			t.Errorf("%s step %d: the generic plan does not use %s:\n%s", tc.kind, tc.step, tc.pkey, plan)
 		}
+	}
+}
+
+// clearSeededAccessRows removes the housekeeping principals and grants that
+// the baseline seeds. The index builds of the baseline run after the seed, so
+// they record statistics of a table of one page, and with them the planner
+// prefers a sequential scan. TRUNCATE also clears these statistics, so the
+// tables are again those of a database with no statistics.
+func clearSeededAccessRows(ctx context.Context, t *testing.T, s *Store) {
+	t.Helper()
+
+	if _, err := s.pool.Exec(ctx, "TRUNCATE grants, principals CASCADE"); err != nil {
+		t.Fatalf("clear the seeded access rows: %v", err)
 	}
 }
 

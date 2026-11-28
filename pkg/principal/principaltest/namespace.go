@@ -135,8 +135,8 @@ func checkNamespaceLists(t *testing.T, s NamespaceStore, p principal.Principal) 
 		t.Fatalf("principals of beta = %+v, %d, %v; want none", rows, total, err)
 	}
 
-	rows, total, err = s.ListPrincipals(ctx, all(), "")
-	if err != nil || total != 2 || !slices.Contains(rows, p) {
+	rows, total, err = s.ListPrincipals(ctx, all(), "", "")
+	if err != nil || total != 2+seededPrincipals() || !slices.Contains(rows, p) {
 		t.Fatalf("principals of the installation = %+v, %d, %v; want both, with the namespace", rows, total, err)
 	}
 }

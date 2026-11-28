@@ -6,12 +6,14 @@ import (
 	"context"
 	"encoding/json"
 	"net/http"
+	"net/url"
 	"regexp"
 	"slices"
 	"strings"
 	"testing"
 
 	"opendustpan.org/opendustpan/e2e"
+	"opendustpan.org/opendustpan/pkg/principal"
 )
 
 // e2ePrincipal and e2eGroup decode the principal and group wire forms.
@@ -128,6 +130,7 @@ func runPrincipalsOnStore(t *testing.T, cli e2e.Install, store e2e.Store) {
 	checkPrincipalMembers(ctx, t, env, fx)
 	checkPrincipalChanges(ctx, t, env, fx)
 	checkPrincipalPaging(ctx, t, env, fx)
+	checkHousekeepingPrincipals(ctx, t, env)
 
 	for _, step := range []principalStep{
 		{http.MethodDelete, members + "/" + alice.ID, "", http.StatusNoContent},
@@ -165,9 +168,11 @@ func checkPrincipalPaging(ctx context.Context, t *testing.T, env *e2e.Env, fx pr
 		&first,
 	)
 
+	// The total holds the housekeeping principals that the install writes.
+	wantTotal := int64(3 + len(principal.HousekeepingPurposes()))
 	if len(first.Principals) != 1 || first.Principals[0].ID != fx.alice.ID || first.NextCursor == "" ||
-		first.Total != 3 || first.Principals[0].Source != "local" || first.Principals[0].GroupCount != 1 {
-		t.Fatalf("first page = %+v, want local alice in 1 group, a cursor and a total of 3", first)
+		first.Total != wantTotal || first.Principals[0].Source != "local" || first.Principals[0].GroupCount != 1 {
+		t.Fatalf("first page = %+v, want local alice in 1 group, a cursor and a total of %d", first, wantTotal)
 	}
 
 	principalCall(ctx, t, env, principalStep{
@@ -202,11 +207,21 @@ func checkPrincipalKind(ctx context.Context, t *testing.T, env *e2e.Env, fx prin
 		Total      int64          `json:"total"`
 	}
 
+	// The housekeeping principals are services too. Their subjects sort after
+	// ci-deploy.
+	purposes := principal.HousekeepingPurposes()
+	services := make([]string, 0, 1+len(purposes))
+
+	services = append(services, fx.deploy.ID)
+	for _, p := range purposes {
+		services = append(services, p.ID())
+	}
+
 	for _, c := range []struct {
 		query string
 		want  []string
 	}{
-		{"kind=service", []string{fx.deploy.ID}},
+		{"kind=service", services},
 		{"kind=person&prefix=al&limit=1", []string{fx.alice.ID}},
 		{"kind=person&prefix=ci-", nil},
 		{"kind=workload", nil},
@@ -229,6 +244,155 @@ func checkPrincipalKind(ctx context.Context, t *testing.T, env *e2e.Env, fx prin
 	principalCall(ctx, t, env, principalStep{
 		http.MethodGet, "/api/server/principals?kind=robot", "", http.StatusBadRequest,
 	}, nil)
+}
+
+// housekeepingNamespace is the namespace that checkHousekeepingPrincipals
+// creates.
+const housekeepingNamespace = "housekeeping"
+
+// checkHousekeepingPrincipals lists the housekeeping principals with the
+// source filter, reads the grants that each one holds on the installation
+// through the access review, creates a namespace and reads the grants of the
+// housekeeping principals on it through the access review of the namespace.
+func checkHousekeepingPrincipals(ctx context.Context, t *testing.T, env *e2e.Env) {
+	t.Helper()
+
+	checkHousekeepingList(ctx, t, env)
+
+	server := housekeepingReview{
+		role:   principal.HousekeepingPurpose.InstallationRole,
+		path:   "/api/server/access-review",
+		object: "@server",
+	}
+	if n, want := checkHousekeepingGrants(ctx, t, env, server), server.holders(); n != want {
+		t.Fatalf("housekeeping grants on @server = %d, want %d", n, want)
+	}
+
+	principalCall(ctx, t, env, principalStep{
+		http.MethodPost, "/api/server/namespaces", `{"name":"` + housekeepingNamespace + `"}`, http.StatusCreated,
+	}, nil)
+
+	ns := housekeepingReview{
+		role:   principal.HousekeepingPurpose.NamespaceRole,
+		path:   "/api/server/namespaces/" + housekeepingNamespace + "/access-review",
+		object: housekeepingNamespace,
+	}
+	if n, want := checkHousekeepingGrants(ctx, t, env, ns), ns.holders(); n != want {
+		t.Fatalf("housekeeping grants on %s = %d, want %d", housekeepingNamespace, n, want)
+	}
+}
+
+// checkHousekeepingList lists the principals of the source builtin and
+// fails unless the list holds one service for each housekeeping purpose.
+func checkHousekeepingList(ctx context.Context, t *testing.T, env *e2e.Env) {
+	t.Helper()
+
+	var list struct {
+		NextCursor string         `json:"nextCursor"`
+		Principals []e2ePrincipal `json:"principals"`
+		Total      int64          `json:"total"`
+	}
+	principalCall(ctx, t, env, principalStep{
+		http.MethodGet, "/api/server/principals?kind=service&source=builtin", "", http.StatusOK,
+	}, &list)
+
+	purposes := principal.HousekeepingPurposes()
+
+	ids := make([]string, 0, len(list.Principals))
+	for i := range list.Principals {
+		ids = append(ids, list.Principals[i].ID)
+
+		if list.Principals[i].Source != "builtin" || list.Principals[i].Kind != "service" {
+			t.Fatalf("builtin principal = %+v, want a service of the source builtin", list.Principals[i])
+		}
+	}
+
+	want := make([]string, 0, len(purposes))
+	for _, p := range purposes {
+		want = append(want, p.ID())
+	}
+
+	if !slices.Equal(ids, want) || list.Total != int64(len(purposes)) || list.NextCursor != "" {
+		t.Fatalf("builtin principals = %+v, want %v", list, want)
+	}
+}
+
+// housekeepingReview is one access review that checkHousekeepingGrants reads:
+// the path of the review, the object of the grants, and the role that a
+// purpose holds on that object ("" for none).
+type housekeepingReview struct {
+	role   func(principal.HousekeepingPurpose) string
+	path   string
+	object string
+}
+
+// holders returns the count of the purposes that hold a role on r.object.
+func (r housekeepingReview) holders() int {
+	n := 0
+
+	for _, p := range principal.HousekeepingPurposes() {
+		if r.role(p) != "" {
+			n++
+		}
+	}
+
+	return n
+}
+
+// checkHousekeepingGrants reads the access review of r with the subject
+// filter of each housekeeping principal. A principal with a role in r.role
+// must hold one grant of that role on r.object, and any other principal none.
+// It returns the count of the principals that hold a grant on r.object.
+func checkHousekeepingGrants(ctx context.Context, t *testing.T, env *e2e.Env, r housekeepingReview) int {
+	t.Helper()
+
+	n := 0
+
+	for _, p := range principal.HousekeepingPurposes() {
+		rows := reviewOf(ctx, t, env, r.path, url.Values{"subject": {"principal:" + p.ID()}})
+		rows = housekeepingRows(rows, r.object)
+
+		role := r.role(p)
+		if role == "" {
+			if len(rows) != 0 {
+				t.Fatalf("grants of %s on %s = %+v, want none", p.Subject(), r.object, rows)
+			}
+
+			continue
+		}
+
+		checkHousekeepingRow(t, p, role, r.object, rows)
+
+		n++
+	}
+
+	return n
+}
+
+// housekeepingRows returns the rows of rows on object, and leaves out the rows
+// that a grant on a containing object gives.
+func housekeepingRows(rows []e2eReviewRow, object string) []e2eReviewRow {
+	return slices.DeleteFunc(slices.Clone(rows), func(r e2eReviewRow) bool {
+		return r.Object != object || r.InheritedFrom != ""
+	})
+}
+
+// checkHousekeepingRow fails unless rows is one current grant of role to p on
+// object, with the server as the creator and a time.
+func checkHousekeepingRow(
+	t *testing.T, p principal.HousekeepingPurpose, role, object string, rows []e2eReviewRow,
+) {
+	t.Helper()
+
+	if len(rows) != 1 {
+		t.Fatalf("grants of %s on %s = %+v, want 1", p.Subject(), object, rows)
+	}
+
+	r := rows[0]
+	if r.Role != role || r.Subject != "principal:"+p.ID() || r.GrantedBy != "@server" ||
+		r.GrantedAtMs == nil || r.RevokedAtMs != nil || r.Source != "grant" {
+		t.Fatalf("grant of %s on %s = %+v, want the role %s from @server with a time", p.Subject(), object, r, role)
+	}
 }
 
 // checkPageRefusals reads pages with a bad limit, prefix or cursor: each
@@ -286,9 +450,13 @@ func checkPrincipalLists(ctx context.Context, t *testing.T, env *e2e.Env, fx pri
 	principalCall(ctx, t, env, principalStep{http.MethodGet, "/api/server/principals", "", http.StatusOK}, &list)
 
 	// The third principal is the administrator of the console session that the
-	// membership changes need.
-	if len(list.Principals) != 3 || list.Principals[0].ID != fx.alice.ID || list.Principals[1].ID != fx.deploy.ID {
-		t.Fatalf("principals = %+v, want alice, ci-deploy and the session administrator", list.Principals)
+	// membership changes need. The housekeeping principals that the install
+	// writes come after it.
+	want := 3 + len(principal.HousekeepingPurposes())
+	if len(list.Principals) != want || list.Principals[0].ID != fx.alice.ID ||
+		list.Principals[1].ID != fx.deploy.ID {
+		t.Fatalf("principals = %+v, want alice, ci-deploy, the session administrator and the housekeeping principals",
+			list.Principals)
 	}
 
 	var one e2ePrincipal

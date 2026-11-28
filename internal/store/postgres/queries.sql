@@ -1748,6 +1748,7 @@ WHERE p.deleted_at_ms IS NULL
   AND (@high::text = '' OR p.subject COLLATE "C" < @high::text)
   AND (@kind::text = '' OR p.kind = @kind::text)
   AND (@namespace::text = '' OR p.namespace = @namespace::text)
+  AND (@source::text = '' OR p.source = @source::text)
 ORDER BY p.subject COLLATE "C"
 LIMIT @row_limit;
 
@@ -1757,7 +1758,8 @@ WHERE deleted_at_ms IS NULL
   AND subject COLLATE "C" >= @low::text
   AND (@high::text = '' OR subject COLLATE "C" < @high::text)
   AND (@kind::text = '' OR kind = @kind::text)
-  AND (@namespace::text = '' OR namespace = @namespace::text);
+  AND (@namespace::text = '' OR namespace = @namespace::text)
+  AND (@source::text = '' OR source = @source::text);
 
 -- name: CountWorkingBreakGlassPrincipals :one
 -- The working break-glass accounts of the installation: an enabled local

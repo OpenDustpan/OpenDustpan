@@ -775,12 +775,37 @@ func requireHostCleanup(ctx context.Context, t *testing.T, db string) {
 		t.Fatalf("list grants after a failed run: %v", err)
 	}
 
-	if total != 0 || len(listed) != 0 {
-		t.Fatalf("grants after a failed run = %+v, want none live", listed)
-	}
+	requireOnlySeededGrants(t, listed, total)
 
 	if list, err := st.ListTempAdmins(ctx); err != nil || len(list) != 0 {
 		t.Fatalf("records after a failed run = %+v, %v; want none", list, err)
+	}
+}
+
+// requireOnlySeededGrants proves that the grants on the installation are the
+// seeded ones alone: the baseline seeds one grant on the installation for each
+// housekeeping purpose that acts on it, and a failed run adds no other grant.
+func requireOnlySeededGrants(t *testing.T, listed []access.ListedGrant, total int64) {
+	t.Helper()
+
+	seeded := make(map[string]string)
+
+	for _, p := range principal.HousekeepingPurposes() {
+		if p.ActsOnInstallation() {
+			seeded["principal:"+p.ID()] = p.InstallationRole()
+		}
+	}
+
+	if int(total) != len(seeded) || len(listed) != len(seeded) {
+		t.Fatalf("grants after a failed run = %+v (total %d), want only the %d seeded grants",
+			listed, total, len(seeded))
+	}
+
+	for i := range listed {
+		g := &listed[i].Grant
+		if role, ok := seeded[g.Subject.String()]; !ok || role != g.Role {
+			t.Fatalf("grant after a failed run = %+v, want only the seeded grants", g)
+		}
 	}
 }
 

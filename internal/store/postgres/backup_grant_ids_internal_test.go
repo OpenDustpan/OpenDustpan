@@ -50,11 +50,12 @@ func TestCheckStagedGrantIDs(t *testing.T) {
 			continue
 		}
 
-		if _, err := s.pool.Exec(t.Context(), `UPDATE grants SET id = $1`, id); err != nil {
+		_, err := s.pool.Exec(t.Context(), `UPDATE grants SET id = $1 WHERE subject_id = 'prn-ci-acme'`, id)
+		if err != nil {
 			t.Fatalf("plant the ID %.20q: %v", id, err)
 		}
 
-		err := checkStagedGrantIDs(t.Context(), s.pool, schema)
+		err = checkStagedGrantIDs(t.Context(), s.pool, schema)
 		if !errors.Is(err, backup.ErrCorrupt) {
 			t.Fatalf("check of the ID %.20q = %v, want ErrCorrupt", id, err)
 		}
@@ -87,11 +88,12 @@ func TestCheckStagedRefusesAGrantIDThatIsNotAGrantID(t *testing.T) {
 			continue
 		}
 
-		if _, err := s.pool.Exec(t.Context(), `UPDATE grants SET id = $1`, id); err != nil {
+		_, err := s.pool.Exec(t.Context(), `UPDATE grants SET id = $1 WHERE subject_id = 'prn-ci-acme'`, id)
+		if err != nil {
 			t.Fatalf("plant the ID %.20q: %v", id, err)
 		}
 
-		err := checkStaged(t.Context(), s.pool, schema, restoreAt)
+		err = checkStaged(t.Context(), s.pool, schema, restoreAt)
 		if !errors.Is(err, backup.ErrCorrupt) {
 			t.Fatalf("restore check of the ID %.20q = %v, want ErrCorrupt", id, err)
 		}

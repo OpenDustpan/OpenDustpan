@@ -204,7 +204,7 @@ func TestPaging(t *testing.T) {
 	req := principal.PageRequest{Prefix: "a", Cursor: "", Limit: 2}
 
 	for range 5 {
-		page, err := svc.ListPrincipals(t.Context(), req, "")
+		page, err := svc.ListPrincipals(t.Context(), req, "", "")
 		if err != nil {
 			t.Fatalf("list: %v", err)
 		}
@@ -233,7 +233,7 @@ func TestPaging(t *testing.T) {
 		{Prefix: "", Cursor: "YQA", Limit: 0}, // "a" and a NUL
 		{Prefix: "", Cursor: strings.Repeat("YW", principal.MaxCursorLength), Limit: 0},
 	} {
-		if _, err := svc.ListPrincipals(t.Context(), bad, ""); !errors.Is(err, principal.ErrInvalid) {
+		if _, err := svc.ListPrincipals(t.Context(), bad, "", ""); !errors.Is(err, principal.ErrInvalid) {
 			t.Errorf("list %+v = %v, want ErrInvalid", bad, err)
 		}
 	}
@@ -255,7 +255,7 @@ func TestCreatePrincipalRefusesKindAgent(t *testing.T) {
 	}
 
 	page, listErr := svc.ListPrincipals(
-		t.Context(), principal.PageRequest{Prefix: "", Cursor: "", Limit: 0}, principal.KindAgent,
+		t.Context(), principal.PageRequest{Prefix: "", Cursor: "", Limit: 0}, principal.KindAgent, "",
 	)
 	if listErr != nil {
 		t.Fatalf("list: %v", listErr)
@@ -272,11 +272,11 @@ func TestListByKind(t *testing.T) {
 	svc := newServiceOverStore(t)
 
 	everything := principal.PageRequest{Prefix: "", Cursor: "", Limit: 0}
-	if _, err := svc.ListPrincipals(t.Context(), everything, "robot"); !errors.Is(err, principal.ErrInvalid) {
+	if _, err := svc.ListPrincipals(t.Context(), everything, "robot", ""); !errors.Is(err, principal.ErrInvalid) {
 		t.Errorf("list of the kind robot = %v, want ErrInvalid", err)
 	}
 
-	page, err := svc.ListPrincipals(t.Context(), everything, principal.KindWorkload)
+	page, err := svc.ListPrincipals(t.Context(), everything, principal.KindWorkload, "")
 	if err != nil || len(page.Items) != 0 || page.Total != 0 {
 		t.Errorf("list of the workloads = %+v, %v; want none", page, err)
 	}
@@ -427,6 +427,84 @@ func TestRefs(t *testing.T) {
 		if got != want {
 			t.Errorf("ref = %q, want %q", got, want)
 		}
+	}
+}
+
+// TestParseSource proves that ParseSource reads each source that the server
+// names, and that it refuses each text that differs from one in any byte.
+func TestParseSource(t *testing.T) {
+	t.Parallel()
+
+	for _, tc := range []struct {
+		text   string
+		source principal.Source
+	}{
+		{"local", principal.SourceLocal},
+		{"ldap", principal.SourceLDAP},
+		{"scim", principal.SourceSCIM},
+		{"oidc", principal.SourceOIDC},
+		{"oauth", principal.SourceOAuth},
+		{"builtin", principal.SourceBuiltin},
+	} {
+		src, err := principal.ParseSource(tc.text)
+		if err != nil || src != tc.source {
+			t.Fatalf("ParseSource(%q) = %q, %v, want %q", tc.text, src, err, tc.source)
+		}
+	}
+
+	for _, text := range []string{
+		"", "Builtin", "BUILTIN", " builtin", "builtin ", "builtin\x00", "builtin\n",
+		"x' OR '1'='1", "local; DELETE FROM principals", "local--", "%00", "@server",
+		"unknown", "oidc ", "scim1",
+	} {
+		if _, err := principal.ParseSource(text); !errors.Is(err, principal.ErrInvalid) {
+			t.Fatalf("ParseSource(%q) = %v, want ErrInvalid", text, err)
+		}
+	}
+}
+
+// TestGroupValidateRefusesABuiltinSource proves that a group has its own
+// allowlist of sources: builtin is the source of a principal that the server
+// makes at the install, never of a group.
+func TestGroupValidateRefusesABuiltinSource(t *testing.T) {
+	t.Parallel()
+
+	for _, source := range []principal.Source{
+		principal.SourceLocal, principal.SourceLDAP, principal.SourceSCIM, principal.SourceOIDC,
+		principal.SourceOAuth,
+	} {
+		g := principal.Group{
+			ID: "grp-1", Name: "ops", Description: "", Source: source,
+			ClosedToIdentityProvider: false, MemberCount: 0,
+			CreatedAt: time.Time{}, UpdatedAt: time.Time{},
+		}
+		if err := g.Validate(); err != nil {
+			t.Fatalf("group with source %q: %v, want nil", source, err)
+		}
+	}
+
+	for _, source := range []principal.Source{
+		principal.SourceBuiltin, "", "Builtin", "local ", "x' OR '1'='1",
+	} {
+		g := principal.Group{
+			ID: "grp-1", Name: "ops", Description: "", Source: source,
+			ClosedToIdentityProvider: false, MemberCount: 0,
+			CreatedAt: time.Time{}, UpdatedAt: time.Time{},
+		}
+		if err := g.Validate(); !errors.Is(err, principal.ErrInvalid) {
+			t.Fatalf("group with source %q = %v, want ErrInvalid", source, err)
+		}
+	}
+
+	// A principal of the source builtin stays valid: the server makes it at
+	// the install.
+	p := principal.Principal{
+		ID: "prn-housekeeping-token-sweep", Subject: "housekeeping:token-sweep", DisplayName: "",
+		Kind: principal.KindService, Source: principal.SourceBuiltin, Namespace: "", GroupCount: 0,
+		BreakGlass: false, DisabledAt: time.Time{}, CreatedAt: time.Time{}, UpdatedAt: time.Time{},
+	}
+	if err := p.Validate(); err != nil {
+		t.Fatalf("principal of the source builtin: %v, want nil", err)
 	}
 }
 

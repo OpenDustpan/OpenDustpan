@@ -460,6 +460,24 @@ const (
 	// and trust rules. Its object is ServerObject. Of the built-in roles,
 	// only the site administrator holds it.
 	ActionServerRestoreAccess Action = "server:restore-access"
+	// ActionServerSweepArtifacts allows the sweep of expired job artifacts.
+	// Its object is the installation.
+	ActionServerSweepArtifacts Action = "server:sweep-artifacts"
+	// ActionServerSweepBlobs allows the sweep of expired blobs. Its object
+	// is the installation.
+	ActionServerSweepBlobs Action = "server:sweep-blobs"
+	// ActionServerSweepCheckpoints allows the sweep of superseded
+	// checkpoints. Its object is the installation.
+	ActionServerSweepCheckpoints Action = "server:sweep-checkpoints"
+	// ActionServerPruneNameLocks allows the prune of expired name locks. Its
+	// object is the installation.
+	ActionServerPruneNameLocks Action = "server:prune-name-locks"
+	// ActionServerExpireTemporaryAdministrators allows the expiry of
+	// temporary administrators. Its object is the installation.
+	ActionServerExpireTemporaryAdministrators Action = "server:expire-temporary-administrators"
+	// ActionServerSweepAgentReveals allows the sweep of expired agent
+	// reveals. Its object is the installation.
+	ActionServerSweepAgentReveals Action = "server:sweep-agent-reveals"
 
 	// The actions below belong to features that have no routes yet. The
 	// access package classifies none of them, so the policy check denies
@@ -501,6 +519,9 @@ const (
 	// approval. Its object is a unit. The gate can also limit the approvers
 	// to groups.
 	ActionJobApprove Action = "job:approve"
+	// ActionJobReconcile allows the reconcile of a job that a person
+	// started. Its object is a unit.
+	ActionJobReconcile Action = "job:reconcile"
 	// ActionNamespaceManageFreezes allows creating and ending the change
 	// freezes of a namespace. Its object is a namespace.
 	ActionNamespaceManageFreezes Action = "namespace:manage-freezes"
@@ -720,9 +741,12 @@ func Actions() []Action {
 		ActionCollectionRead, ActionCollectionCreate, ActionCollectionUpdate, ActionCollectionDelete,
 		ActionCollectionCreateUnit, ActionNamespaceReadPlacementRules, ActionNamespaceManagePlacementRules,
 		ActionUnitMove, ActionServerManageAudit, ActionServerManageTokenPolicy,
-		ActionServerManageSignIn, ActionServerRestoreAccess, ActionUnitRunPlan,
+		ActionServerManageSignIn, ActionServerRestoreAccess,
+		ActionServerSweepArtifacts, ActionServerSweepBlobs, ActionServerSweepCheckpoints,
+		ActionServerPruneNameLocks, ActionServerExpireTemporaryAdministrators, ActionServerSweepAgentReveals,
+		ActionUnitRunPlan,
 		ActionUnitRunApply, ActionUnitRunDestroy, ActionUnitWriteBack, ActionUnitDefineSteps,
-		ActionJobRead, ActionJobReadLogs, ActionJobReadPlans, ActionJobCancel, ActionJobApprove,
+		ActionJobRead, ActionJobReadLogs, ActionJobReadPlans, ActionJobCancel, ActionJobApprove, ActionJobReconcile,
 		ActionNamespaceManageFreezes, ActionNamespaceBreakFreeze, ActionNamespaceManageRunners,
 		ActionRunnerClaim, ActionAgentUse, ActionAgentStartRun, ActionNamespaceManageAgentRuns,
 		ActionNamespaceManageAgent, ActionServerManageAgent, ActionServerAcceptAgentSecretAccess,

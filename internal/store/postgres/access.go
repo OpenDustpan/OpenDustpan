@@ -436,18 +436,18 @@ func (s *Store) GrantsWithRoles(
 	return fromGrantRows(rows)
 }
 
-// CreateNamespaceWithGrant implements access.GrantStore: the namespace, the
-// grant of its creator and the entries commit together. A grant with no ID
-// stores the namespace and the entry alone. With a grant it stores the entry
-// in the scope @server and the same grant entry in the chain of the new
-// namespace, so the chain starts with the grant of its creator. The namespace
-// did not exist before, so no fence check runs.
-func (s *Store) CreateNamespaceWithGrant(
-	ctx context.Context, ns namespace.Namespace, g access.Grant, e audit.Entry,
+// CreateNamespaceWithGrants implements access.GrantStore: the namespace, its
+// grants and the entries commit together. An empty list of grants stores the
+// namespace and the entry alone. With grants it stores the entry e in the
+// scope @server and builds the entry of each grant in the chain of the new
+// namespace, so the chain starts with the grants. The namespace did not exist
+// before, so no fence check runs.
+func (s *Store) CreateNamespaceWithGrants(
+	ctx context.Context, ns namespace.Namespace, grants []access.Grant, e audit.Entry,
 ) error {
 	row := codec.ToNamespaceRow(ns)
 
-	grantEntry, err := validateCreatorGrantEntries(ns, g, e)
+	entries, err := namespaceGrantEntries(ns, grants, e)
 	if err != nil {
 		return err
 	}
@@ -457,32 +457,43 @@ func (s *Store) CreateNamespaceWithGrant(
 			return err
 		}
 
-		return appendCreatorGrantEntries(ctx, tx, g, e, grantEntry)
+		return appendNamespaceGrantEntries(ctx, tx, grants, e, entries)
 	})
 }
 
-// validateCreatorGrantEntries checks the entries of CreateNamespaceWithGrant:
-// e lives in the scope @server, and the copy of e in the chain of the new
-// namespace is valid when the grant has an ID.
-func validateCreatorGrantEntries(
-	ns namespace.Namespace, g access.Grant, e audit.Entry,
-) (audit.Entry, error) {
+// namespaceGrantEntries builds the entries of CreateNamespaceWithGrants: e
+// lives in the scope @server, each grant has an ID, and the entry of each
+// grant is e in the chain of the new namespace, with the object of the grant,
+// and its time. The entry of a grant of a housekeeping principal has the
+// reason access.NamespaceGrantsReason, and the entry of any other grant keeps
+// the reason of e. It checks that each entry is valid.
+func namespaceGrantEntries(ns namespace.Namespace, grants []access.Grant, e audit.Entry) ([]audit.Entry, error) {
 	if err := validServerEntry(e); err != nil {
-		return audit.Entry{}, err
+		return nil, err
 	}
 
-	grantEntry := e
-	grantEntry.Namespace = ns.Name
+	entries := make([]audit.Entry, len(grants))
 
-	if g.ID == "" {
-		return grantEntry, nil
+	for i := range grants {
+		if grants[i].ID == "" {
+			return nil, fmt.Errorf("%w: grant %d has no ID", access.ErrInvalid, i)
+		}
+
+		entries[i] = e
+		entries[i].Namespace = ns.Name
+		entries[i].Object = access.GrantRef(grants[i])
+		entries[i].At = grants[i].CreatedAt
+
+		if access.HousekeepingSubject(grants[i].Subject) {
+			entries[i].Reason = access.NamespaceGrantsReason
+		}
+
+		if err := entries[i].Validate(); err != nil {
+			return nil, fmt.Errorf("audit entry: %w", err)
+		}
 	}
 
-	if err := grantEntry.Validate(); err != nil {
-		return audit.Entry{}, fmt.Errorf("audit entry: %w", err)
-	}
-
-	return grantEntry, nil
+	return entries, nil
 }
 
 // insertNamespaceRow inserts the namespace row. The namespace did not exist
@@ -512,35 +523,30 @@ func insertNamespaceRow(ctx context.Context, q *db.Queries, row codec.NamespaceR
 	return nil
 }
 
-// appendCreatorGrantEntries stores the entries of CreateNamespaceWithGrant in
-// the locked transaction tx. With no grant (g.ID empty) it appends only the
-// create entry e. With a grant it inserts the grant, appends e in @server,
-// and appends the grant entry in the new namespace chain.
-func appendCreatorGrantEntries(
+// appendNamespaceGrantEntries stores the entries of CreateNamespaceWithGrants
+// in the locked transaction tx. It inserts each grant, appends e in @server,
+// and appends the entry of each grant in the new namespace chain.
+func appendNamespaceGrantEntries(
 	ctx context.Context,
 	tx serverAuditTx,
-	g access.Grant,
+	grants []access.Grant,
 	e audit.Entry,
-	grantEntry audit.Entry,
+	grantEntries []audit.Entry,
 ) error {
-	if g.ID == "" {
-		if _, err := appendServerEntry(ctx, tx, e); err != nil {
-			return fmt.Errorf("append audit entry: %w", err)
+	for i := range grants {
+		if err := insertGrant(ctx, tx.q, grants[i]); err != nil {
+			return err
 		}
-
-		return nil
-	}
-
-	if err := insertGrant(ctx, tx.q, g); err != nil {
-		return err
 	}
 
 	if _, err := appendServerEntry(ctx, tx, e); err != nil {
 		return fmt.Errorf("append audit entry: %w", err)
 	}
 
-	if _, err := appendAuditEntry(ctx, tx.q, grantEntry); err != nil {
-		return fmt.Errorf("append audit entry: %w", err)
+	for i := range grantEntries {
+		if _, err := appendAuditEntry(ctx, tx.q, grantEntries[i]); err != nil {
+			return fmt.Errorf("append audit entry: %w", err)
+		}
 	}
 
 	return nil

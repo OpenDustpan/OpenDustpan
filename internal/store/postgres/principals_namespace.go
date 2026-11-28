@@ -35,10 +35,10 @@ func (s *Store) ListNamespacePrincipals(
 
 	return listPage(ctx, s, pq, pageReads[db.ListPrincipalsRow, principal.Principal]{
 		list: func(ctx context.Context, q *db.Queries, pq principal.Query) ([]db.ListPrincipalsRow, error) {
-			return listPrincipalRows(ctx, q, pq, "", ns)
+			return listPrincipalRows(ctx, q, pq, principalFilter{kind: "", source: "", ns: ns})
 		},
 		count: func(ctx context.Context, q *db.Queries, pq principal.Query) (int64, error) {
-			return countPrincipalRows(ctx, q, pq, "", ns)
+			return countPrincipalRows(ctx, q, pq, principalFilter{kind: "", source: "", ns: ns})
 		},
 		conv: principalFromList,
 	})

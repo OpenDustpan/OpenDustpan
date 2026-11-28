@@ -91,6 +91,27 @@ func (s *Store) StagingSchemaForTest() string {
 	return s.stagingSchema
 }
 
+// RevokeSeededHousekeepingGrantForTest revokes one seeded housekeeping grant
+// in the live schema and returns its ID. It writes no audit entry: the staging
+// test only needs a revoked row in the backup.
+func (s *Store) RevokeSeededHousekeepingGrantForTest(ctx context.Context, atMs int64) (string, error) {
+	const query = `UPDATE grants SET revoked_at_ms = $1, revoked_by = 'alice'
+		WHERE id = (
+			SELECT g.id FROM grants g JOIN principals p ON p.id = g.subject_id
+			WHERE p.source = 'builtin' AND g.revoked_at_ms IS NULL
+			ORDER BY g.id LIMIT 1
+		)
+		RETURNING id`
+
+	var id string
+
+	if err := s.pool.QueryRow(ctx, query, atMs).Scan(&id); err != nil {
+		return "", fmt.Errorf("revoke seeded housekeeping grant: %w", err)
+	}
+
+	return id, nil
+}
+
 // InterleaveProfileRead implements storetest.ProfileReadInterleaver: fn runs
 // once in the next read of a profile revision, between the read of the
 // profile and the read of the revision.

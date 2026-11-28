@@ -28,6 +28,18 @@ func TestUnitRunPlanBuiltInRoles(t *testing.T) {
 		{role: access.RoleAccountAdministrator, want: true},
 		{role: access.RoleSiteAdministrator, want: true},
 		{role: access.RoleTokenManager, want: false},
+		{role: access.RoleHousekeepingAgentRevealSweep, want: false},
+		{role: access.RoleHousekeepingAgentRunReaper, want: false},
+		{role: access.RoleHousekeepingArtifactSweep, want: false},
+		{role: access.RoleHousekeepingBlobSweep, want: false},
+		{role: access.RoleHousekeepingCheckpointSweep, want: false},
+		{role: access.RoleHousekeepingHistoryRetention, want: false},
+		{role: access.RoleHousekeepingIssuerRotation, want: false},
+		{role: access.RoleHousekeepingJobReconcile, want: false},
+		{role: access.RoleHousekeepingNameLockPrune, want: false},
+		{role: access.RoleHousekeepingSavedViewCleanup, want: false},
+		{role: access.RoleHousekeepingTempAdminExpiry, want: false},
+		{role: access.RoleHousekeepingTokenSweep, want: false},
 	}
 
 	if got, want := len(cases), len(access.BuiltInRoles()); got != want {

@@ -50,7 +50,8 @@ const (
 	// reach, and so act as that principal, with every grant that the
 	// principal has now or gets later.
 	RoleAccountAdministrator = "account-administrator"
-	// RoleSiteAdministrator holds the actions of every family. A
+	// RoleSiteAdministrator holds the actions of every family except the
+	// housekeeping actions, which only the housekeeping roles hold. A
 	// self-hosted installation can use it. Like RoleAccountAdministrator,
 	// it can act as any service principal.
 	RoleSiteAdministrator = "site-administrator"
@@ -59,6 +60,32 @@ const (
 	// as that principal, with every grant that the principal has now or
 	// gets later.
 	RoleTokenManager = "token-manager"
+
+	// RoleHousekeepingAgentRevealSweep sweeps expired agent reveals on the
+	// installation. It holds no action inside a namespace.
+	RoleHousekeepingAgentRevealSweep = "housekeeping-agent-reveal-sweep"
+	// RoleHousekeepingAgentRunReaper ends orphan agent runs in a namespace.
+	RoleHousekeepingAgentRunReaper = "housekeeping-agent-run-reaper"
+	// RoleHousekeepingArtifactSweep sweeps expired job artifacts.
+	RoleHousekeepingArtifactSweep = "housekeeping-artifact-sweep"
+	// RoleHousekeepingBlobSweep sweeps expired blobs.
+	RoleHousekeepingBlobSweep = "housekeeping-blob-sweep"
+	// RoleHousekeepingCheckpointSweep sweeps superseded checkpoints.
+	RoleHousekeepingCheckpointSweep = "housekeeping-checkpoint-sweep"
+	// RoleHousekeepingHistoryRetention redacts history by retention.
+	RoleHousekeepingHistoryRetention = "housekeeping-history-retention"
+	// RoleHousekeepingIssuerRotation rotates the issuer of a namespace.
+	RoleHousekeepingIssuerRotation = "housekeeping-issuer-rotation"
+	// RoleHousekeepingJobReconcile reconciles jobs that a person started.
+	RoleHousekeepingJobReconcile = "housekeeping-job-reconcile"
+	// RoleHousekeepingNameLockPrune prunes expired name locks.
+	RoleHousekeepingNameLockPrune = "housekeeping-name-lock-prune"
+	// RoleHousekeepingSavedViewCleanup deletes expired saved views.
+	RoleHousekeepingSavedViewCleanup = "housekeeping-saved-view-cleanup"
+	// RoleHousekeepingTempAdminExpiry expires temporary administrators.
+	RoleHousekeepingTempAdminExpiry = "housekeeping-temp-admin-expiry"
+	// RoleHousekeepingTokenSweep sweeps expired and inactive tokens.
+	RoleHousekeepingTokenSweep = "housekeeping-token-sweep"
 )
 
 // builtInDescriptions describes each built-in role, in catalog order.
@@ -89,10 +116,61 @@ var builtInDescriptions = []struct {
 		RoleAccountAdministrator,
 		"Manages principals, groups, roles, grants and namespaces, makes the tokens of each service principal whose reach fits inside its own reach, and holds every data action.",
 	},
-	{RoleSiteAdministrator, "Holds every action of the installation."},
+	{
+		RoleSiteAdministrator,
+		"Holds every action of the installation except the housekeeping actions, which only the housekeeping roles hold.",
+	},
 	{
 		RoleTokenManager,
 		"Makes, rotates and revokes the tokens of a service principal, and so acts as that principal.",
+	},
+	{
+		RoleHousekeepingAgentRevealSweep,
+		"Sweeps expired agent reveals.",
+	},
+	{
+		RoleHousekeepingAgentRunReaper,
+		"Ends orphan agent runs in a namespace.",
+	},
+	{
+		RoleHousekeepingArtifactSweep,
+		"Sweeps expired job artifacts.",
+	},
+	{
+		RoleHousekeepingBlobSweep,
+		"Sweeps expired blobs.",
+	},
+	{
+		RoleHousekeepingCheckpointSweep,
+		"Sweeps superseded checkpoints.",
+	},
+	{
+		RoleHousekeepingHistoryRetention,
+		"Redacts history by retention.",
+	},
+	{
+		RoleHousekeepingIssuerRotation,
+		"Rotates the issuer of a namespace.",
+	},
+	{
+		RoleHousekeepingJobReconcile,
+		"Reconciles jobs that a person started.",
+	},
+	{
+		RoleHousekeepingNameLockPrune,
+		"Prunes expired name locks.",
+	},
+	{
+		RoleHousekeepingSavedViewCleanup,
+		"Deletes expired saved views.",
+	},
+	{
+		RoleHousekeepingTempAdminExpiry,
+		"Expires temporary administrators.",
+	},
+	{
+		RoleHousekeepingTokenSweep,
+		"Sweeps expired and inactive tokens.",
 	},
 }
 
@@ -151,15 +229,41 @@ func siteOnlyActions() []identity.Action {
 	return []identity.Action{identity.ActionServerManageSignIn, identity.ActionServerRestoreAccess}
 }
 
+// housekeepingOnlyActions are the actions that only the housekeeping roles
+// hold. No other built-in role gets them from its family.
+func housekeepingOnlyActions() []identity.Action {
+	return []identity.Action{
+		identity.ActionServerSweepArtifacts,
+		identity.ActionServerSweepBlobs,
+		identity.ActionServerSweepCheckpoints,
+		identity.ActionServerPruneNameLocks,
+		identity.ActionServerExpireTemporaryAdministrators,
+		identity.ActionServerSweepAgentReveals,
+		identity.ActionJobReconcile,
+		identity.ActionUnitRedact,
+		identity.ActionNamespaceManageAgentRuns,
+	}
+}
+
+// familyActions returns the actions of the family f without the actions that
+// only the housekeeping roles hold.
+func familyActions(f Family) []identity.Action {
+	only := housekeepingOnlyActions()
+
+	return slices.DeleteFunc(Actions(f), func(a identity.Action) bool {
+		return slices.Contains(only, a)
+	})
+}
+
 // accountAdministratorActions are the actions of RoleAccountAdministrator.
 func accountAdministratorActions() []identity.Action {
 	site := siteOnlyActions()
-	out := slices.DeleteFunc(Actions(FamilyAdministration), func(a identity.Action) bool {
+	out := slices.DeleteFunc(familyActions(FamilyAdministration), func(a identity.Action) bool {
 		return slices.Contains(site, a)
 	})
-	out = append(out, Actions(FamilyData)...)
+	out = append(out, familyActions(FamilyData)...)
 
-	return append(out, Actions(FamilyDelegation)...)
+	return append(out, familyActions(FamilyDelegation)...)
 }
 
 // builtInActions returns the actions of the built-in role id.
@@ -172,21 +276,65 @@ func builtInActions(id string) []identity.Action {
 	case RoleMaintainer:
 		return maintainerActions()
 	case RoleAdmin:
-		return Actions(FamilyData)
+		return familyActions(FamilyData)
 	case RoleInstallationOperator:
-		return Actions(FamilyOperator)
+		return familyActions(FamilyOperator)
 	case RoleAccountAdministrator:
 		return accountAdministratorActions()
 	case RoleSiteAdministrator:
-		out := append(Actions(FamilyOperator), Actions(FamilyAdministration)...)
-		out = append(out, Actions(FamilyData)...)
+		out := append(familyActions(FamilyOperator), familyActions(FamilyAdministration)...)
+		out = append(out, familyActions(FamilyData)...)
 
-		return append(out, Actions(FamilyDelegation)...)
+		return append(out, familyActions(FamilyDelegation)...)
 	case RoleTokenManager:
-		return Actions(FamilyDelegation)
-	default:
-		return readerActions(id)
+		return familyActions(FamilyDelegation)
 	}
+
+	if actions := housekeepingActions(id); actions != nil {
+		return actions
+	}
+
+	return readerActions(id)
+}
+
+// housekeepingRole is the ID of a housekeeping role and its actions.
+type housekeepingRole struct {
+	id      string
+	actions []identity.Action
+}
+
+// housekeepingRoleActions returns the role and the actions of each
+// housekeeping role, in catalog order.
+func housekeepingRoleActions() []housekeepingRole {
+	return []housekeepingRole{
+		{id: RoleHousekeepingAgentRevealSweep, actions: []identity.Action{identity.ActionServerSweepAgentReveals}},
+		{id: RoleHousekeepingAgentRunReaper, actions: []identity.Action{identity.ActionNamespaceManageAgentRuns}},
+		{id: RoleHousekeepingArtifactSweep, actions: []identity.Action{identity.ActionServerSweepArtifacts}},
+		{id: RoleHousekeepingBlobSweep, actions: []identity.Action{identity.ActionServerSweepBlobs}},
+		{id: RoleHousekeepingCheckpointSweep, actions: []identity.Action{identity.ActionServerSweepCheckpoints}},
+		{id: RoleHousekeepingHistoryRetention, actions: []identity.Action{identity.ActionUnitRedact}},
+		{id: RoleHousekeepingIssuerRotation, actions: []identity.Action{identity.ActionNamespaceManageIssuer}},
+		{id: RoleHousekeepingJobReconcile, actions: []identity.Action{identity.ActionJobReconcile}},
+		{id: RoleHousekeepingNameLockPrune, actions: []identity.Action{identity.ActionServerPruneNameLocks}},
+		{id: RoleHousekeepingSavedViewCleanup, actions: []identity.Action{identity.ActionViewDelete}},
+		{
+			id:      RoleHousekeepingTempAdminExpiry,
+			actions: []identity.Action{identity.ActionServerExpireTemporaryAdministrators},
+		},
+		{id: RoleHousekeepingTokenSweep, actions: []identity.Action{identity.ActionServerManageTokenPolicy}},
+	}
+}
+
+// housekeepingActions returns the actions of the housekeeping role id, or nil
+// when id names no housekeeping role.
+func housekeepingActions(id string) []identity.Action {
+	for _, r := range housekeepingRoleActions() {
+		if r.id == id {
+			return r.actions
+		}
+	}
+
+	return nil
 }
 
 // readerActions returns the actions of a built-in role that reads like a

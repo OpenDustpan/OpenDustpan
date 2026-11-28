@@ -26,6 +26,7 @@ import (
 	"opendustpan.org/opendustpan/pkg/blob/fs"
 	"opendustpan.org/opendustpan/pkg/durable"
 	"opendustpan.org/opendustpan/pkg/dustpan"
+	"opendustpan.org/opendustpan/pkg/principal"
 )
 
 // This file holds the regression benchmark of database round trips: for each
@@ -1626,11 +1627,60 @@ func restoreModel() costModel {
 			breakGlassFloorTrips + breakGlassPasswordTrips + serverAuditLockTrips + checkpointSupersedesTrips +
 			droppedRunnerCredentialTrips + proxyRuleSetTrips + poolProxySettingsTrips + sharingRuleTrips + trustBundleTrips +
 			updateLeaseExpireTrips + swappedSettingTrips + settingChangeEntryTrips - eventReceiptTrips - profileOpenSessionTrips +
-			firstAdministratorTrips + claimTableTrips,
+			firstAdministratorTrips + claimTableTrips + housekeepingSeedTrips,
 		perTable:     7 + claimReadTrips,
 		perOther:     2,
 		perMigration: 2,
 		perUnit:      maintenanceScans + stateVersionReads,
+	}
+}
+
+// housekeepingSeedTrips is the change in the fixed part for the housekeeping
+// principals and their grants. The baseline seeds them, so the staged schema
+// holds them before the load: the stage clears the staged grants and the
+// staged principals with one statement each. The admin of this test is a
+// static token, so before the seed the backup held no row of either table and
+// the load wrote no batch for them. The backup now holds the seeded rows (one
+// principal for each purpose, one grant on the installation for each purpose
+// that acts on it and one grant on acme for each purpose that acts inside a
+// namespace), fewer rows than one batch, so the load writes one batch
+// transaction for each of the 2 tables. The count does not grow with the
+// units. TestHousekeepingSeedFitsOneBatch fails when the seeded rows need more
+// than one batch.
+const housekeepingSeedTrips = seedTables + seedTables*batchTransactionTrips
+
+// seedTables is the number of tables that hold the housekeeping seed: the
+// principals and the grants.
+const seedTables = 2
+
+// batchTransactionTrips is the number of statements of one batch transaction
+// of the load: begin, the bounds, the search path, the insert and the commit.
+const batchTransactionTrips = 5
+
+// loadBatchRows is the number of rows of one batch transaction of the load.
+// It is the same value as portableBatchRows of the store packages.
+const loadBatchRows = 200
+
+// TestHousekeepingSeedFitsOneBatch checks that the housekeeping rows that the
+// backup holds fit in one batch for each table, as housekeepingSeedTrips
+// counts. A new purpose that makes a table need a second batch fails here.
+func TestHousekeepingSeedFitsOneBatch(t *testing.T) {
+	t.Parallel()
+	purposes := principal.HousekeepingPurposes()
+	grants := 0
+	for i := range purposes {
+		if purposes[i].ActsOnInstallation() {
+			grants++
+		}
+		if purposes[i].ActsInsideNamespace() {
+			grants++
+		}
+	}
+	if len(purposes) > loadBatchRows {
+		t.Errorf("housekeeping principals = %d, want at most %d (one batch)", len(purposes), loadBatchRows)
+	}
+	if grants > loadBatchRows {
+		t.Errorf("housekeeping grants = %d, want at most %d (one batch)", grants, loadBatchRows)
 	}
 }
 

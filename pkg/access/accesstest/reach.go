@@ -225,13 +225,23 @@ func testListServicePrincipals(t *testing.T, s access.Store) {
 	rs := reachStores(t, s)
 	ctx := t.Context()
 
+	seeded, err := rs.ListServicePrincipals(ctx)
+	if err != nil {
+		t.Fatalf("list the seeded service principals: %v", err)
+	}
+
+	if len(seeded) == 0 {
+		t.Fatal("the install has no service principals")
+	}
+
 	mustCreatePerson(t, rs, "prn-alice", "alice")
 	mustCreateService(t, rs, "prn-deploy", "ci-deploy")
 	mustCreateService(t, rs, "prn-other", "ci-other")
 	mustCreateBot(t, rs, "prn-bot", "ci-acme", "acme")
 	mustCreateService(t, rs, "prn-gone", "ci-gone")
 
-	if err := rs.DeletePrincipal(ctx, "prn-gone", entry()); err != nil {
+	err = rs.DeletePrincipal(ctx, "prn-gone", entry())
+	if err != nil {
 		t.Fatalf("delete principal: %v", err)
 	}
 
@@ -242,7 +252,10 @@ func testListServicePrincipals(t *testing.T, s access.Store) {
 
 	slices.Sort(got)
 
-	if want := []string{"prn-bot", "prn-deploy", "prn-other"}; !slices.Equal(got, want) {
+	want := append(slices.Clone(seeded), "prn-bot", "prn-deploy", "prn-other")
+	slices.Sort(want)
+
+	if !slices.Equal(got, want) {
 		t.Fatalf("service principals = %v, want %v", got, want)
 	}
 
@@ -845,17 +858,22 @@ func testReachOperators(t *testing.T, s access.Store) {
 	}, 0, 3*len(operatorActions))
 
 	for _, action := range operatorActions {
+		// The housekeeping roles hold some operator actions alone: the
+		// operator roles hold the others.
+		operator, _ := access.BuiltInRole(access.RoleInstallationOperator)
+		site, _ := access.BuiltInRole(access.RoleSiteAdministrator)
+
 		cases = append(cases,
 			struct {
 				role   string
 				action identity.Action
 				want   bool
-			}{role: access.RoleInstallationOperator, action: action, want: true},
+			}{role: access.RoleInstallationOperator, action: action, want: operator.Has(action)},
 			struct {
 				role   string
 				action identity.Action
 				want   bool
-			}{role: access.RoleSiteAdministrator, action: action, want: true},
+			}{role: access.RoleSiteAdministrator, action: action, want: site.Has(action)},
 			struct {
 				role   string
 				action identity.Action

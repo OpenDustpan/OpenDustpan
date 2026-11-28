@@ -215,6 +215,9 @@ suffix" for each reason that gets this text.
     group route writes a `failure` entry when the change has a record. That
     entry holds the reason of the missing actions for any escalation refusal
     that names at least one missing action.
+- A revoked housekeeping grant stays revoked. The server writes these grants
+  only at the install and when it creates a namespace, and never writes them
+  again for that namespace.
 <!-- code-rule: access.ErrBuiltIn -->
 - A built-in role cannot be changed or deleted. The server answers 409 with
   no specific code. The server writes an audit entry with the outcome

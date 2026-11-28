@@ -85,6 +85,7 @@ needs `server:read-principals`. The list takes these query values:
 | `cursor` | The `nextCursor` of the page before. |
 | `prefix` | Only the principals whose subject starts with this text. |
 | `kind` | Only the principals of this kind. An unknown kind gets `400`. |
+| `source` | Only the principals of this source, for example `builtin`. An unknown source gets `400`. |
 
 A page holds `principals`, `nextCursor` and `total`. An empty `nextCursor` marks
 the last page. A `limit` that is not a number, or is less than 1, gets `400`
@@ -102,13 +103,31 @@ A principal has these fields:
 | `subject` | The subject. |
 | `displayName` | The name that people see. |
 | `kind` | `person`, `service` or `workload`. |
-| `source` | Where the principal came from, for example `local`. |
+| `source` | Where the principal came from, for example `local`. The server makes the housekeeping principals with the source `builtin`. |
 | `createdAt`, `updatedAt` | The times, as RFC 3339 strings in UTC. |
 | `disabledAt` | The time of the disable, or `null` when the principal is enabled. |
 | `namespace` | The namespace of a namespace principal. Empty for an installation principal. |
 | `groupCount` | The number of groups the principal is in. |
 | `temporaryAdministrator` | Whether the principal is a temporary administrator. `true` with a `null` `temporaryExpiresAt` means that the server could not read the temporary administrator records after a change, and marked the person to be safe. |
 | `temporaryExpiresAt` | The end of the temporary administrator period. `null` when the principal has no period, or when the server could not read it. |
+
+### Find the housekeeping principals
+
+The server has one housekeeping principal for each automatic task, for example
+the sweep of expired tokens. Each one has the kind `service` and the source
+`builtin`. To list them, send
+`GET /api/server/principals?kind=service&source=builtin`. To see what one of
+them may do, send `GET /api/server/access-review?subject=principal:<id>` with
+the `id` of the principal. Each row has a role, an object, the creator and a
+time. A created namespace gives a grant to each of the five housekeeping
+principals that act inside a namespace. A role on the installation holds no
+action inside a namespace. So `housekeeping:agent-reaper` holds two roles:
+`housekeeping-agent-reveal-sweep` on the installation and
+`housekeeping-agent-run-reaper` on each namespace. The access review of the namespace,
+`GET /api/server/namespaces/{namespace}/access-review?subject=principal:<id>`,
+lists it. The route `GET /api/server/principals/{principal}/grants` lists the
+grants on the principal as an object, not the grants that it holds. A later
+change refuses a token and a trust rule for a housekeeping principal.
 
 ## Change a principal
 

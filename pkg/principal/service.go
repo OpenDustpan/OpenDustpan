@@ -195,9 +195,12 @@ func (s *Service) GetPrincipal(ctx context.Context, id string) (Principal, error
 
 // ListPrincipals returns one page of the principals, ordered by subject.
 // The prefix matches the start of the subject, exactly. A kind that is not
-// empty keeps the principals of that kind. An unknown kind returns
+// empty keeps the principals of that kind. A source that is not empty keeps
+// the principals of that source. An unknown kind or source returns
 // ErrInvalid.
-func (s *Service) ListPrincipals(ctx context.Context, req PageRequest, kind Kind) (Page[Principal], error) {
+func (s *Service) ListPrincipals(
+	ctx context.Context, req PageRequest, kind Kind, source Source,
+) (Page[Principal], error) {
 	if kind != "" {
 		parsed, err := ParseKind(string(kind))
 		if err != nil {
@@ -207,12 +210,21 @@ func (s *Service) ListPrincipals(ctx context.Context, req PageRequest, kind Kind
 		kind = parsed
 	}
 
+	if source != "" {
+		parsed, err := ParseSource(string(source))
+		if err != nil {
+			return Page[Principal]{}, err
+		}
+
+		source = parsed
+	}
+
 	q, limit, err := req.query(exactKey)
 	if err != nil {
 		return Page[Principal]{}, err
 	}
 
-	rows, total, err := s.store.ListPrincipals(ctx, q, kind)
+	rows, total, err := s.store.ListPrincipals(ctx, q, kind, source)
 	if err != nil {
 		return Page[Principal]{}, fmt.Errorf("list principals: %w", err)
 	}
@@ -260,8 +272,9 @@ func (s *Service) UpdatePrincipal(ctx context.Context, e audit.Entry, id string,
 
 // DeletePrincipal ends the principal with the ID id and its memberships,
 // with the entry e. The store revokes its grants in the same transaction, so
-// the Guard checks that caller holds every action that they give. It
-// returns ErrNoWorkingBreakGlass when the principal is the last enabled
+// the Guard checks that caller holds every action that they give. A principal
+// of the source builtin is ErrReservedSubject: the server makes it and keeps
+// it. It returns ErrNoWorkingBreakGlass when the principal is the last enabled
 // break-glass account. The delete of a principal of a namespace goes to the
 // audit log of the namespace, with its fence.
 func (s *Service) DeletePrincipal(ctx context.Context, e audit.Entry, caller identity.Principal, id string) error {
@@ -275,6 +288,10 @@ func (s *Service) DeletePrincipal(ctx context.Context, e audit.Entry, caller ide
 	}
 
 	if err = refuseNamespaceServiceSubject(p.Subject); err != nil {
+		return fmt.Errorf("delete principal %q: %w", id, err)
+	}
+
+	if err = refuseBuiltinPrincipal(p); err != nil {
 		return fmt.Errorf("delete principal %q: %w", id, err)
 	}
 

@@ -42,6 +42,7 @@ func Run(t *testing.T, newStore Factory) {
 		{name: "missing principal is ErrNotFound", test: testMissingPrincipal},
 		{name: "list principals orders by subject", test: testListPrincipals},
 		{name: "list principals of one kind pages with a prefix", test: testListPrincipalsOfKind},
+		{name: "list principals of one source pages and counts only them", test: testListPrincipalsOfSource},
 		{name: "update principal keeps subject and kind", test: testUpdatePrincipal},
 		{name: "update of a missing principal is ErrNotFound", test: testUpdateMissingPrincipal},
 		{name: "delete principal removes its memberships", test: testDeletePrincipal},
@@ -154,6 +155,24 @@ func refused() audit.Entry {
 // all is a query for every row.
 func all() principal.Query {
 	return principal.Query{After: "", Low: "", High: "", Limit: principal.MaxLimit + 1, InstallationOnly: false}
+}
+
+// seededPrincipals returns the number of principals that the baseline seeds.
+func seededPrincipals() int64 {
+	return int64(len(principal.HousekeepingPurposes()))
+}
+
+// housekeepingSubjects returns the subjects of the seeded principals, in
+// subject order.
+func housekeepingSubjects() []string {
+	purposes := principal.HousekeepingPurposes()
+
+	out := make([]string, 0, len(purposes))
+	for _, purpose := range purposes {
+		out = append(out, purpose.Subject())
+	}
+
+	return out
 }
 
 func newPrincipal(id, subject string, kind principal.Kind) principal.Principal {
@@ -383,25 +402,27 @@ func testMissingPrincipal(t *testing.T, s principal.Store) {
 func testListPrincipals(t *testing.T, s principal.Store) {
 	t.Helper()
 
-	got, _, err := s.ListPrincipals(t.Context(), all(), "")
+	got, total, err := s.ListPrincipals(t.Context(), all(), "", "")
 	if err != nil {
-		t.Fatalf("list an empty store: %v", err)
+		t.Fatalf("list a store with the install principals: %v", err)
 	}
 
-	if len(got) != 0 {
-		t.Fatalf("empty store lists %d principals", len(got))
+	if total != seededPrincipals() {
+		t.Fatalf("store with the install principals lists %d, want %d", total, seededPrincipals())
 	}
+
+	equalStrings(t, "seeded subjects", subjects(got), housekeepingSubjects())
 
 	mustCreatePrincipal(t, s, newPrincipal("prn-1", "carol", principal.KindPerson))
 	mustCreatePrincipal(t, s, newPrincipal("prn-2", "alice", principal.KindPerson))
 	mustCreatePrincipal(t, s, newPrincipal("prn-3", "bob", principal.KindWorkload))
 
-	got, _, err = s.ListPrincipals(t.Context(), all(), "")
+	got, _, err = s.ListPrincipals(t.Context(), all(), "", "")
 	if err != nil {
 		t.Fatalf("list: %v", err)
 	}
 
-	equalStrings(t, "subjects", subjects(got), []string{"alice", "bob", "carol"})
+	equalStrings(t, "subjects", subjects(got), append([]string{"alice", "bob", "carol"}, housekeepingSubjects()...))
 }
 
 func testListPrincipalsOfKind(t *testing.T, s principal.Store) {
@@ -424,12 +445,16 @@ func testListPrincipalsOfKind(t *testing.T, s principal.Store) {
 		want  []string
 		total int64
 	}{
-		{"services", principal.KindService, all(), []string{"ci-build", "ci-deploy"}, 2},
+		{
+			"services", principal.KindService, all(),
+			append([]string{"ci-build", "ci-deploy"}, housekeepingSubjects()...),
+			2 + seededPrincipals(),
+		},
 		{
 			"services after a key", principal.KindService,
-			principal.Query{After: "ci-build", Low: "", High: "", Limit: 10, InstallationOnly: false},
-			[]string{"ci-deploy"},
-			2,
+			principal.Query{After: "ci-build", Low: "", High: "", Limit: 20, InstallationOnly: false},
+			append([]string{"ci-deploy"}, housekeepingSubjects()...),
+			2 + seededPrincipals(),
 		},
 		{
 			"workloads with a prefix", principal.KindWorkload,
@@ -449,11 +474,94 @@ func testListPrincipalsOfKind(t *testing.T, s principal.Store) {
 			3,
 		},
 	}
+	for i := range cases {
+		tc := &cases[i]
+
+		got, total, err := s.ListPrincipals(t.Context(), tc.q, tc.kind, "")
+		if err != nil {
+			t.Fatalf("%s: %v", tc.name, err)
+		}
+
+		equalStrings(t, tc.name, subjects(got), tc.want)
+
+		if total != tc.total {
+			t.Fatalf("%s total = %d, want %d", tc.name, total, tc.total)
+		}
+	}
+}
+
+func testListPrincipalsOfSource(t *testing.T, s principal.Store) {
+	t.Helper()
+
+	mustCreatePrincipal(t, s, newPrincipal("prn-1", "ci-build", principal.KindService))
+	mustCreatePrincipal(t, s, newPrincipal("prn-2", "ci-deploy", principal.KindService))
+	mustCreatePrincipal(t, s, newPrincipal("prn-3", "ci-local", principal.KindPerson))
+
+	oidc := newPrincipal("prn-4", "ci-oidc", principal.KindPerson)
+	oidc.Source = principal.SourceOIDC
+	mustCreatePrincipal(t, s, oidc)
+
+	scim := newPrincipal("prn-5", "ci-scim", principal.KindService)
+	scim.Source = principal.SourceSCIM
+	mustCreatePrincipal(t, s, scim)
+
+	gone := newPrincipal("prn-6", "ci-gone", principal.KindService)
+	gone.Source = principal.SourceOIDC
+	mustCreatePrincipal(t, s, gone)
+
+	if err := s.DeletePrincipal(t.Context(), "prn-6", entry()); err != nil {
+		t.Fatalf("delete principal: %v", err)
+	}
+
+	cases := []struct {
+		name   string
+		kind   principal.Kind
+		source principal.Source
+		q      principal.Query
+		want   []string
+		total  int64
+	}{
+		{
+			name: "the local source", kind: "", source: principal.SourceLocal,
+			q:    principal.Query{After: "", Low: "ci-", High: "ci.", Limit: 10, InstallationOnly: false},
+			want: []string{"ci-build", "ci-deploy", "ci-local"}, total: 3,
+		},
+		{
+			name: "the OIDC source", kind: "", source: principal.SourceOIDC,
+			q:    principal.Query{After: "", Low: "ci-", High: "ci.", Limit: 10, InstallationOnly: false},
+			want: []string{"ci-oidc"}, total: 1,
+		},
+		{
+			name: "the SCIM source", kind: "", source: principal.SourceSCIM,
+			q:    principal.Query{After: "", Low: "ci-", High: "ci.", Limit: 10, InstallationOnly: false},
+			want: []string{"ci-scim"}, total: 1,
+		},
+		{
+			name: "a source with a kind", kind: principal.KindService, source: principal.SourceLocal,
+			q:    principal.Query{After: "", Low: "ci-", High: "ci.", Limit: 10, InstallationOnly: false},
+			want: []string{"ci-build", "ci-deploy"}, total: 2,
+		},
+		{
+			name: "a source after a key", kind: "", source: principal.SourceLocal,
+			q:    principal.Query{After: "ci-build", Low: "ci-", High: "ci.", Limit: 10, InstallationOnly: false},
+			want: []string{"ci-deploy", "ci-local"}, total: 3,
+		},
+		{
+			name: "a page of a source", kind: "", source: principal.SourceLocal,
+			q:    principal.Query{After: "", Low: "ci-", High: "ci.", Limit: 2, InstallationOnly: false},
+			want: []string{"ci-build", "ci-deploy"}, total: 3,
+		},
+		{
+			name: "a source with no principal under the prefix", kind: "", source: principal.SourceLDAP,
+			q:    principal.Query{After: "", Low: "ci-", High: "ci.", Limit: 10, InstallationOnly: false},
+			want: nil, total: 0,
+		},
+	}
 
 	for i := range cases {
 		tc := &cases[i]
 
-		got, total, err := s.ListPrincipals(t.Context(), tc.q, tc.kind)
+		got, total, err := s.ListPrincipals(t.Context(), tc.q, tc.kind, tc.source)
 		if err != nil {
 			t.Fatalf("%s: %v", tc.name, err)
 		}
@@ -1107,7 +1215,7 @@ func testPagePrincipals(t *testing.T, s principal.Store) {
 	}
 
 	for _, tc := range cases {
-		got, _, err := s.ListPrincipals(ctx, tc.q, "")
+		got, _, err := s.ListPrincipals(ctx, tc.q, "", "")
 		if err != nil {
 			t.Fatalf("%s: %v", tc.name, err)
 		}
@@ -1364,14 +1472,15 @@ func checkPrincipalTotals(t *testing.T, s principal.Store) {
 
 	ctx := t.Context()
 
-	ps, total, err := s.ListPrincipals(ctx, onePerPage(), "")
-	if err != nil || total != 3 || len(ps) != 1 || ps[0].GroupCount != 2 {
+	ps, total, err := s.ListPrincipals(ctx, onePerPage(), "", "")
+	if err != nil || total != 3+seededPrincipals() || len(ps) != 1 || ps[0].GroupCount != 2 {
 		t.Fatalf("first principal = %+v, total %d, %v; want alice in 2 groups of 3 principals", ps, total, err)
 	}
 
 	_, total, err = s.ListPrincipals(
 		ctx,
 		principal.Query{After: "alice", Low: "b", High: "c", Limit: 10, InstallationOnly: false},
+		"",
 		"",
 	)
 	if err != nil || total != 1 {
@@ -1632,13 +1741,13 @@ func testBreakGlassRoundTrip(t *testing.T, s principal.Store) {
 
 	equalPrincipal(t, bySubject, want)
 
-	rows, _, err := s.ListPrincipals(ctx, all(), "")
+	rows, _, err := s.ListPrincipals(ctx, all(), "", "")
 	if err != nil {
 		t.Fatalf("list: %v", err)
 	}
 
-	if len(rows) != 1 {
-		t.Fatalf("list holds %d principals, want 1", len(rows))
+	if len(rows) != int(1+seededPrincipals()) {
+		t.Fatalf("list holds %d principals, want %d", len(rows), 1+seededPrincipals())
 	}
 
 	equalPrincipal(t, rows[0], want)

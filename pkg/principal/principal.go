@@ -46,7 +46,9 @@ var (
 	ErrInvalid = errors.New("invalid principal or group")
 	// ErrReservedSubject reports a subject that the bootstrap admin tokens
 	// use, or that can look like one: admin, or admin and a character that is
-	// not a letter (ADR 6).
+	// not a letter. It also reports a record that the server makes
+	// and keeps, such as a principal of the source builtin, which no API
+	// deletes.
 	ErrReservedSubject = errors.New("reserved subject")
 	// ErrManagedByDirectory reports a membership change through the API of
 	// a group that a directory sync keeps (ADR 55). The error names the
@@ -142,7 +144,19 @@ const (
 	// SourceOAuth is a person that the first sign-in through a plain
 	// OAuth 2.0 provider made.
 	SourceOAuth Source = "oauth"
+	// SourceBuiltin is a record that the server makes at the install.
+	SourceBuiltin Source = "builtin"
 )
+
+// ParseSource returns the Source that s names, or ErrInvalid.
+func ParseSource(s string) (Source, error) {
+	switch src := Source(s); src {
+	case SourceLocal, SourceLDAP, SourceSCIM, SourceOIDC, SourceOAuth, SourceBuiltin:
+		return src, nil
+	default:
+		return "", fmt.Errorf("%w: unknown source %q", ErrInvalid, s)
+	}
+}
 
 // Limits of the text fields, in bytes.
 const (
@@ -373,6 +387,18 @@ func refuseNamespaceServiceSubject(s string) error {
 	}
 
 	return nil
+}
+
+// refuseBuiltinPrincipal returns ErrReservedSubject for a principal of the
+// source builtin: the server makes these records at the install and keeps
+// them, and no API deletes them.
+func refuseBuiltinPrincipal(p Principal) error {
+	if p.Source != SourceBuiltin {
+		return nil
+	}
+
+	return fmt.Errorf("%w: %q is a principal of the source builtin, which the server makes and keeps",
+		ErrReservedSubject, p.Subject)
 }
 
 // checkSubjectForm checks the form of a subject and that no bootstrap admin
@@ -645,11 +671,24 @@ func (p Principal) validateNamespace() error {
 }
 
 // validateSource returns ErrInvalid for a source that is not local, ldap,
-// scim, oidc or oauth.
+// scim, oidc, oauth or builtin.
 func validateSource(s Source) error {
+	if _, err := ParseSource(string(s)); err != nil {
+		return err
+	}
+
+	return nil
+}
+
+// checkGroupSource returns ErrInvalid for a source that a group cannot
+// have. A group has its own allowlist: builtin is only the source of a
+// principal that the server makes at the install.
+func checkGroupSource(s Source) error {
 	switch s {
 	case SourceLocal, SourceLDAP, SourceSCIM, SourceOIDC, SourceOAuth:
 		return nil
+	case SourceBuiltin:
+		return fmt.Errorf("%w: a group cannot have the source %q", ErrInvalid, s)
 	default:
 		return fmt.Errorf("%w: unknown source %q", ErrInvalid, s)
 	}
@@ -662,7 +701,7 @@ func (g Group) Validate() error {
 		return err
 	}
 
-	if err := validateSource(g.Source); err != nil {
+	if err := checkGroupSource(g.Source); err != nil {
 		return err
 	}
 

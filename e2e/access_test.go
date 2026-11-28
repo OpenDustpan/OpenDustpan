@@ -14,6 +14,7 @@ import (
 	"testing"
 
 	"opendustpan.org/opendustpan/e2e"
+	"opendustpan.org/opendustpan/pkg/principal"
 )
 
 // e2eRole and e2eGrant decode the role and grant wire forms.
@@ -731,7 +732,7 @@ func checkGrantRoutes(ctx context.Context, t *testing.T, env *e2e.Env, k grantKi
 	var list e2eGrantList
 	principalCall(ctx, t, env, principalStep{http.MethodGet, k.path + query, "", http.StatusOK}, &list)
 
-	list = withoutFreshAdmin(list)
+	list = withoutHousekeeping(withoutFreshAdmin(list))
 
 	if len(list.Grants) != 1 || list.Grants[0].ID != g.ID || list.Total != 1 || list.NextCursor != "" {
 		t.Fatalf("grants on %s = %+v, want %s alone", k.object, list, g.ID)
@@ -813,6 +814,8 @@ func checkSubjectDeleteRevokes(ctx context.Context, t *testing.T, env *e2e.Env, 
 		http.MethodGet, "/api/server/namespaces/grants/grants", "", http.StatusOK,
 	}, &list)
 
+	list = withoutHousekeeping(list)
+
 	if len(list.Grants) != 0 {
 		t.Fatalf("grants after the principal delete = %+v, want none", list.Grants)
 	}
@@ -858,6 +861,34 @@ func withoutFreshAdmin(list e2eGrantList) e2eGrantList {
 
 	for _, g := range list.Grants {
 		if g.ID == "grt-e2e-fresh-admin" {
+			list.Total--
+
+			continue
+		}
+
+		kept = append(kept, g)
+	}
+
+	list.Grants = kept
+
+	return list
+}
+
+// withoutHousekeeping returns list without the grants that the server gives
+// to the housekeeping principals: on the installation at install, and on
+// each namespace when it is created. A grant counts as one of them only when
+// it holds the role of the purpose of its principal.
+func withoutHousekeeping(list e2eGrantList) e2eGrantList {
+	roles := make(map[[2]string]bool)
+	for _, p := range principal.HousekeepingPurposes() {
+		roles[[2]string{"principal:" + p.ID(), p.InstallationRole()}] = p.ActsOnInstallation()
+		roles[[2]string{"principal:" + p.ID(), p.NamespaceRole()}] = p.ActsInsideNamespace()
+	}
+
+	kept := list.Grants[:0:0]
+
+	for _, g := range list.Grants {
+		if roles[[2]string{g.Subject, g.Role}] {
 			list.Total--
 
 			continue
