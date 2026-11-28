@@ -42,6 +42,33 @@ func TestCollectSkipsOnlyTheExactUndescribedRoutes(t *testing.T) {
 	}
 }
 
+// TestCollectTakesAllowedOutsidePrefixes proves that Collect keeps a row on
+// each allowed outside prefix and still skips any other path outside the
+// prefix of the description.
+func TestCollectTakesAllowedOutsidePrefixes(t *testing.T) {
+	t.Parallel()
+
+	rows := []apidesc.Row{
+		{
+			Method: "POST", Path: "/api/agent/secrets", Actions: []string{"server:manage-agent"},
+			NamespaceActions: nil, Public: false, IdempotencyKey: false,
+		},
+		{
+			Method: "GET", Path: "/api/server/egress-allowlist", Actions: []string{"server:manage-settings"},
+			NamespaceActions: nil, Public: false, IdempotencyKey: false,
+		},
+		{
+			Method: "GET", Path: "/api/server/other", Actions: []string{"server:manage-settings"},
+			NamespaceActions: nil, Public: false, IdempotencyKey: false,
+		},
+	}
+
+	got := apidesc.Collect(rows, nil)
+	if len(got) != 2 {
+		t.Fatalf("Collect() = %d operations, want 2", len(got))
+	}
+}
+
 // TestLabelStatuses proves the success statuses that a label gives: the
 // default of the body, the codes in ascending order, and an error at Build
 // for a code that the label gives twice or that is not a 2xx code.

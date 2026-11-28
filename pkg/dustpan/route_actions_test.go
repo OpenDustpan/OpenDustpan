@@ -78,6 +78,7 @@ var rootPrefixes = map[string]string{
 	"/api/v2/":        "tfe",
 	"/tofu/state/":    "tofuhttp",
 	"/api/server/":    "server",
+	"/api/agent/":     "server",
 	"/api/":           "pulumi",
 	"/oidc/":          "issuer",
 	"/webhooks/":      "githostwebhook",

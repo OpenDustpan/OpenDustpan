@@ -12,6 +12,36 @@ import (
 // pathPrefix starts the path of each operation of the description.
 const pathPrefix = "/api/dustpan/v1/"
 
+// allowedOutsidePrefixes returns the path prefixes outside pathPrefix that the
+// description still holds: the model connection routes and the egress
+// allowlist of the installation. It mirrors the allowlist in
+// internal/api/apidesc/apidesc.go. Any other path outside pathPrefix is still
+// refused.
+func allowedOutsidePrefixes() []string {
+	return []string{"/api/agent/", "/api/server/egress-allowlist"}
+}
+
+// isAllowedOutside reports whether path is under one of the allowed prefixes
+// outside pathPrefix. A prefix that ends in a slash matches by prefix. Another
+// entry matches itself and any path below it.
+func isAllowedOutside(path string) bool {
+	for _, prefix := range allowedOutsidePrefixes() {
+		if strings.HasSuffix(prefix, "/") {
+			if strings.HasPrefix(path, prefix) {
+				return true
+			}
+
+			continue
+		}
+
+		if path == prefix || strings.HasPrefix(path, prefix+"/") {
+			return true
+		}
+	}
+
+	return false
+}
+
 // operationKeys returns the keys that an operation holds in the subset.
 func operationKeys() []string {
 	return []string{
@@ -172,11 +202,16 @@ func (st *parseState) operation(ptr, path, method, id string, o object) (model.O
 }
 
 // pathWildcards checks the path of an operation and returns the names of its
-// wildcards in order.
+// wildcards in order. A path under pathPrefix or under one of the allowed
+// outside prefixes is accepted; any other path is refused.
 func pathWildcards(ptr, path string) ([]string, error) {
 	rest, ok := strings.CutPrefix(path, pathPrefix)
 	if !ok {
-		return nil, invalid(ptr, "the path must start with "+pathPrefix)
+		if !isAllowedOutside(path) {
+			return nil, invalid(ptr, "the path must start with "+pathPrefix)
+		}
+
+		rest = strings.TrimPrefix(path, "/")
 	}
 
 	var names []string

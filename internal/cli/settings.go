@@ -295,6 +295,12 @@ var Settings = []*Setting{
 			"password with no encryption. The settings resource also holds it, and a value from a flag, a "+
 			"variable or this file locks it",
 	).WithFile("egress.allowPlainConnections"),
+	boolSetting(
+		"egress-public-only", "DUSTPAN_EGRESS_PUBLIC_ONLY",
+		"refuse private addresses for a model URL, also when the egress allowlist has a rule for them "+
+			"(DUSTPAN_EGRESS_PUBLIC_ONLY)",
+		"(none: off). This version stores the flag. The flag has no effect yet.",
+	).WithFile("egress-public-only"),
 	stringSetting(
 		"branding-preset", "DUSTPAN_BRANDING_PRESET", "",
 		"name of the branding preset of the installation, for example high-contrast (DUSTPAN_BRANDING_PRESET)",

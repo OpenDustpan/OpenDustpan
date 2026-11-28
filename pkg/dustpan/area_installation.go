@@ -6,6 +6,7 @@ import (
 	"net/http"
 	"time"
 
+	"opendustpan.org/opendustpan/internal/agentsvc"
 	"opendustpan.org/opendustpan/internal/api/idempotent"
 	serverapi "opendustpan.org/opendustpan/internal/api/server"
 	"opendustpan.org/opendustpan/internal/api/stategate"
@@ -70,6 +71,7 @@ type serverHandlerInputs struct {
 	principals   *principal.Service
 	gates        *gate.ConfigService
 	proxyRules   *jobproxysvc.Service
+	agent        *agentsvc.Service
 	forgeService *forge.Service
 	idempotency  *idempotent.Middleware
 	extras       serverExtras
@@ -144,7 +146,7 @@ func newServerHandler(in *serverHandlerInputs) (http.Handler, error) {
 		Settings:           in.extras.settings,
 		InstallationKind:   in.installationKind, StateWriteGates: in.stateWrite,
 		Instances: in.instances, StoreChecks: in.checks, Cursors: in.cursors,
-		ProxyRules: in.proxyRules,
+		ProxyRules: in.proxyRules, Agent: in.agent,
 	})
 	if err != nil {
 		return nil, fmt.Errorf("server api: %w", err)

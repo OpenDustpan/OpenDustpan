@@ -1614,6 +1614,9 @@ const attemptClaimTrips = 23
 // marks in the run, so the restore makes 2 round trips fewer for it than the
 // model gives a table.
 //
+// The fixed part also holds agentConnectionTablesTrips, the measured change
+// for the seven tables of the agent connection together.
+//
 // The fixed part also holds attemptClaimTrips, and perTable holds the
 // claimReadTrips of the claim read for the table file of each table: the
 // backup that the restore holds reads the claim before each put under
@@ -1626,7 +1629,7 @@ func restoreModel() costModel {
 			breakGlassFloorTrips + breakGlassPasswordTrips + serverAuditLockTrips + checkpointSupersedesTrips +
 			droppedRunnerCredentialTrips + proxyRuleSetTrips + poolProxySettingsTrips + sharingRuleTrips + trustBundleTrips +
 			updateLeaseExpireTrips + swappedSettingTrips + settingChangeEntryTrips - eventReceiptTrips - profileOpenSessionTrips +
-			firstAdministratorTrips + claimTableTrips,
+			firstAdministratorTrips + claimTableTrips + agentConnectionTablesTrips,
 		perTable:     7 + claimReadTrips,
 		perOther:     2,
 		perMigration: 2,
@@ -1798,6 +1801,20 @@ const sharingRuleTrips = -2
 // counts. The run makes 5 round trips for it, 2 fewer than perTable gives, as
 // for group_mappings.
 const poolProxySettingsTrips = -2
+
+// agentConnectionTablesTrips is the change in the fixed part for the seven
+// tables of the agent connection together: agent_secret_items,
+// agent_connection_current, agent_secret_refs, agent_egress_allowlist,
+// agent_egress_allowlist_hosts and agent_egress_allowlist_rules, which are in
+// Tables, and the emptied agent_connection_pending.
+//
+// The measured runs of the restore with the seven tables hold 13 round trips
+// fewer than the model gave, at both sizes, so the count does not grow with
+// the units: the restore made 1722 round trips at 3 stacks and 3 workspaces,
+// where the model gave 1735, and 1857 at 30 stacks and 30 workspaces, where
+// the model gave 1870. A backup matched the model at 932 round trips. No run
+// measured one table alone, so the constant holds only the sum.
+const agentConnectionTablesTrips = -13
 
 // removalAlertTrips is the change in the fixed part for the table
 // member_removal_alerts. Like member_removals, it costs 2 round trips fewer

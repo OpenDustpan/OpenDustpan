@@ -1,0 +1,5 @@
+agent-connection.allowlist-invalid
+agent-connection.not-connected
+agent-connection.secret-in-use
+agent-connection.secret-invalid
+agent-connection.secret-not-found

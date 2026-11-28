@@ -438,6 +438,7 @@ func TestEveryRootPatternHasLabel(t *testing.T) {
 		"/api/":                           metrics.AdapterPulumi,
 		"/api/audit/":                     metrics.AdapterServer,
 		"/api/server/":                    metrics.AdapterServer,
+		"/api/agent/":                     metrics.AdapterServer,
 		"/api/inventory/":                 metrics.AdapterInventory,
 		"/api/v2/":                        metrics.AdapterOpenTofu,
 		"/tofu/state/":                    metrics.AdapterOpenTofu,

@@ -264,6 +264,7 @@ func newFAFixture(t *testing.T) faFixture {
 	limiter := &fakeLimiter{mu: sync.Mutex{}, failures: 0, refuse: false}
 
 	handler, err := newCheckedHandler(t, &apiserver.Config{
+		Agent:            nil,
 		ProxyRules:       nil,
 		Cursors:          testCursors(t),
 		LocalUsers:       nil,

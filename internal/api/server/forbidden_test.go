@@ -32,6 +32,7 @@ func forbiddenHandler(t *testing.T, err error) testHandler {
 	}
 
 	handler, newErr := newCheckedHandler(t, &apiserver.Config{
+		Agent:              nil,
 		FirstAdministrator: nil,
 		ProxyRules:         nil,
 		Cursors:            testCursors(t),

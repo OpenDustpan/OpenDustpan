@@ -552,6 +552,53 @@ CREATE TABLE imports_purged (
     purged_at_ms bigint NOT NULL
 );
 
+CREATE TABLE agent_connection_current (
+    ref           text NOT NULL PRIMARY KEY CHECK (ref = 'cur-1'),
+    document      bytea NOT NULL,
+    version       bigint NOT NULL,
+    created_at_ms bigint NOT NULL,
+    changed_at_ms bigint NOT NULL
+);
+
+CREATE TABLE agent_connection_pending (
+    probe_id      text NOT NULL PRIMARY KEY,
+    document      bytea NOT NULL,
+    version       bigint NOT NULL,
+    created_at_ms bigint NOT NULL
+);
+
+CREATE TABLE agent_egress_allowlist (
+    id            integer NOT NULL PRIMARY KEY CHECK (id = 1),
+    updated_at_ms bigint NOT NULL
+);
+
+CREATE TABLE agent_egress_allowlist_hosts (
+    id    integer NOT NULL PRIMARY KEY,
+    host  text NOT NULL
+);
+
+CREATE TABLE agent_egress_allowlist_rules (
+    id    integer NOT NULL PRIMARY KEY,
+    cidr  text NOT NULL,
+    port  integer NOT NULL,
+    http  integer NOT NULL DEFAULT 0
+);
+
+CREATE TABLE agent_secret_items (
+    ref           text NOT NULL PRIMARY KEY,
+    name          text NOT NULL,
+    ciphertext    bytea NOT NULL,
+    created_at_ms bigint NOT NULL,
+    changed_at_ms bigint NOT NULL,
+    last_used_at_ms bigint NOT NULL DEFAULT 0
+);
+
+CREATE TABLE agent_secret_refs (
+    ref    text NOT NULL,
+    secret text NOT NULL REFERENCES agent_secret_items (ref),
+    PRIMARY KEY (ref, secret)
+);
+
 CREATE TABLE installation_secret_keys (
     scope_id text NOT NULL,
     wrapper_id text NOT NULL,

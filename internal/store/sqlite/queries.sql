@@ -2832,6 +2832,122 @@ ON CONFLICT (provider_id) DO NOTHING;
 -- name: GetOIDCProviderIssuer :one
 SELECT issuer FROM oidc_providers WHERE provider_id = ?;
 
+-- name: CreateAgentSecretItem :execrows
+INSERT INTO agent_secret_items (ref, name, ciphertext, created_at_ms, changed_at_ms, last_used_at_ms)
+VALUES (?, ?, ?, ?, ?, 0);
+
+-- name: DeleteAgentConnectionCurrent :execrows
+DELETE FROM agent_connection_current
+WHERE ref = 'cur-1';
+
+-- name: DeleteAgentConnectionPending :execrows
+DELETE FROM agent_connection_pending
+WHERE probe_id = ?;
+
+-- name: DeleteAgentConnectionPendingAll :execrows
+DELETE FROM agent_connection_pending;
+
+-- name: DeleteAgentEgressAllowlistHosts :exec
+DELETE FROM agent_egress_allowlist_hosts;
+
+-- name: DeleteAgentEgressAllowlistRules :exec
+DELETE FROM agent_egress_allowlist_rules;
+
+-- name: DeleteAgentSecretItem :execrows
+DELETE FROM agent_secret_items
+WHERE ref = ?;
+
+-- name: DeleteAgentSecretRefs :exec
+DELETE FROM agent_secret_refs
+WHERE ref = ?;
+
+-- name: DeleteAgentSecretRefsAll :exec
+DELETE FROM agent_secret_refs;
+
+-- name: GetAgentConnectionCurrent :one
+SELECT document, version
+FROM agent_connection_current
+WHERE ref = 'cur-1';
+
+-- name: GetAgentConnectionPending :one
+SELECT document, version
+FROM agent_connection_pending
+WHERE probe_id = ?;
+
+-- name: GetAgentSecretItem :one
+SELECT ref, name, created_at_ms, changed_at_ms, last_used_at_ms
+FROM agent_secret_items
+WHERE ref = ?;
+
+-- name: GetAgentSecretItemCiphertext :one
+SELECT ciphertext
+FROM agent_secret_items
+WHERE ref = ?;
+
+-- name: InsertAgentEgressAllowlistHost :exec
+INSERT INTO agent_egress_allowlist_hosts (id, host)
+VALUES (?, ?);
+
+-- name: InsertAgentEgressAllowlistRule :exec
+INSERT INTO agent_egress_allowlist_rules (id, cidr, port, http)
+VALUES (?, ?, ?, ?);
+
+-- name: InsertAgentSecretRef :exec
+INSERT INTO agent_secret_refs (ref, secret)
+VALUES (?, ?);
+
+-- name: ListAgentConnectionPending :many
+SELECT probe_id, document, version
+FROM agent_connection_pending
+ORDER BY created_at_ms, probe_id;
+
+-- name: ListAgentEgressAllowlistHosts :many
+SELECT host
+FROM agent_egress_allowlist_hosts
+ORDER BY id;
+
+-- name: ListAgentEgressAllowlistRules :many
+SELECT cidr, port, http
+FROM agent_egress_allowlist_rules
+ORDER BY id;
+
+-- name: ListAgentSecretItems :many
+SELECT ref, name, created_at_ms, changed_at_ms, last_used_at_ms
+FROM agent_secret_items
+ORDER BY created_at_ms DESC, ref;
+
+-- name: PutAgentConnectionCurrent :exec
+-- The current document keeps its creation time when it is replaced.
+INSERT INTO agent_connection_current (ref, document, version, created_at_ms, changed_at_ms)
+VALUES ('cur-1', ?, ?, ?, ?)
+ON CONFLICT (ref) DO UPDATE SET
+    document = excluded.document,
+    version = excluded.version,
+    changed_at_ms = excluded.changed_at_ms;
+
+-- name: PutAgentConnectionPending :exec
+INSERT INTO agent_connection_pending (probe_id, document, version, created_at_ms)
+VALUES (?, ?, ?, ?)
+ON CONFLICT (probe_id) DO UPDATE SET
+    document = excluded.document,
+    version = excluded.version,
+    created_at_ms = excluded.created_at_ms;
+
+-- name: ReplaceAgentSecretItem :one
+-- The new change time is after the old one, also when two writes share one
+-- millisecond.
+UPDATE agent_secret_items
+SET ciphertext = sqlc.arg('ciphertext'),
+    changed_at_ms = MAX(sqlc.arg('changed_at_ms'), changed_at_ms + 1)
+WHERE ref = sqlc.arg('ref')
+RETURNING ref, name, created_at_ms, changed_at_ms, last_used_at_ms;
+
+-- name: SetAgentEgressAllowlist :exec
+INSERT INTO agent_egress_allowlist (id, updated_at_ms)
+VALUES (1, ?)
+ON CONFLICT (id) DO UPDATE SET
+    updated_at_ms = excluded.updated_at_ms;
+
 -- name: CreateInstallationSecretKey :execrows
 -- The first seal in an installation scope stores its key. A concurrent
 -- first seal keeps the stored key.

@@ -207,8 +207,8 @@ func keyOfPattern(pattern string) string {
 // classesOf returns every class that the pattern ("METHOD /path") belongs to.
 // A route that belongs to one class only is in order. A route that belongs to
 // none or to two or more fails the check that calls this function. A route
-// is described only when its key is in both lists of in.described. A path
-// under the prefix is not enough.
+// is described when its key is in both lists of in.described, wherever it is
+// served. A path under the prefix is not enough.
 func classesOf(pattern string, in classInput) []routeClass {
 	_, path, found := strings.Cut(pattern, " ")
 	if !found {
@@ -217,7 +217,7 @@ func classesOf(pattern string, in classInput) []routeClass {
 
 	var out []routeClass
 
-	if strings.HasPrefix(path, apidesc.Prefix) && in.described[keyOfPattern(pattern)] {
+	if in.described[keyOfPattern(pattern)] {
 		out = append(out, classDescribed)
 	}
 
@@ -304,7 +304,7 @@ var rootMounts = []string{
 	apidesc.Prefix,
 	// The tool APIs, the installation APIs and the runner protocol.
 	"/api/inventory/", "/api/audit/", "/runner/v1/",
-	"/api/v2/", "/api/server/", "/api/", "/tofu/state/",
+	"/api/v2/", "/api/server/", "/api/agent/", "/api/", "/tofu/state/",
 	// The provider registry protocol of OpenTofu. Service discovery names its
 	// path, and the client cannot move it under the prefix of the REST API. The
 	// TFE adapter serves it and lists the route table in its own tests. The

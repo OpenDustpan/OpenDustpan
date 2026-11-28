@@ -77,6 +77,7 @@ func Catalog() []Spec {
 func areas() []func() []Spec {
 	return []func() []Spec{
 		accessSpecs,
+		agentConnectionSpecs,
 		auditChainSpecs,
 		auditSpecs,
 		authSpecs,

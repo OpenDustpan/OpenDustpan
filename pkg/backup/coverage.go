@@ -77,12 +77,16 @@ var ControlTables = []string{
 // administrator is a secret that lives 10 minutes: a restore never brings
 // it back, and its marker table travels. An open session holds a result that
 // ends within hours: a restore that brought one back would let a caller read
-// values after the end that the caller was told. The schema holds these
-// tables and the tables of Tables and ControlTables, and no other table.
+// values after the end that the caller was told. A pending model connection
+// document belongs to a probe that runs now: a restore that brought one back
+// would let an old probe promote a document that the restore removed. The
+// schema holds these tables and the tables of Tables and ControlTables, and
+// no other table.
 // Treat the list as a constant and never mutate it.
 //
 //nolint:gochecknoglobals // A shared frozen table list, as Tables is.
 var EmptiedTables = []string{
+	"agent_connection_pending",
 	TableDurableHeartbeats,
 	TableFirstAdministratorCodes,
 	TableGitHostEventReceiptCount,

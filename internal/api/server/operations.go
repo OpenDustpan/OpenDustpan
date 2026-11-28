@@ -126,8 +126,9 @@ var (
 	settingsPatchSchema = apidesc.Typed[settingsPatchRequest]("UpdateSettingsRequest", settingValueSchema)
 )
 
-// Operations returns the routes of this adapter that the description of the
-// tool-neutral REST API holds: the routes under apidesc.Prefix. A route that
+// Operations returns the routes of this adapter that the description holds:
+// the routes under apidesc.Prefix and the model connection routes on the
+// allowed outside prefixes. A route that
 // the unmoved paths still serve is not in the list.
 //
 // The sign-in with the one-time code of the dev command is not in the list.
@@ -157,7 +158,8 @@ var allLabels = joinLabels()
 // gitHostOperationLabels, of the gate and access limit routes, of
 // storeCheckOperationLabels, of the local user routes, of the passkey routes,
 // of the first administrator routes, of the backup and restore routes, of the
-// maintenance routes and of the directory sign-in routes.
+// maintenance routes, of the directory sign-in routes and of the model
+// connection routes.
 func joinLabels() map[string]apidesc.Label {
 	labels := maps.Clone(operationLabels)
 	maps.Copy(labels, gitHostOperationLabels)
@@ -172,6 +174,7 @@ func joinLabels() map[string]apidesc.Label {
 	maps.Copy(labels, maintenanceOperationLabels())
 	maps.Copy(labels, directorySignInOperationLabels())
 	maps.Copy(labels, proxyRuleOperationLabels())
+	maps.Copy(labels, agentOperationLabels())
 
 	return labels
 }

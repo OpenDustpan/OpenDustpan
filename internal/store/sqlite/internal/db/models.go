@@ -34,6 +34,52 @@ type AccessTokenPolicy struct {
 	ExchangeLifetimeMs int64
 }
 
+type AgentConnectionCurrent struct {
+	Ref         string
+	Document    []byte
+	Version     int64
+	CreatedAtMs int64
+	ChangedAtMs int64
+}
+
+type AgentConnectionPending struct {
+	ProbeID     string
+	Document    []byte
+	Version     int64
+	CreatedAtMs int64
+}
+
+type AgentEgressAllowlist struct {
+	ID          int64
+	UpdatedAtMs int64
+}
+
+type AgentEgressAllowlistHost struct {
+	ID   int64
+	Host string
+}
+
+type AgentEgressAllowlistRule struct {
+	ID   int64
+	Cidr string
+	Port int64
+	Http int64
+}
+
+type AgentSecretItem struct {
+	Ref          string
+	Name         string
+	Ciphertext   []byte
+	CreatedAtMs  int64
+	ChangedAtMs  int64
+	LastUsedAtMs int64
+}
+
+type AgentSecretRef struct {
+	Ref    string
+	Secret string
+}
+
 type AuditChainCheck struct {
 	ID          int64
 	CheckedAtMs int64

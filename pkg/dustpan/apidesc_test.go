@@ -103,8 +103,8 @@ func TestAPIDescriptionDrift(t *testing.T) {
 }
 
 // TestEveryRouteHasOneClass proves that each route that the adapters serve is
-// in exactly one of four classes: described, which means under the prefix and
-// in the operations of the server and in the checked-in description; on the
+// in exactly one of four classes: described, which means in the operations of
+// the server and in the checked-in description, wherever it is served; on the
 // list of routes that no adapter describes, with a reason; on the list of
 // paths that stay outside by design; or on the not-moved list. A path under
 // the prefix is not enough: a route that is served and is in neither the

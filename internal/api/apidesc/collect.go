@@ -178,8 +178,9 @@ func Pattern(method, path string) string {
 }
 
 // Collect turns the rows of a route table into operations. It skips a row
-// whose path is outside Prefix, because the description covers Prefix only,
-// and a row whose exact pattern is on the list Undescribed.
+// whose path is outside Prefix and outside the allowed outside prefixes,
+// because the description covers Prefix and those paths only, and a row
+// whose exact pattern is on the list Undescribed.
 //
 // A row under Prefix that has no label still gives an operation, with no ID.
 // Validate refuses such an operation, so a new route cannot enter the server
@@ -188,7 +189,7 @@ func Collect(rows []Row, labels map[string]Label) []Operation {
 	var out []Operation
 
 	for _, row := range rows {
-		if !strings.HasPrefix(row.Path, Prefix) {
+		if !strings.HasPrefix(row.Path, Prefix) && !isAllowedOutside(row.Path) {
 			continue
 		}
 

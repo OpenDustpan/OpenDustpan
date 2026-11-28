@@ -252,6 +252,7 @@ linters:
             - "**/pkg/maintenance/**"
             - "**/pkg/durable/**"
             - "**/internal/agent/**"
+            - "**/internal/agentsvc/**"
             - "**/pkg/job/**"
             - "**/pkg/history/**"
             - "**/internal/dependency/**"

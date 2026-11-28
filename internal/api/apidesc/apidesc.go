@@ -17,8 +17,39 @@ import (
 )
 
 // Prefix is the path prefix of the tool-neutral REST API. The description
-// covers a path under this prefix and no other path.
+// covers a path under this prefix and the two prefixes that
+// allowedOutsidePrefixes returns: /api/agent/ and /api/server/egress-allowlist.
+// It covers no other path.
 const Prefix = "/api/dustpan/v1/"
+
+// allowedOutsidePrefixes returns the path prefixes outside Prefix that the
+// description still holds: the model connection routes and the egress
+// allowlist of the installation. Any other path outside Prefix stays outside
+// the description.
+func allowedOutsidePrefixes() []string {
+	return []string{"/api/agent/", "/api/server/egress-allowlist"}
+}
+
+// isAllowedOutside reports whether path is under one of the allowed prefixes
+// outside Prefix. A prefix that ends in a slash matches by prefix. Another
+// entry matches itself and any path below it.
+func isAllowedOutside(path string) bool {
+	for _, prefix := range allowedOutsidePrefixes() {
+		if strings.HasSuffix(prefix, "/") {
+			if strings.HasPrefix(path, prefix) {
+				return true
+			}
+
+			continue
+		}
+
+		if path == prefix || strings.HasPrefix(path, prefix+"/") {
+			return true
+		}
+	}
+
+	return false
+}
 
 // ErrInvalidOperation means that an operation breaks the allowlists of
 // Validate, or that a list holds the same key twice.
@@ -240,10 +271,20 @@ func validateTags(o Operation) error {
 // validatePath allows a path under Prefix whose segments are literals
 // ([a-z0-9-]+) or wildcards. The last segment may also be openapi.json. A wildcard is {name} with name
 // [a-z_][a-z0-9_]*.
-// {name...} and {$} are allowed in the last segment only.
+// {name...} and {$} are allowed in the last segment only. A path under one of
+// the allowed prefixes outside Prefix follows the same segment rules.
 func validatePath(path string) error {
-	rest, ok := strings.CutPrefix(path, Prefix)
-	if !ok || rest == "" {
+	var rest string
+
+	switch {
+	case strings.HasPrefix(path, Prefix):
+		rest, _ = strings.CutPrefix(path, Prefix)
+		if rest == "" {
+			return fmt.Errorf("%w: path %q is outside %s", ErrInvalidOperation, path, Prefix)
+		}
+	case isAllowedOutside(path):
+		rest = strings.TrimPrefix(path, "/")
+	default:
 		return fmt.Errorf("%w: path %q is outside %s", ErrInvalidOperation, path, Prefix)
 	}
 
