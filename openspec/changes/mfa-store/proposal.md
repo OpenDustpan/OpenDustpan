@@ -26,7 +26,7 @@ Evidence for the claims above:
 - Add the four tables `mfa_pending_sign_ins`, `mfa_recovery_codes`, `mfa_totp_factors` and `mfa_totp_attempts`, with their queries.
 - Add one backup and restore rule for each new table, and the carry step that a restore of an older backup needs so that it cannot end a lock or make a used recovery code valid again.
 - Implement each method of `stepup.TOTPStore`: `EnrollTOTP`, `ConfirmTOTP`, `TOTP`, `BeginTOTPAttempt`, `AcceptStep`, `ResetTOTP` and the new `AcceptSignInStep`. `ConfirmTOTP` and `ResetTOTP` delete the factor and append the entry; they revoke nothing, because no step-up credential exists. The port comments of these two methods change to say so (task 2.1).
-- Add the NEW runner `stepuptest.RunTOTP` with the 27 TOTPStore cases that need no step-up credential, 3 NEW cases (the enroll, the confirm and the reset without the revoke), 13 `AcceptSignInStep` cases and 2 more NEW cases (45 names in all). `stepuptest.Run` stays unwired until the adapters of `stepup.KeyStore`, `stepup.ChallengeStore` and `stepup.ResetStore` exist.
+- Add the NEW runner `stepuptest.RunTOTP` with the 27 TOTPStore cases that need no step-up credential, 3 NEW cases (the enroll, the confirm and the reset without the revoke), 14 `AcceptSignInStep` cases and 2 more NEW cases (46 names in all). `stepuptest.Run` stays unwired until the adapters of `stepup.KeyStore`, `stepup.ChallengeStore` and `stepup.ResetStore` exist.
 
 Out of scope:
 
@@ -96,6 +96,6 @@ Questions considered and answered:
 
 - Does this change add a route or a setting? No. The change `mfa` adds them.
 - Do `ConfirmTOTP` and `ResetTOTP` revoke step-up credentials? Not in this change: no credential type, table or issuer exists, so there is nothing to revoke. The step-up credential needs the owner's ADR first (RFC 102). The change that adds the credential table implements the revoke in both methods in the same change, and moves the two revoke cases into `stepuptest.RunTOTP`. No route issues a step-up credential before then.
-- Which conformance cases does the TOTP adapter run? The NEW runner `stepuptest.RunTOTP` runs 27 TOTPStore cases, 3 NEW cases (the enroll, the confirm and the reset without the revoke), 13 `AcceptSignInStep` cases and 2 more NEW cases (45 names: 20 in the factor group and 25 in the attempt group). The two cases that check a revoke of credentials stay in `stepuptest.Run` with their skip. `stepuptest.Run` needs a store with each step-up port, so it stays unwired until the adapters of `KeyStore`, `ChallengeStore` and `ResetStore` exist.
+- Which conformance cases does the TOTP adapter run? The NEW runner `stepuptest.RunTOTP` runs 27 TOTPStore cases, 3 NEW cases (the enroll, the confirm and the reset without the revoke), 14 `AcceptSignInStep` cases and 2 more NEW cases (46 names: 20 in the factor group and 26 in the attempt group). The two cases that check a revoke of credentials stay in `stepuptest.Run` with their skip. `stepuptest.Run` needs a store with each step-up port, so it stays unwired until the adapters of `KeyStore`, `ChallengeStore` and `ResetStore` exist.
 
 Drafted from the split of the change `mfa`.
