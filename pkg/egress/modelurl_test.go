@@ -533,7 +533,7 @@ func TestCheckModelURL_ZonedLiteral(t *testing.T) {
 	}
 
 	err := egress.CheckModelURL(zonedPublicHost, allow, false)
-	if !errors.Is(err, egress.ErrRefused) {
+	if err == nil || !errors.Is(err, egress.ErrRefused) {
 		t.Fatalf("CheckModelURL(%q) = %v, want ErrRefused", zonedPublicHost, err)
 	}
 
@@ -552,7 +552,7 @@ func TestCheckModelAddrs_ZonedAddress(t *testing.T) {
 	zoned := netip.MustParseAddr("2606:4700::1%eth0")
 
 	err := egress.CheckModelAddrs("https://api.example.com/", []netip.Addr{zoned}, namedHost(), false)
-	if !errors.Is(err, egress.ErrRefused) {
+	if err == nil || !errors.Is(err, egress.ErrRefused) {
 		t.Fatalf("CheckModelAddrs(%v) = %v, want ErrRefused", zoned, err)
 	}
 
