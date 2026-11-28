@@ -262,15 +262,6 @@ func (h *Handler) passkeyCaller(
 	return caller, person, true
 }
 
-// passkeyActor returns the actor of a step of the caller: the audit entry of
-// the request, and the principal and the session of the console session.
-func passkeyActor(r *http.Request, p identity.Principal, caller sessionCaller, action identity.Action) *mfasvc.Actor {
-	return &mfasvc.Actor{
-		Entry: callerEntry(r, p, action), PrincipalID: caller.Match.Owner.ID, SessionID: caller.Match.Session.ID,
-		Caller: zeroPrincipal(), SignedInAt: time.Time{},
-	}
-}
-
 // zeroPrincipal returns the principal record of a caller with no principal:
 // every field is zero. The passkey service reads no field of it for a sign-in.
 func zeroPrincipal() identity.Principal {

@@ -49,6 +49,7 @@ func reachCaller(f *fixture, principalID, subject string) *mfasvc.Actor {
 			JobID:                  "",
 		},
 		SignedInAt: f.clock.now(),
+		Fresh:      false,
 	}
 }
 

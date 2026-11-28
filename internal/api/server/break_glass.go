@@ -224,6 +224,7 @@ func (h *Handler) breakGlassRefusal(
 		SessionID:   "",
 		Caller:      zeroPrincipal(),
 		SignedInAt:  time.Time{},
+		Fresh:       false,
 	})
 	if keyErr != nil {
 		h.writeError(ctx, w, keyErr)
@@ -288,7 +289,7 @@ func (h *Handler) listBreakGlass(w http.ResponseWriter, r *http.Request, p ident
 		account := &accounts[i]
 		keys, keyErr := h.passkeys.Passkeys(ctx, &mfasvc.Actor{
 			Entry: entry, PrincipalID: account.ID, SessionID: "",
-			Caller: zeroPrincipal(), SignedInAt: time.Time{},
+			Caller: zeroPrincipal(), SignedInAt: time.Time{}, Fresh: false,
 		})
 		if keyErr != nil {
 			h.writeError(ctx, w, keyErr)
@@ -591,7 +592,7 @@ func breakGlassActor(r *http.Request, e audit.Entry, p identity.Principal) *mfas
 	caller, ok := sessionFromRequest(r)
 	if !ok {
 		return &mfasvc.Actor{
-			Entry: e, PrincipalID: "", SessionID: "", Caller: p, SignedInAt: time.Time{},
+			Entry: e, PrincipalID: "", SessionID: "", Caller: p, SignedInAt: time.Time{}, Fresh: false,
 		}
 	}
 
@@ -601,6 +602,7 @@ func breakGlassActor(r *http.Request, e audit.Entry, p identity.Principal) *mfas
 		SessionID:   caller.Match.Session.ID,
 		Caller:      p,
 		SignedInAt:  caller.Match.Session.AuthTime,
+		Fresh:       false,
 	}
 }
 
