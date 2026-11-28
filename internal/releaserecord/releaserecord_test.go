@@ -677,6 +677,7 @@ func TestCheckReleaseRecordRefuses(t *testing.T) {
 		record  *string
 		extra   map[string]string
 		want    string
+		hint    string
 		pass    bool
 	}{
 		{
@@ -685,26 +686,45 @@ func TestCheckReleaseRecordRefuses(t *testing.T) {
 			new("# comment\n" + lines("v0.1.0", sumOf("base"))),
 			nil,
 			"lists the migrations",
+			"",
 			true,
 		},
-		{"an empty record", "v0.1.0", new("# comments only\n"), nil, "has no sqlite line for v0.1.0", false},
+		{
+			"an empty record",
+			"v0.1.0",
+			new("# comments only\n"),
+			nil,
+			"has no sqlite line for v0.1.0",
+			"make release-record-check VERSION=v0.1.0",
+			false,
+		},
 		{
 			"the lines of another version",
 			"v0.2.0",
 			new(lines("v0.1.0", sumOf("base"))),
 			nil,
 			"has no sqlite line",
+			"",
 			false,
 		},
-		{"another SHA-256", "v0.1.0", new(lines("v0.1.0", sumOf("edited"))), nil, "differ from", false},
-		{"a file with no line", "v0.1.0", new(lines("v0.1.0", sumOf("base"))), next, "differ from", false},
-		{"no record", "v0.1.0", nil, nil, "is missing", false},
+		{
+			"another SHA-256",
+			"v0.1.0",
+			new(lines("v0.1.0", sumOf("edited"))),
+			nil,
+			"differ from",
+			"make release-record-check VERSION=v0.1.0",
+			false,
+		},
+		{"a file with no line", "v0.1.0", new(lines("v0.1.0", sumOf("base"))), next, "differ from", "", false},
+		{"no record", "v0.1.0", nil, nil, "is missing", "", false},
 		{
 			"a CR at the end of a line",
 			"v0.1.0",
 			new(strings.ReplaceAll(lines("v0.1.0", sumOf("base")), "\n", "\r\n")),
 			nil,
 			"has a CR or NUL",
+			"",
 			false,
 		},
 		{
@@ -713,6 +733,7 @@ func TestCheckReleaseRecordRefuses(t *testing.T) {
 			new(strings.Replace(lines("v0.1.0", sumOf("base")), "sqlite ", "sqlite\r", 1)),
 			nil,
 			"has a CR or NUL",
+			"",
 			false,
 		},
 		{
@@ -721,6 +742,7 @@ func TestCheckReleaseRecordRefuses(t *testing.T) {
 			new("# comment\x00\n" + lines("v0.1.0", sumOf("base"))),
 			nil,
 			"has a CR or NUL",
+			"",
 			false,
 		},
 		{
@@ -729,15 +751,17 @@ func TestCheckReleaseRecordRefuses(t *testing.T) {
 			new(strings.Replace(lines("v0.1.0", sumOf("base")), baseline, "0168_base\x00line.sql", 1)),
 			nil,
 			"has a CR or NUL",
+			"",
 			false,
 		},
-		{"a version with a suffix", "v0.1.0-rc1", new(lines("v0.1.0", sumOf("base"))), nil, "is not vMAJOR", false},
+		{"a version with a suffix", "v0.1.0-rc1", new(lines("v0.1.0", sumOf("base"))), nil, "is not vMAJOR", "", false},
 		{
 			"a version with a newline",
 			"v0.1.0\nv0.2.0",
 			new(lines("v0.1.0", sumOf("base"))),
 			nil,
 			"is not vMAJOR",
+			"",
 			false,
 		},
 	}
@@ -761,6 +785,10 @@ func TestCheckReleaseRecordRefuses(t *testing.T) {
 
 			if !strings.Contains(out, tt.want) {
 				t.Errorf("the script said:\n%s\nwant %q", out, tt.want)
+			}
+
+			if tt.hint != "" && !strings.Contains(out, tt.hint) {
+				t.Errorf("the script said:\n%s\nwant the hint %q", out, tt.hint)
 			}
 		})
 	}

@@ -403,7 +403,7 @@ func TestGateForOpensWithApprovals(t *testing.T) {
 		t.Run(tt.name, func(t *testing.T) {
 			t.Parallel()
 
-			if got := job.GatesStatus(gates, tt.approvals, "requester", devPolicy); got != tt.want {
+			if got := job.GatesStatus(gates, tt.approvals, "requester", devPolicy, true); got != tt.want {
 				t.Fatalf("GatesStatus() = %s, want %s", got, tt.want)
 			}
 		})

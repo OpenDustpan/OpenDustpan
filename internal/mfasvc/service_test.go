@@ -110,12 +110,12 @@ func base(at time.Time, object string) audit.Entry {
 
 // actor returns the caller id in the session session.
 func actor(id, session string) mfasvc.Actor {
-	return mfasvc.Actor{Entry: base(time.Now(), "x"), PrincipalID: id, SessionID: session}
+	return mfasvc.Actor{Entry: base(time.Now(), "x"), PrincipalID: id, SessionID: session, Fresh: true}
 }
 
 // anonymous returns the caller of a passkey sign-in.
 func anonymous() mfasvc.Actor {
-	return mfasvc.Actor{Entry: base(time.Now(), "x"), PrincipalID: "", SessionID: ""}
+	return mfasvc.Actor{Entry: base(time.Now(), "x"), PrincipalID: "", SessionID: "", Fresh: true}
 }
 
 // personOf returns the WebAuthn person of id.
@@ -676,7 +676,8 @@ func TestRemovePasskey(t *testing.T) {
 		t.Fatalf("removed entries = %d, want 1", len(removed))
 	}
 
-	err := f.svc.RemovePasskey(t.Context(), mfasvc.Actor{Entry: a.Entry, PrincipalID: "", SessionID: ""}, key.ID)
+	noCaller := mfasvc.Actor{Entry: a.Entry, PrincipalID: "", SessionID: "", Fresh: false}
+	err := f.svc.RemovePasskey(t.Context(), noCaller, key.ID)
 	f.wantRefusal(t, "remove with no caller", err, mfa.ErrWrongPerson, mfasvc.ActionRemoveRefused)
 }
 

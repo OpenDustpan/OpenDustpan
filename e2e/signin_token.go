@@ -179,6 +179,17 @@ func (e *Env) browserLocation(ctx context.Context, tb testing.TB, client *http.C
 func (e *Env) browserDo(ctx context.Context, tb testing.TB, client *http.Client, r browserRequest) (int, string) {
 	tb.Helper()
 
+	status, _, body := e.browserDoHeader(ctx, tb, client, r)
+
+	return status, body
+}
+
+// browserDoHeader is browserDo that also returns the headers of the answer.
+func (e *Env) browserDoHeader(
+	ctx context.Context, tb testing.TB, client *http.Client, r browserRequest,
+) (int, http.Header, string) {
+	tb.Helper()
+
 	req, err := http.NewRequestWithContext(ctx, r.method, r.target, strings.NewReader(r.body))
 	if err != nil {
 		tb.Fatalf("request %s %s: %v", r.method, r.target, err)
@@ -200,7 +211,7 @@ func (e *Env) browserDo(ctx context.Context, tb testing.TB, client *http.Client,
 		tb.Fatalf("read %s %s: %v", r.method, r.target, err)
 	}
 
-	return resp.StatusCode, string(body)
+	return resp.StatusCode, resp.Header, string(body)
 }
 
 // SessionAPIStatus signs in the person principalID with a fresh sign-in
@@ -338,6 +349,18 @@ func (e *Env) PrepareFreshAdmin(ctx context.Context, tb testing.TB) {
 func (e *Env) FreshAdminMergePatch(ctx context.Context, tb testing.TB, path, ifMatch, body string) (int, string) {
 	tb.Helper()
 
+	status, _, answer := e.freshAdminMergePatchHeader(ctx, tb, path, ifMatch, body)
+
+	return status, answer
+}
+
+// freshAdminMergePatchHeader is FreshAdminMergePatch that also returns the
+// headers of the answer.
+func (e *Env) freshAdminMergePatchHeader(
+	ctx context.Context, tb testing.TB, path, ifMatch, body string,
+) (int, http.Header, string) {
+	tb.Helper()
+
 	if e.signIn == nil {
 		tb.Fatal("FreshAdminMergePatch needs an env from NewEnvWithSignIn")
 	}
@@ -350,9 +373,181 @@ func (e *Env) FreshAdminMergePatch(ctx context.Context, tb testing.TB, path, ifM
 	header.Set("If-Match", ifMatch)
 	header.Set("Idempotency-Key", NewIdempotencyKey())
 
-	return e.browserDo(ctx, tb, browser, browserRequest{
+	return e.browserDoHeader(ctx, tb, browser, browserRequest{
 		method: http.MethodPatch, target: e.URL + path, body: body, header: header,
 	})
+}
+
+// freshAuthSettingsPath is the settings resource of the installation that
+// EnableFreshAuth changes.
+const freshAuthSettingsPath = "/api/dustpan/v1/settings"
+
+// EnableFreshAuth sets the installation setting freshAuthEnabled to true, so
+// that each step of a dangerous action asks for a fresh authentication. The
+// default is false: with it, an access token with the grant makes the change.
+// A step that expects 403 mfa.fresh-step-required for an access token calls
+// EnableFreshAuth first, before it reads a revision of the settings. An env
+// from NewEnvWithSignIn makes the change with a console session of a site
+// administrator. The returned function sets the value back with a console
+// session: the change to off needs a fresh step while the setting is on. The
+// step that calls EnableFreshAuth calls the returned function before it ends,
+// so that no settings request runs after a later step stops the database. An
+// env with no sign-in makes the change with the administrator token, because
+// a change to on needs no step. Its returned function does nothing, and the
+// value stays until the env stops with its test, because no session of that
+// env can give the fresh step of the change back to off.
+func (e *Env) EnableFreshAuth(ctx context.Context, tb testing.TB) func() {
+	tb.Helper()
+
+	if e.signIn != nil {
+		// The first sign-in of the administrator can restart a binary server,
+		// which moves the revision. Make it before the read.
+		e.freshAdmin(ctx, tb)
+	}
+
+	before, tag := e.readFreshAuth(ctx, tb)
+	e.patchFreshAuth(ctx, tb, tag, true)
+
+	if before || e.signIn == nil {
+		return func() {}
+	}
+
+	return func() {
+		tb.Helper()
+
+		_, tag := e.readFreshAuth(ctx, tb)
+		e.patchFreshAuth(ctx, tb, tag, false)
+	}
+}
+
+// freshAuthAnswer is one answer of the settings resource. what names the
+// request in a failure message.
+type freshAuthAnswer struct {
+	what   string
+	status int
+	header http.Header
+	body   string
+}
+
+// freshAuthItem is the part of one setting of the settings resource that
+// readFreshAuth reads.
+type freshAuthItem struct {
+	Key   string `json:"key"`
+	Value any    `json:"value"`
+}
+
+// readFreshAuth reads the effective value of freshAuthEnabled and the
+// revision tag of the settings resource with the administrator token.
+func (e *Env) readFreshAuth(ctx context.Context, tb testing.TB) (bool, string) {
+	tb.Helper()
+
+	answer := e.getFreshAuth(ctx, tb)
+	if answer.status != http.StatusOK {
+		tb.Fatalf("%s = %d: %s", answer.what, answer.status, answer.body)
+	}
+
+	return decodeFreshAuth(tb, answer)
+}
+
+// getFreshAuth sends one GET of the settings resource with the administrator
+// token. It stops the test when the request cannot be sent.
+func (e *Env) getFreshAuth(ctx context.Context, tb testing.TB) freshAuthAnswer {
+	tb.Helper()
+
+	resp, err := e.ServerAPIStatusTyped(ctx, TypedRequest{
+		Token: e.token, Method: http.MethodGet, Path: freshAuthSettingsPath, ContentType: "", Body: "", IfMatch: "",
+	})
+	if err != nil {
+		tb.Fatalf("GET %s = %d, %v: %s", freshAuthSettingsPath, resp.Status, err, resp.Body)
+	}
+
+	return freshAuthAnswer{
+		what: "GET " + freshAuthSettingsPath, status: resp.Status, header: resp.Header, body: resp.Body,
+	}
+}
+
+// decodeFreshAuth returns the value of freshAuthEnabled and the revision tag
+// of a 200 answer of the settings resource.
+func decodeFreshAuth(tb testing.TB, resp freshAuthAnswer) (bool, string) {
+	tb.Helper()
+
+	var doc struct {
+		Settings []freshAuthItem `json:"settings"`
+	}
+
+	if err := json.Unmarshal([]byte(resp.body), &doc); err != nil {
+		tb.Fatalf("decode the settings: %v", err)
+	}
+
+	for _, s := range doc.Settings {
+		if s.Key != "freshAuthEnabled" {
+			continue
+		}
+
+		on, ok := s.Value.(bool)
+		if !ok {
+			tb.Fatalf("freshAuthEnabled has the value %v, want a boolean", s.Value)
+		}
+
+		return on, resp.header.Get("ETag")
+	}
+
+	tb.Fatalf("the settings have no freshAuthEnabled: %s", resp.body)
+
+	return false, ""
+}
+
+// patchFreshAuth sets freshAuthEnabled to on at the revision tag. An env from
+// NewEnvWithSignIn sends the change with a console session of a site
+// administrator. Another env sends it with the administrator token.
+func (e *Env) patchFreshAuth(ctx context.Context, tb testing.TB, tag string, on bool) {
+	tb.Helper()
+
+	answer := e.sendFreshAuth(ctx, tb, tag, on)
+	if answer.status != http.StatusOK {
+		tb.Fatalf("%s = %d: %s", answer.what, answer.status, answer.body)
+	}
+}
+
+// sendFreshAuth sends one change of freshAuthEnabled to on at the revision
+// tag, as patchFreshAuth does, and returns the answer. It stops the test when
+// the request cannot be sent.
+func (e *Env) sendFreshAuth(ctx context.Context, tb testing.TB, tag string, on bool) freshAuthAnswer {
+	tb.Helper()
+
+	body := fmt.Sprintf(`{"freshAuthEnabled":%t}`, on)
+
+	if e.signIn != nil {
+		status, header, answer := e.freshAdminMergePatchHeader(ctx, tb, freshAuthSettingsPath, tag, body)
+
+		// The sign-in of the administrator changed the person of the test
+		// provider. A later browser sign-in of the step expects the person of
+		// testUser, so the provider signs that person in again.
+		if e.signIn.idp != nil {
+			e.signIn.mu.Lock()
+			e.signIn.idp.SetUser(testUser())
+			e.signIn.mu.Unlock()
+		}
+
+		return freshAuthAnswer{
+			what:   fmt.Sprintf("PATCH %s %s with a console session", freshAuthSettingsPath, body),
+			status: status, header: header, body: answer,
+		}
+	}
+
+	resp, err := e.ServerAPIStatusKeyed(ctx, TypedRequest{
+		Token: e.token, Method: http.MethodPatch, Path: freshAuthSettingsPath,
+		ContentType: "application/merge-patch+json", Body: body, IfMatch: tag,
+	}, NewIdempotencyKey())
+	if err != nil {
+		tb.Fatalf("PATCH %s %s with the administrator token = %d, %v: %s",
+			freshAuthSettingsPath, body, resp.Status, err, resp.Body)
+	}
+
+	return freshAuthAnswer{
+		what:   fmt.Sprintf("PATCH %s %s with the administrator token", freshAuthSettingsPath, body),
+		status: resp.Status, header: resp.Header, body: resp.Body,
+	}
 }
 
 // FreshAdminAPIStatusFrom is FreshAdminAPIStatus for a request that leaves

@@ -11,6 +11,7 @@ import (
 	"slices"
 	"strings"
 	"sync"
+	"sync/atomic"
 	"testing"
 	"time"
 
@@ -25,6 +26,7 @@ import (
 	"opendustpan.org/opendustpan/internal/store/sqlite"
 	"opendustpan.org/opendustpan/pkg/access"
 	"opendustpan.org/opendustpan/pkg/audit"
+	"opendustpan.org/opendustpan/pkg/freshstep"
 	"opendustpan.org/opendustpan/pkg/gate"
 	"opendustpan.org/opendustpan/pkg/identity"
 	"opendustpan.org/opendustpan/pkg/ipallow"
@@ -82,6 +84,9 @@ type signInEnv struct {
 	store   *sqlite.Store
 	limiter *fakeLimiter
 	clock   *envClock
+	// freshOn is the value of the setting freshAuthEnabled that the handler
+	// reads. It is true until a test turns it off.
+	freshOn *atomic.Bool
 }
 
 // envClock is the clock that the test provider, the OIDC client and the
@@ -307,6 +312,9 @@ func newSignInEnvWith(t *testing.T, opts signInEnvOptions) signInEnv {
 
 	keys := keysOf(t, st, opts)
 
+	freshOn := &atomic.Bool{}
+	freshOn.Store(true)
+
 	// The access-token service checks the secrets that the own-token routes
 	// create, so that a test can send one of them as a bearer.
 	accessTokens := newAccessTokens(t, st, clock)
@@ -360,7 +368,9 @@ func newSignInEnvWith(t *testing.T, opts signInEnvOptions) signInEnv {
 		t.Fatalf("handler: %v", err)
 	}
 
-	return signInEnv{handler: handler, idp: idp, store: st, limiter: limiter, clock: clock}
+	handler.SetFreshPolicy(freshstep.PolicyFunc(func(context.Context) bool { return freshOn.Load() }))
+
+	return signInEnv{handler: handler, idp: idp, store: st, limiter: limiter, clock: clock, freshOn: freshOn}
 }
 
 // addPasswordProviders gives in the password providers passwords and, with

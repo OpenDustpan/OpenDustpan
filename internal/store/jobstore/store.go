@@ -16,6 +16,7 @@ import (
 	"opendustpan.org/opendustpan/pkg/identity"
 	"opendustpan.org/opendustpan/pkg/job"
 	"opendustpan.org/opendustpan/pkg/namespace"
+	"opendustpan.org/opendustpan/pkg/setting"
 )
 
 // Page sizes of List.
@@ -37,8 +38,11 @@ const createAttempts = 2
 
 // Store serves job.Store and job.FreezeStore from one Runner.
 type Store struct {
-	run  Runner
-	keep idempotency.Retention
+	run Runner
+	// fresh says if the approval of a destroy needs a fresh step, from the
+	// stored value of the setting. Nil requires the step (fail closed).
+	fresh FreshResolver
+	keep  idempotency.Retention
 }
 
 var (
@@ -47,15 +51,99 @@ var (
 	_ job.FinalVersionReader = (*Store)(nil)
 )
 
+// FreshResolver says whether the approval of a destroy needs a fresh step.
+// It gets the database value of the setting freshAuthEnabled that the write
+// transaction read, and nil when no row holds it. It applies the effective
+// value of the setting: the static layer, then the database value, then the
+// default. An error means that the step is required.
+type FreshResolver func(stored *string) (required bool, err error)
+
 // KeyExpiredAction is the action of the audit entry that the store appends
 // when it clears the idempotency key of a job that is older than the key
 // retention.
 const KeyExpiredAction = "job:key-expired"
 
 // New returns the job stores over run. keep is the retention of a job-start
-// key: a key names its job for keep from the creation of that job.
+// key: a key names its job for keep from the creation of that job. Its
+// resolver is nil, so each approval of a destroy needs the step until
+// SetFreshResolver runs.
 func New(run Runner, keep idempotency.Retention) *Store {
-	return &Store{run: run, keep: keep}
+	return &Store{run: run, fresh: nil, keep: keep}
+}
+
+// SetFreshResolver sets the resolver that says if the approval of a destroy
+// needs a fresh step. The server sets it once, before the store serves a
+// request. With no resolver, each approval of a destroy needs the step.
+func (s *Store) SetFreshResolver(r FreshResolver) {
+	s.fresh = r
+}
+
+// freshFunc reports whether the approval of a destroy in the transaction tx
+// needs a fresh step.
+type freshFunc func(ctx context.Context, tx Tx) (bool, error)
+
+// alwaysFresh is a freshFunc for a write that reads no setting: the step is
+// always required (fail closed).
+func alwaysFresh(context.Context, Tx) (bool, error) {
+	return true, nil
+}
+
+// approvesDestroy reports whether the approval ap approves the destroy job j.
+// Only such an approval uses the answer of the setting (checkDestroyProof),
+// so only such a change reads it.
+func approvesDestroy(j *job.Job, ap *job.Approval) bool {
+	return ap != nil && ap.Verdict == job.VerdictApprove && j.Spec.Operation == job.OperationDestroy
+}
+
+// rulesFor reads the clock of tx and returns the rules of a write to the job
+// j. It calls readFresh only when the approval ap approves the destroy j. For
+// any other change, the rules require the fresh step without a read: no rule
+// uses the answer, and true fails closed.
+func rulesFor(ctx context.Context, tx Tx, j *job.Job, ap *job.Approval, readFresh freshFunc) (writeRules, error) {
+	now, err := tx.Now(ctx)
+	if err != nil {
+		return writeRules{}, err
+	}
+
+	fresh := true
+
+	if approvesDestroy(j, ap) {
+		fresh, err = readFresh(ctx, tx)
+		if err != nil {
+			return writeRules{}, err
+		}
+	}
+
+	return writeRules{now: now, freshRequired: fresh, approverFound: false, approverKind: ""}, nil
+}
+
+// freshRequired reports whether the approval of a destroy in the transaction
+// tx needs a fresh step. The stored value is read in tx, so the rule uses the
+// value that the write commits with. With no resolver, or when the resolver
+// fails, the step is required (fail closed). A failed read of the row fails
+// the write.
+func freshRequired(ctx context.Context, r FreshResolver, tx Tx) (bool, error) {
+	value, found, err := tx.SettingValue(ctx, setting.SettingFreshAuthEnabled)
+	if err != nil {
+		return false, fmt.Errorf("read the fresh authentication setting: %w", err)
+	}
+
+	if r == nil {
+		return true, nil
+	}
+
+	var stored *string
+	if found {
+		stored = &value
+	}
+
+	required, err := r(stored)
+	// Fail closed: a resolver that cannot read the setting requires the step.
+	if err != nil {
+		required = true
+	}
+
+	return required, nil
 }
 
 // Create implements job.Store.
@@ -80,6 +168,43 @@ func (s *Store) Create(ctx context.Context, j job.Job, d *durable.StartRequest, 
 
 		return stored, created, err
 	}
+}
+
+// checkCreateNoneKind refuses an approval of a destroy with the authentication
+// none unless the approver is a person. Create writes the approvals of a job as
+// given, so the kind of each approver is read here, in the write transaction,
+// before the insert. A principal that is not found, a kind that is not a
+// person, and a failed lookup are all refused. The lookup error is not
+// returned, so no driver error reaches the caller.
+//
+// Defense in depth: the handler and the service check the kind too, and Apply
+// checks it again for each later approval. This check stays so that a new
+// caller of Create cannot store the approval.
+//
+// Apply refuses the authentication none on a job that is not a destroy
+// (checkNoneAuth). Create accepts it on such a job, so that the scenario with
+// no step and the setting off stays reachable.
+func checkCreateNoneKind(ctx context.Context, tx Tx, j *job.Job) error {
+	if j.Spec.Operation != job.OperationDestroy {
+		return nil
+	}
+
+	for i := range j.Phases {
+		for k := range j.Phases[i].Approvals {
+			ap := &j.Phases[i].Approvals[k]
+			if ap.Auth != job.ConfirmAuthNone {
+				continue
+			}
+
+			kind, found, err := tx.PrincipalKind(ctx, ap.Subject)
+			if err != nil || !found || kind != identity.KindPerson {
+				return fmt.Errorf("%w: a destroy with the authentication none needs an approval by a person",
+					job.ErrAuthStale)
+			}
+		}
+	}
+
+	return nil
 }
 
 // Get implements job.Store.
@@ -436,6 +561,10 @@ func (s *Store) createIn(ctx context.Context, tx Tx, j *job.Job, d *durable.Star
 
 	if limitErr := checkLimits(ctx, tx, j.Spec.Unit.Namespace(), j.Spec.Unit.UnitID()); limitErr != nil {
 		return job.Job{}, false, limitErr
+	}
+
+	if kindErr := checkCreateNoneKind(ctx, tx, j); kindErr != nil {
+		return job.Job{}, false, kindErr
 	}
 
 	stored := *j

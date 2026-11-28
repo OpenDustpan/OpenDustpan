@@ -54,6 +54,10 @@ The function `egress.CheckModelURL(rawURL, a, publicOnly)` SHALL check the schem
 - **WHEN** a pending document exists and an administrator disconnects
 - **THEN** no document and no reference row remains
 
+#### Scenario: Disconnect with no document
+- **WHEN** no document exists and an administrator disconnects
+- **THEN** the answer is 404 with the code `agent-connection.not-connected`, and the server writes a denied audit entry
+
 ### Requirement: Each route checks its action
 Each route under the NEW path prefix `/api/agent/` SHALL check the action `server:manage-agent` on `@server`. The allowlist routes SHALL check `server:manage-settings`. A denial SHALL write an audit entry.
 

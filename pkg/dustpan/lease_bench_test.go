@@ -23,7 +23,6 @@ import (
 	"opendustpan.org/opendustpan/pkg/backup/blobguard/blobguardtest"
 	"opendustpan.org/opendustpan/pkg/blob/fs"
 	"opendustpan.org/opendustpan/pkg/dustpan"
-	"opendustpan.org/opendustpan/pkg/freshstep"
 	"opendustpan.org/opendustpan/pkg/identity"
 	"opendustpan.org/opendustpan/pkg/inventory"
 	"opendustpan.org/opendustpan/pkg/namespace"
@@ -53,6 +52,7 @@ type leaseStores struct {
 	inventory   inventory.Reader
 	principals  principal.Store
 	tokens      accesstoken.Store
+	serverAudit audit.ServerStore
 }
 
 // BenchmarkLeaseCheck measures one checkpoint post on an update lease, with
@@ -75,7 +75,7 @@ func BenchmarkLeaseCheck(b *testing.B) {
 
 		benchLeaseCheck(b, leaseStores{
 			namespaces: st, stacks: st, updates: st, checkpoints: st, events: st, keys: st,
-			workspaces: st, state: st, inventory: st, principals: st, tokens: st,
+			workspaces: st, state: st, inventory: st, principals: st, tokens: st, serverAudit: st,
 		})
 	})
 
@@ -94,7 +94,7 @@ func BenchmarkLeaseCheck(b *testing.B) {
 
 		benchLeaseCheck(b, leaseStores{
 			namespaces: st, stacks: st, updates: st, checkpoints: st, events: st, keys: st,
-			workspaces: st, state: st, inventory: st, principals: st, tokens: st,
+			workspaces: st, state: st, inventory: st, principals: st, tokens: st, serverAudit: st,
 		})
 	})
 }
@@ -232,13 +232,17 @@ func benchTokenID(b *testing.B, s leaseStores, now func() time.Time) string {
 	tokens, err := accesstoken.NewService(accesstoken.Config{
 		Makers:     nil,
 		TempAdmins: nil,
-		Store:      s.tokens, Principals: s.principals, Freshness: nil, Authorizer: nil,
+		Store:      s.tokens,
+		Principals: s.principals,
+		Audit:      s.serverAudit,
+		Guard:      noFreshStepGuard(b),
+		Authorizer: nil,
 		Reach: access.ReachConfig{
 			Grants: nil, Roles: nil, Callers: nil, Principals: nil, Collections: nil, Units: nil,
 		},
-		Logger: nil, Now: now,
-		NewID: nil,
-		Guard: freshstep.Guard{},
+		Logger: nil,
+		Now:    now,
+		NewID:  nil,
 	})
 	if err != nil {
 		b.Fatalf("token service: %v", err)

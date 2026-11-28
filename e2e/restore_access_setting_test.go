@@ -50,6 +50,11 @@ func restoreAccessScenario(t *testing.T, store e2e.Store) {
 		t.Skip("needs E2E_SERVER=binary: the restore worker runs in the server binary")
 	}
 
+	// The refusal of an access token below needs freshAuthEnabled on. It goes
+	// on before the backup, so that a restore keeps it on.
+	restoreFreshAuth := env.EnableFreshAuth(ctx, t)
+	defer restoreFreshAuth()
+
 	operator := makeOperatorToken(ctx, t, env, "operator")
 	victim := makeVictimToken(ctx, t, env)
 	backupID := haStartBackup(ctx, t, env)

@@ -11,6 +11,7 @@ import (
 
 	"opendustpan.org/opendustpan/pkg/audit"
 	"opendustpan.org/opendustpan/pkg/durable"
+	"opendustpan.org/opendustpan/pkg/freshstep"
 	"opendustpan.org/opendustpan/pkg/gate"
 	"opendustpan.org/opendustpan/pkg/job"
 	"opendustpan.org/opendustpan/pkg/namespace"
@@ -397,8 +398,9 @@ func reconcileLogged(t *testing.T, h Harness, ahead, queueTimeout time.Duration)
 	r, err := job.NewReconciler(job.ReconcilerConfig{
 		Store: h.Jobs, Namespaces: h.Namespaces, QueueTimeout: queueTimeout, DispatchTimeout: 0, StateTimeout: 0,
 		MaxPlanAge: 0, Approvers: gate.ApproverPolicy{Production: false, IsDev: nil}, Batch: 0,
-		Now: func() time.Time { return time.Now().Add(ahead) },
-		Log: slog.New(slog.NewTextHandler(&out, nil)),
+		FreshGuard: freshstep.Guard{},
+		Now:        func() time.Time { return time.Now().Add(ahead) },
+		Log:        slog.New(slog.NewTextHandler(&out, nil)),
 	})
 	if err != nil {
 		t.Fatalf("NewReconciler = %v", err)

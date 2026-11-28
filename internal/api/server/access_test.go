@@ -21,7 +21,6 @@ import (
 	"opendustpan.org/opendustpan/pkg/access"
 	"opendustpan.org/opendustpan/pkg/accesstoken"
 	"opendustpan.org/opendustpan/pkg/audit"
-	"opendustpan.org/opendustpan/pkg/freshstep"
 	"opendustpan.org/opendustpan/pkg/identity"
 	"opendustpan.org/opendustpan/pkg/maintenance"
 	"opendustpan.org/opendustpan/pkg/namespace"
@@ -310,12 +309,19 @@ func newAccessFixtureAll(t *testing.T, parts accessFixtureParts) accessFixture {
 		Makers:     grants,
 		TempAdmins: nil,
 		Store:      hookedTokenStore{Store: st, onList: parts.tokenList},
-		Principals: st, Freshness: nil, Authorizer: authz,
+		Audit: hookedTokenStore{
+			Store:  st,
+			onList: parts.tokenList,
+		},
+		Principals: st,
+		Guard:      noFreshStepGuard(t),
+		Authorizer: authz,
 		Reach: access.ReachConfig{
 			Grants: st, Roles: st, Callers: st, Principals: st, Collections: stubCollections{}, Units: st,
 		},
-		Logger: nil, Now: nil, NewID: nil,
-		Guard: freshstep.Guard{},
+		Logger: nil,
+		Now:    nil,
+		NewID:  nil,
 	})
 	if err != nil {
 		t.Fatalf("token service: %v", err)

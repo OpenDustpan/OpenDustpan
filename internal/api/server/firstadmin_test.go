@@ -215,9 +215,17 @@ func newFAFixture(t *testing.T) faFixture {
 	}
 
 	tokens, err := accesstoken.NewService(accesstoken.Config{
-		TempAdmins: nil, Store: st, Principals: st, Freshness: nil, Authorizer: authz, Reach: reach, Logger: nil,
-		Now: nil, NewID: nil, Makers: nil,
-		Guard: freshstep.Guard{},
+		TempAdmins: nil,
+		Store:      st,
+		Audit:      st,
+		Principals: st,
+		Guard:      noFreshStepGuard(t),
+		Authorizer: authz,
+		Reach:      reach,
+		Logger:     nil,
+		Now:        nil,
+		NewID:      nil,
+		Makers:     nil,
 	})
 	if err != nil {
 		t.Fatalf("token service: %v", err)
@@ -308,6 +316,8 @@ func newFAFixture(t *testing.T) faFixture {
 	if err != nil {
 		t.Fatalf("handler: %v", err)
 	}
+
+	handler.SetFreshPolicy(freshstep.PolicyFunc(func(context.Context) bool { return false }))
 
 	f := faFixture{
 		store: st, path: path, sessions: sessions, handler: handler, limiter: limiter, spy: spy, log: logs,
@@ -1021,6 +1031,53 @@ func TestRedeemIgnoresFreshAuthEnabled(t *testing.T) {
 		if bytes.Contains(source, []byte(banned)) {
 			t.Fatalf("firstadmin.go names %q: the redeem must not ask the setting", banned)
 		}
+	}
+}
+
+// TestStepsThatStayAreNotGated: the handler of this fixture runs with the
+// setting freshAuthEnabled off. The first-administrator code asks for its step
+// as before: a stale sign-in is refused with mfa.fresh-step-required, and a
+// recent sign-in passes. The source of the route asks neither the policy nor
+// a gated freshness check, so a later owner decision moves the route
+// deliberately. The other steps that stay (the factor change and reset, the
+// enrollment code and the break-glass proof) are not in this package: their
+// tests are in the packages that hold them.
+func TestStepsThatStayAreNotGated(t *testing.T) {
+	t.Parallel()
+
+	f := newFAFixture(t)
+	code := f.offer(t)
+
+	stale := f.send(t, http.MethodPost, faRedeemPath, faCodeBody(code), asSession("alice").signedInAgo(48*time.Hour))
+	faWant(t, "stale sign-in with the setting off", stale, http.StatusForbidden, "mfa.fresh-step-required")
+
+	token := f.send(t, http.MethodPost, faRedeemPath, faCodeBody(code), asToken("boot"))
+	faWant(t, "access token with the setting off", token, http.StatusForbidden, "mfa.fresh-step-required")
+
+	fresh := f.send(t, http.MethodPost, faRedeemPath, faCodeBody(code), asSession("alice"))
+	faWant(t, "fresh sign-in with the setting off", fresh, http.StatusOK, "")
+
+	source, err := packageSources.ReadFile("firstadmin.go")
+	if err != nil {
+		t.Fatalf("read the source of the route: %v", err)
+	}
+
+	for _, banned := range []string{"requireFresh(", "checkTokenFreshness", "freshRequired", "freshPolicy", "withFreshness"} {
+		if bytes.Contains(source, []byte(banned)) {
+			t.Fatalf("firstadmin.go names %q: the redeem keeps its own step and does not take the policy", banned)
+		}
+	}
+
+	// The change of the own password is a factor change. Its young sign-in
+	// that replaces the current password does not ask the policy.
+	users, err := packageSources.ReadFile("localusers.go")
+	if err != nil {
+		t.Fatalf("read the source of the password route: %v", err)
+	}
+
+	if bytes.Contains(users, []byte("checkTokenFreshness")) ||
+		!bytes.Contains(users, []byte(`req.CurrentPassword == "" && h.checkSignInFreshness(r) == nil`)) {
+		t.Fatal("localusers.go: the password change must check the sign-in age with no policy")
 	}
 }
 

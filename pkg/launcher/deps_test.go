@@ -55,6 +55,7 @@ func linkedInternalPackages() []string {
 		"opendustpan.org/opendustpan/pkg/collection",
 		"opendustpan.org/opendustpan/pkg/durable",
 		"opendustpan.org/opendustpan/pkg/egress",
+		"opendustpan.org/opendustpan/pkg/freshstep",
 		"opendustpan.org/opendustpan/pkg/gate",
 		"opendustpan.org/opendustpan/pkg/history",
 		"opendustpan.org/opendustpan/pkg/identity",

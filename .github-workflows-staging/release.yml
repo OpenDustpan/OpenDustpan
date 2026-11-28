@@ -1,0 +1,373 @@
+# Release workflow: on a final version tag, build the four release archives
+# and SHA256SUMS and verify them, then build one multi-arch server image and
+# push the same digest to the forge container registry first and then to
+# Docker Hub, compare the digests, push the Helm chart as an OCI artifact to
+# the forge container registry, and last create a draft release that holds
+# the archives and SHA256SUMS. A person with release permission reviews the
+# draft and publishes it. The workflow never publishes a release.
+#
+# The Docker Hub push needs two push-only repository secrets,
+# DOCKERHUB_USERNAME and DOCKERHUB_TOKEN. Before the first run, a person
+# with release permission adds them with:
+#   gh secret set DOCKERHUB_USERNAME --repo OpenDustpan/OpenDustpan
+#   gh secret set DOCKERHUB_TOKEN --repo OpenDustpan/OpenDustpan
+#
+# Each action is pinned by the full SHA of a release tag. To check a pin,
+# compare it with the commit of its tag, for example:
+#   gh api repos/docker/setup-qemu-action/commits/v3.7.0 --jq .sha
+#
+# The digest is shown in the workflow summary. It is not added to release
+# notes: the publish job grants contents:read, and only the release-draft
+# job has contents:write.
+
+name: release
+
+"on":
+  push:
+    tags:
+      - "v*"
+
+# No job inherits a permission. Each job names its own.
+permissions: {}
+
+env:
+  FORGE_IMAGE: ghcr.io/opendustpan/opendustpan
+  HUB_IMAGE: docker.io/opendustpan/opendustpan
+
+jobs:
+  archives-build:
+    # Same guard as the publish job: a tag event in the main repository.
+    if: github.event_name == 'push' && startsWith(github.ref, 'refs/tags/v') && github.repository == 'OpenDustpan/OpenDustpan'
+    runs-on: ubuntu-26.04
+    permissions:
+      contents: read
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          ref: ${{ github.ref }}
+          persist-credentials: false
+
+      # Defense in depth: the job guard accepts each tag that starts with v,
+      # and the build script has its own version allowlist; this step stays
+      # so that the job does not rely on the job guard or on the build script.
+      - name: Check that the tag is a final version tag
+        env:
+          TAG: ${{ github.ref_name }}
+        run: |
+          if ! echo "$TAG" | grep -Eq '^v[0-9]+\.[0-9]+\.[0-9]+$'; then
+            echo "::error::Not a final version tag (vX.Y.Z with no suffix). This run builds no archive."
+            exit 1
+          fi
+
+      - uses: actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e # v7.0.0
+        with:
+          go-version-file: go.mod
+          cache: false
+
+      - name: Build the archives and SHA256SUMS
+        env:
+          RELEASE_VERSION: ${{ github.ref_name }}
+          RELEASE_OUT: ${{ runner.temp }}/release
+        run: ./scripts/release-build.sh "$RELEASE_VERSION" "$RELEASE_OUT"
+
+      - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+        with:
+          name: release-archives
+          path: ${{ runner.temp }}/release/
+          retention-days: 3
+          if-no-files-found: error
+
+  archives-verify:
+    # Reads the files that the build job stored, not the build directory.
+    if: github.event_name == 'push' && startsWith(github.ref, 'refs/tags/v') && github.repository == 'OpenDustpan/OpenDustpan'
+    needs: archives-build
+    runs-on: ubuntu-26.04
+    permissions:
+      contents: read
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          ref: ${{ github.ref }}
+          persist-credentials: false
+
+      - uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v8.0.2
+        with:
+          name: release-archives
+          path: ${{ runner.temp }}/release
+
+      - name: Verify the archives and SHA256SUMS
+        env:
+          RELEASE_VERSION: ${{ github.ref_name }}
+          RELEASE_OUT: ${{ runner.temp }}/release
+        run: |
+          ./scripts/release-verify.sh "$RELEASE_VERSION" "$RELEASE_OUT"
+          # Defense in depth: the verify script compares each checksum too;
+          # this check stays so that the file that the next job uploads is
+          # checked by a second tool.
+          (cd "$RELEASE_OUT" && sha256sum --check --strict SHA256SUMS)
+
+  publish:
+    # The publish job runs only on a tag event in the main repository.
+    # Fork runs and pull_request runs stop here and read no token.
+    if: github.event_name == 'push' && startsWith(github.ref, 'refs/tags/v') && github.repository == 'OpenDustpan/OpenDustpan'
+    needs: archives-verify
+    runs-on: ubuntu-26.04
+    permissions:
+      contents: read
+      packages: write
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          ref: ${{ github.ref }}
+          persist-credentials: false
+
+      - name: Check that the actor has release permission
+        env:
+          ACTOR: ${{ github.actor }}
+          REPO: ${{ github.repository }}
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          PERMISSION="$(gh api "repos/$REPO/collaborators/$ACTOR/permission" --jq .permission)" || {
+            echo "::error::Release permission check failed for the actor. An actor with release permission must start the tag."
+            exit 1
+          }
+          if [ "$PERMISSION" != "admin" ] && [ "$PERMISSION" != "maintain" ]; then
+            echo "::error::The actor has repository permission $PERMISSION, not release permission. An actor with release permission must start the tag."
+            exit 1
+          fi
+
+      - name: Check that the tag is a final version tag
+        env:
+          TAG: ${{ github.ref_name }}
+        run: |
+          if ! echo "$TAG" | grep -Eq '^v[0-9]+\.[0-9]+\.[0-9]+$'; then
+            echo "::error::Not a final version tag (vX.Y.Z with no suffix). This run publishes no image."
+            exit 1
+          fi
+
+      - name: Check that the Docker Hub secrets exist
+        env:
+          DOCKERHUB_USERNAME: ${{ secrets.DOCKERHUB_USERNAME }}
+          DOCKERHUB_TOKEN: ${{ secrets.DOCKERHUB_TOKEN }}
+        run: |
+          if [ -z "$DOCKERHUB_USERNAME" ]; then
+            echo "::error::Docker Hub push needs the DOCKERHUB_USERNAME secret. Add it with: gh secret set DOCKERHUB_USERNAME --repo OpenDustpan/OpenDustpan"
+            exit 1
+          fi
+          if [ -z "$DOCKERHUB_TOKEN" ]; then
+            echo "::error::Docker Hub push needs the DOCKERHUB_TOKEN secret. Add it with: gh secret set DOCKERHUB_TOKEN --repo OpenDustpan/OpenDustpan"
+            exit 1
+          fi
+
+      - uses: docker/setup-qemu-action@99012661954931238ded8c8b007157a8430204e1 # v4.4.0
+
+      - uses: docker/setup-buildx-action@f87e5991a6d7451dcb8d9637bfbc97413f497069 # v4.4.1
+
+      - name: Log in to the forge container registry
+        env:
+          GHCR_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          GHCR_ACTOR: ${{ github.actor }}
+        run: |
+          if ! echo "$GHCR_TOKEN" | docker login ghcr.io --username "$GHCR_ACTOR" --password-stdin; then
+            echo "::error::Forge registry login failed. Re-run the tag."
+            exit 1
+          fi
+
+      - name: Log in to Docker Hub
+        env:
+          DOCKERHUB_USERNAME: ${{ secrets.DOCKERHUB_USERNAME }}
+          DOCKERHUB_TOKEN: ${{ secrets.DOCKERHUB_TOKEN }}
+        run: |
+          if ! echo "$DOCKERHUB_TOKEN" | docker login docker.io --username "$DOCKERHUB_USERNAME" --password-stdin; then
+            echo "::error::Docker Hub push failed with authentication denied. Rotate the token with: gh secret set DOCKERHUB_TOKEN --repo OpenDustpan/OpenDustpan"
+            exit 1
+          fi
+
+      - name: Inspect both registries and apply the re-run rules
+        env:
+          TAG: ${{ github.ref_name }}
+        run: |
+          FORGE_REF="${FORGE_IMAGE}:${TAG}"
+          HUB_REF="${HUB_IMAGE}:${TAG}"
+          # Defense in depth: the digest comparison after the push checks
+          # the result again; this grep stays narrow so that a new inspect
+          # error shape cannot route to a build. Only the registry's
+          # manifest-not-found text counts as absent. Every other error
+          # fails closed.
+          if FORGE_DIGEST="$(docker buildx imagetools inspect "$FORGE_REF" --format '{{json .Manifest.Digest}}' 2>"$RUNNER_TEMP/forge.err")"; then
+            :
+          elif grep -Eiq 'MANIFEST_UNKNOWN|manifest unknown|: not found' "$RUNNER_TEMP/forge.err"; then
+            FORGE_DIGEST=""
+          else
+            echo "::error::cannot inspect the forge reference. The workflow stops instead of pushing over an unknown state."
+            cat "$RUNNER_TEMP/forge.err" >&2
+            exit 1
+          fi
+          if HUB_DIGEST="$(docker buildx imagetools inspect "$HUB_REF" --format '{{json .Manifest.Digest}}' 2>"$RUNNER_TEMP/hub.err")"; then
+            :
+          elif grep -Eiq 'MANIFEST_UNKNOWN|manifest unknown|: not found' "$RUNNER_TEMP/hub.err"; then
+            HUB_DIGEST=""
+          else
+            echo "::error::cannot inspect the Docker Hub reference. The workflow stops instead of pushing over an unknown state."
+            cat "$RUNNER_TEMP/hub.err" >&2
+            exit 1
+          fi
+          if [ -n "$FORGE_DIGEST" ] && [ -n "$HUB_DIGEST" ]; then
+            if [ "$FORGE_DIGEST" = "$HUB_DIGEST" ]; then
+              # Both images are released. A re-run then only completes the
+              # chart push, which can fail after the image pushes.
+              echo "Both registries hold the same digest for the tag. The re-run pushes the chart only."
+              echo "MODE=chart-only" >> "$GITHUB_ENV"
+              exit 0
+            fi
+            echo "::error::The registries hold different digests for the tag. The workflow refuses to overwrite the tag."
+            exit 1
+          fi
+          if [ -n "$FORGE_DIGEST" ]; then
+            echo "MODE=complete-hub" >> "$GITHUB_ENV"
+          elif [ -n "$HUB_DIGEST" ]; then
+            echo "MODE=complete-forge" >> "$GITHUB_ENV"
+          else
+            echo "MODE=build" >> "$GITHUB_ENV"
+          fi
+
+      - name: Build once and push to the forge container registry
+        env:
+          TAG: ${{ github.ref_name }}
+        run: |
+          if [ "$MODE" != "build" ]; then
+            exit 0
+          fi
+          docker buildx build --platform linux/amd64,linux/arm64 --build-arg VERSION="${TAG}" --tag "${FORGE_IMAGE}:${TAG}" --push .
+
+      - name: Push the same digest to Docker Hub
+        env:
+          TAG: ${{ github.ref_name }}
+        run: |
+          if [ "$MODE" != "build" ] && [ "$MODE" != "complete-hub" ]; then
+            exit 0
+          fi
+          if ! docker buildx imagetools create --tag "${HUB_IMAGE}:${TAG}" "${FORGE_IMAGE}:${TAG}"; then
+            echo "::error::Docker Hub push failed with authentication denied. Rotate the token with: gh secret set DOCKERHUB_TOKEN --repo OpenDustpan/OpenDustpan"
+            exit 1
+          fi
+
+      - name: Push the same digest to the forge container registry
+        env:
+          TAG: ${{ github.ref_name }}
+        run: |
+          if [ "$MODE" != "complete-forge" ]; then
+            exit 0
+          fi
+          if ! docker buildx imagetools create --tag "${FORGE_IMAGE}:${TAG}" "${HUB_IMAGE}:${TAG}"; then
+            echo "::error::Forge registry push failed. Check the run log and re-run the tag."
+            exit 1
+          fi
+
+      - name: Compare the digests of both registries
+        env:
+          TAG: ${{ github.ref_name }}
+        run: |
+          FORGE_DIGEST="$(docker buildx imagetools inspect "${FORGE_IMAGE}:${TAG}" --format '{{json .Manifest.Digest}}')" || {
+            echo "::error::Digest comparison failed: cannot inspect the forge reference. Compare with: docker buildx imagetools inspect <image>:<tag>"
+            exit 1
+          }
+          HUB_DIGEST="$(docker buildx imagetools inspect "${HUB_IMAGE}:${TAG}" --format '{{json .Manifest.Digest}}')" || {
+            echo "::error::Digest comparison failed: cannot inspect the Docker Hub reference. Compare with: docker buildx imagetools inspect <image>:<tag>"
+            exit 1
+          }
+          FORGE_DIGEST="${FORGE_DIGEST%\"}"
+          FORGE_DIGEST="${FORGE_DIGEST#\"}"
+          HUB_DIGEST="${HUB_DIGEST%\"}"
+          HUB_DIGEST="${HUB_DIGEST#\"}"
+          echo "Forge digest: $FORGE_DIGEST"
+          echo "Docker Hub digest: $HUB_DIGEST"
+          if [ "$FORGE_DIGEST" != "$HUB_DIGEST" ]; then
+            echo "::error::Digest mismatch: the two registries hold different digests. Compare with: docker buildx imagetools inspect <image>:<tag>"
+            exit 1
+          fi
+          for arch in linux/amd64 linux/arm64; do
+            if ! docker buildx imagetools inspect "${FORGE_IMAGE}:${TAG}" --format '{{range .Manifest.Manifests}}{{.Platform.OS}}/{{.Platform.Architecture}} {{end}}' | grep -q "$arch"; then
+              echo "::error::The released manifest lists no $arch platform. Compare with: docker buildx imagetools inspect <image>:<tag>"
+              exit 1
+            fi
+          done
+          echo "digest=$FORGE_DIGEST" >> "$GITHUB_STEP_SUMMARY"
+
+      - name: Push the chart as an OCI artifact to the forge registry
+        env:
+          TAG: ${{ github.ref_name }}
+          GHCR_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          GHCR_ACTOR: ${{ github.actor }}
+        run: |
+          echo "$GHCR_TOKEN" | helm registry login ghcr.io --username "$GHCR_ACTOR" --password-stdin
+          VERSION="${TAG#v}"
+          # The workflow never overwrites a released chart version.
+          if helm show chart "oci://ghcr.io/opendustpan/charts/opendustpan" --version "$VERSION" >/dev/null 2>"$RUNNER_TEMP/chart.err"; then
+            if [ "$MODE" = "chart-only" ]; then
+              echo "::error::The chart and both images are already released for the tag. This re-run changes nothing."
+            else
+              echo "::error::The chart version $VERSION is already released. The workflow refuses to overwrite it."
+            fi
+            exit 1
+          elif ! grep -Eiq 'MANIFEST_UNKNOWN|manifest unknown|: not found' "$RUNNER_TEMP/chart.err"; then
+            echo "::error::cannot inspect the chart reference. The workflow stops instead of pushing over an unknown state."
+            cat "$RUNNER_TEMP/chart.err" >&2
+            exit 1
+          fi
+          helm package deploy/helm/opendustpan --version "$VERSION" --app-version "$VERSION"
+          helm push "opendustpan-$VERSION.tgz" oci://ghcr.io/opendustpan/charts
+
+  release-draft:
+    # The only job with contents:write. It runs after the archives pass the
+    # check and after the image and the chart are pushed, and it creates a
+    # draft: no one can download from a draft until a person publishes it.
+    if: github.event_name == 'push' && startsWith(github.ref, 'refs/tags/v') && github.repository == 'OpenDustpan/OpenDustpan'
+    needs: [archives-verify, publish]
+    runs-on: ubuntu-26.04
+    permissions:
+      contents: write
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          ref: ${{ github.ref }}
+          persist-credentials: false
+
+      # Defense in depth: the publish job checks the actor and the tag too;
+      # these two steps stay so that this job never relies on that job.
+      - name: Check that the actor has release permission
+        env:
+          ACTOR: ${{ github.actor }}
+          REPO: ${{ github.repository }}
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          PERMISSION="$(gh api "repos/$REPO/collaborators/$ACTOR/permission" --jq .permission)" || {
+            echo "::error::Release permission check failed for the actor. An actor with release permission must start the tag."
+            exit 1
+          }
+          if [ "$PERMISSION" != "admin" ] && [ "$PERMISSION" != "maintain" ]; then
+            echo "::error::The actor has repository permission $PERMISSION, not release permission. An actor with release permission must start the tag."
+            exit 1
+          fi
+
+      - name: Check that the tag is a final version tag
+        env:
+          TAG: ${{ github.ref_name }}
+        run: |
+          if ! echo "$TAG" | grep -Eq '^v[0-9]+\.[0-9]+\.[0-9]+$'; then
+            echo "::error::Not a final version tag (vX.Y.Z with no suffix). This run creates no release."
+            exit 1
+          fi
+
+      - uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v8.0.2
+        with:
+          name: release-archives
+          path: ${{ runner.temp }}/release
+
+      - name: Create the draft release
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          GH_REPO: ${{ github.repository }}
+          RELEASE_VERSION: ${{ github.ref_name }}
+          RELEASE_OUT: ${{ runner.temp }}/release
+        run: ./scripts/release-upload.sh "$RELEASE_VERSION" "$RELEASE_OUT"

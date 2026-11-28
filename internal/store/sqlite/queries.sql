@@ -5531,6 +5531,12 @@ FROM settings
 WHERE scope_id = sqlc.arg(scope_id)
 ORDER BY key;
 
+-- name: GetSettingValue :one
+-- The database value of one key of one scope. No row means no database value.
+SELECT value
+FROM settings
+WHERE scope_id = ?1 AND key = ?2;
+
 -- name: GetSettingsState :one
 -- The revision and the digest of the static layer of one scope. No row means
 -- a scope that never changed.

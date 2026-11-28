@@ -33,6 +33,7 @@ import (
 	"opendustpan.org/opendustpan/internal/token"
 	"opendustpan.org/opendustpan/pkg/access"
 	"opendustpan.org/opendustpan/pkg/audit"
+	"opendustpan.org/opendustpan/pkg/freshstep"
 	"opendustpan.org/opendustpan/pkg/identity"
 	"opendustpan.org/opendustpan/pkg/ipallow"
 	"opendustpan.org/opendustpan/pkg/namespace"
@@ -343,8 +344,12 @@ type Handler struct {
 	// admit asks the state.write guard before each checked write.
 	admit  *stategate.Admitter
 	placer *tofuunit.Placer
-	mux    *patternMux
-	routes []Route
+	// freshGuard asks for a fresh authentication when the policy requires
+	// one. NewHandler sets a guard that always requires the step (fail
+	// closed); SetFreshPolicy replaces it.
+	freshGuard freshstep.Guard
+	mux        *patternMux
+	routes     []Route
 }
 
 // newGuards returns the recorder of the refusals and the admission of the
@@ -409,9 +414,13 @@ func NewHandler(cfg Config) (*Handler, error) {
 		maxState:       cfg.MaxStateBytes,
 		admit:          admit,
 		placer:         cfg.Placer,
+		freshGuard:     freshstep.Guard{},
 		mux:            newPatternMux(),
 		routes:         nil,
 	}
+
+	// A handler with no SetFreshPolicy call requires the fresh step.
+	h.SetFreshPolicy(nil)
 
 	if h.gate == nil {
 		h.gate = bodygate.New(0)

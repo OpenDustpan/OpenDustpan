@@ -765,6 +765,45 @@ func TestFreshAuthRefusesAForgedFreshTimeHeader(t *testing.T) {
 	}
 }
 
+// TestFreshAuthTokenRefusalWritesAFailureEntry proves that a token create that
+// an access token sends, and that the fresh check refuses, leaves one failure
+// entry in the audit log. The refusal comes from the fresh check of the handler
+// and of the token service; the entry is the record that the refusal happened.
+func TestFreshAuthTokenRefusalWritesAFailureEntry(t *testing.T) {
+	t.Parallel()
+
+	e := newSignInEnv(t, true)
+
+	req := httptest.NewRequestWithContext(t.Context(), http.MethodPost, "/api/dustpan/v1/me/tokens",
+		strings.NewReader(ownTokenBody()))
+	req.Header.Set("Authorization", "Bearer test-token")
+
+	rec := httptest.NewRecorder()
+	e.handler.ServeHTTP(rec, req)
+
+	got := decodeErrorBody(t, rec)
+	if rec.Code != http.StatusForbidden || got.ErrorCode != freshErrorCode {
+		t.Fatalf("access token create = %d %s, want 403 with the code %s", rec.Code, rec.Body.String(), freshErrorCode)
+	}
+
+	listing, err := e.store.List(t.Context(), audit.ServerScope, audit.Page{Size: audit.MaxPageSize, Before: 0})
+	if err != nil {
+		t.Fatalf("list audit of the server: %v", err)
+	}
+
+	failures := 0
+
+	for i := range listing.Entries {
+		if listing.Entries[i].Outcome == audit.OutcomeFailure {
+			failures++
+		}
+	}
+
+	if failures != 1 {
+		t.Fatalf("failure entries of the server after the refusal = %d, want 1", failures)
+	}
+}
+
 // TestFreshAuthRefusesAnOutOfRangeStoredWindow proves that a stored window
 // outside 0 and 60 to 900 seconds cannot extend the window or turn the check
 // off: the step refuses the session like a window of 0 does, with 403 and the

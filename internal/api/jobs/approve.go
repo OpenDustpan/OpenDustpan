@@ -1,6 +1,7 @@
 package jobs
 
 import (
+	"context"
 	"errors"
 	"fmt"
 	"net/http"
@@ -15,6 +16,7 @@ import (
 	"opendustpan.org/opendustpan/internal/ident"
 	"opendustpan.org/opendustpan/internal/textbody"
 	"opendustpan.org/opendustpan/pkg/audit"
+	"opendustpan.org/opendustpan/pkg/freshstep"
 	"opendustpan.org/opendustpan/pkg/idempotency"
 	"opendustpan.org/opendustpan/pkg/identity"
 	"opendustpan.org/opendustpan/pkg/job"
@@ -111,8 +113,10 @@ func classifyApproval(err error) (problem.Problem, bool) {
 // destroy. The handler also refuses a destroy without session proof.
 //
 // This handler does not set Actor.ConfirmAuth or Actor.AuthAt: no part of this
-// API knows the MFA step of the session yet. So the approval of a destroy fails
-// closed until the server sets them from the sign-in.
+// API knows the MFA step of the session yet. So with the setting
+// freshAuthEnabled on, the approval of a destroy fails closed until the server
+// sets them from the sign-in. With the setting off, no step is needed, and the
+// service records the approval with the authentication none.
 func (h *Handler) approveJob(w http.ResponseWriter, r *http.Request, p identity.Principal, t *target) {
 	if h.refuseDamaged(r.Context(), w, t) {
 		return
@@ -150,7 +154,15 @@ func (h *Handler) approveVerdict(w http.ResponseWriter, r *http.Request, p ident
 		return
 	}
 
-	if h.refuseDestroyWithoutProof(w, r, p, t, verdict) {
+	// One read of the setting for the request: the check and the answer use the
+	// same value.
+	freshRequired := h.freshGuard.Required(ctx)
+
+	err = h.checkDestroyFresh(p, t, verdict, stepRequirement(freshRequired))
+	if err != nil {
+		h.recordApprovalRefusal(r, p, t, err)
+		h.writeError(ctx, w, err)
+
 		return
 	}
 
@@ -178,36 +190,69 @@ func (h *Handler) approveVerdict(w http.ResponseWriter, r *http.Request, p ident
 	}
 
 	setETag(w, &j)
-	h.answerStartedJob(ctx, w, http.StatusCreated, &j)
+	h.writeStartedJob(ctx, w, http.StatusCreated, &j, freshRequired)
 }
 
-// refuseDestroyWithoutProof refuses an approval of a destroy at this route.
-// The handler has no session MFA proof yet, so the approval fails closed. It
-// returns true when it wrote the refusal.
+// stepRequirement is the answer of the setting freshAuthEnabled that the
+// handler read once for the request: true when a fresh step is required.
+type stepRequirement bool
+
+// checkDestroyFresh returns the refusal of the approval of a destroy that the
+// handler gives itself, or nil. It never refuses another verdict or another
+// operation.
 //
-// Defense in depth: the job service checks the proof and the credential too.
-// This check stays so that the handler refuses even when an implementation of
-// the service would allow the approval.
-func (h *Handler) refuseDestroyWithoutProof(
-	w http.ResponseWriter, r *http.Request, p identity.Principal, t *target, verdict job.Verdict,
-) bool {
-	if verdict != job.VerdictApprove || t.job.Spec.Operation != job.OperationDestroy {
-		return false
+// Defense in depth: the service and the job store check the proof and the
+// credential too, with the same policy. This handler has no session MFA proof
+// yet. With the setting freshAuthEnabled on, it refuses a destroy even when an
+// implementation of the service would allow it. With the setting off, only a
+// person gets an approval of a destroy. This check does not rely on the service
+// or on the store.
+func (h *Handler) checkDestroyFresh(p identity.Principal, t *target, v job.Verdict, step stepRequirement) error {
+	if v != job.VerdictApprove || t.job.Spec.Operation != job.OperationDestroy {
+		return nil
 	}
 
-	freshErr := job.ErrAuthStale
+	// The caller read the setting once for the request. The check of the guard
+	// always refuses, so an unset requirement means that no step is needed.
+	if !step {
+		// Defense in depth: the service and the job store also allow only a
+		// person here. This check stays so that a service, a workload or an agent
+		// never gets the approval of a destroy without a step, whatever the
+		// credential.
+		if p.Kind != identity.KindPerson {
+			return job.ErrAuthStale
+		}
+
+		return nil
+	}
+
 	switch {
 	case t.job.State.Terminal():
-		freshErr = job.ErrFinished
+		return job.ErrFinished
 	case t.job.State != job.StateAwaitingApproval:
-		freshErr = job.ErrTransition
+		return job.ErrTransition
 	default:
+		return job.ErrAuthStale
+	}
+}
+
+// newDestroyFreshGuard returns the guard of the approval of a destroy. Its
+// check returns job.ErrAuthStale, because this handler has no session MFA
+// proof yet. A nil policy gives a policy that always requires the step (fail
+// closed).
+func newDestroyFreshGuard(p freshstep.Policy) freshstep.Guard {
+	if p == nil {
+		p = freshstep.PolicyFunc(nil)
 	}
 
-	h.recordApprovalRefusal(r, p, t, freshErr)
-	h.writeError(r.Context(), w, freshErr)
+	g, err := freshstep.NewGuard(p, func(context.Context, string) error { return job.ErrAuthStale })
+	if err != nil {
+		// NewGuard fails only on a nil policy or a nil check. The zero Guard
+		// refuses each request (fail closed).
+		return freshstep.Guard{}
+	}
 
-	return true
+	return g
 }
 
 // authorizeReject checks job:cancel for a rejection by a person who is not the

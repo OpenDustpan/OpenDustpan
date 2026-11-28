@@ -161,5 +161,5 @@ func (s *Service) requireWriter(ctx context.Context, caller identity.Principal) 
 		return ErrSignInRequired
 	}
 
-	return s.requireFresh(ctx)
+	return requireFresh(ctx, s.freshGuard)
 }
