@@ -41,7 +41,7 @@ The pending sign-in is `mfa.Pending`, kept in `mfa.PendingStore`. This change ad
 **stepup.TOTPStore**
 
 - `AcceptSignInStep`: pre: The factor is active. Post: While the sign-in lock holds, it returns `stepup.ErrLocked`, appends one refusal entry and changes nothing else. Otherwise a higher time step is stored and the sign-in count is 0; an equal or lower step returns `stepup.ErrUsed`; no step-up counter changes.
-- `FailSignInStep`: pre: The factor is active. Post: The sign-in count is one higher; at `stepup.TOTPSignInMaxFailures` the sign-in lock is set until `stepup.TOTPLockDuration` after the call, and one entry is appended. While the lock holds, it counts nothing and returns `stepup.ErrLocked`. No step-up counter changes.
+- `FailSignInStep`: pre: The factor is active. Post: The sign-in count is one higher; at `stepup.TOTPSignInMaxFailures` the sign-in lock is set until `stepup.TOTPLockDuration` after the call, and one entry is appended. While the lock holds, it counts nothing, appends one refusal audit entry in the same transaction, and returns `stepup.ErrLocked`. No step-up counter changes.
 
 **mfa.PendingStore**
 
