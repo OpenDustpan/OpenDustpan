@@ -3,6 +3,7 @@ package audit_test
 import (
 	"encoding/base64"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"net/http"
 	"net/http/httptest"
@@ -13,6 +14,7 @@ import (
 	apiaudit "opendustpan.org/opendustpan/internal/api/audit"
 	"opendustpan.org/opendustpan/internal/errcode"
 	"opendustpan.org/opendustpan/internal/errcode/errcodetest"
+	"opendustpan.org/opendustpan/pkg/audit"
 	"opendustpan.org/opendustpan/pkg/identity"
 	"opendustpan.org/opendustpan/pkg/namespace"
 )
@@ -219,7 +221,9 @@ func TestListEntriesTokenOfAnotherScopeAnswers400(t *testing.T) {
 
 // TestListEntriesDeniedCallerAnswers403BeforeTheToken proves that a caller
 // who may not read the audit log gets 403 with a valid token, a changed
-// token and no token, and that the token is not read.
+// token and no token, and that the token is not read. The refusal is the
+// refusal of the read: one entry with the outcome denied for the read, and
+// no entry for the token.
 func TestListEntriesDeniedCallerAnswers403BeforeTheToken(t *testing.T) {
 	t.Parallel()
 
@@ -233,7 +237,7 @@ func TestListEntriesDeniedCallerAnswers403BeforeTheToken(t *testing.T) {
 	seedMany(t, deniedEntries, 3)
 
 	for _, token := range []string{valid, "%%%not-a-token", ""} {
-		rec := getList(t, denied, "/api/audit/entries?organization=acme&pageSize=0&pageToken="+url.QueryEscape(token))
+		rec := getList(t, denied, "/api/audit/entries?organization=acme&pageSize=1&pageToken="+url.QueryEscape(token))
 
 		errcodetest.CheckAnswer(t, errcodetest.ShapeCamelCase, http.StatusForbidden, rec.Body.Bytes(),
 			errcodetest.Want{Code: errcode.AccessDenied, Args: nil, RequestBody: nil})
@@ -241,6 +245,37 @@ func TestListEntriesDeniedCallerAnswers403BeforeTheToken(t *testing.T) {
 
 	if deniedEntries.lists != 0 {
 		t.Fatalf("the store was called %d times for a denied caller", deniedEntries.lists)
+	}
+
+	ns, err := namespace.ParseName("acme")
+	if err != nil {
+		t.Fatalf("parse namespace: %v", err)
+	}
+
+	got := deniedEntries.entries[ns]
+
+	readDenied, tokenDenied := 0, 0
+
+	for i := range got {
+		if got[i].Outcome != audit.OutcomeDenied {
+			continue
+		}
+
+		if strings.HasPrefix(got[i].Reason, errcode.RequestPageTokenInvalid) {
+			tokenDenied++
+
+			continue
+		}
+
+		readDenied++
+	}
+
+	// The refusal recorder writes the first refusal of a window and counts the
+	// rest; the three requests share one principal, action, object kind and
+	// scope, so one entry for the refused read is enough to prove the token was
+	// never read and no token refusal was recorded.
+	if readDenied != 1 || tokenDenied != 0 {
+		t.Fatalf("read denials = %d, token denials = %d, want 1 and 0", readDenied, tokenDenied)
 	}
 }
 
@@ -302,6 +337,55 @@ func forgeToken(body string) string {
 	return base64.RawURLEncoding.EncodeToString([]byte(body))
 }
 
+// hostilePageTokenRows returns the page-token rows that the server refuses.
+// The rows are the same as the refused rows of TestPageTokenHostileRows.
+func hostilePageTokenRows(t *testing.T, handler *apiaudit.Handler) []struct{ name, token string } {
+	t.Helper()
+
+	var wire struct {
+		F string `json:"f"`
+		B int64  `json:"b"`
+	}
+
+	raw, err := base64.RawURLEncoding.DecodeString(firstToken(t, handler, "acme"))
+	if err != nil {
+		t.Fatalf("decode the valid token: %v", err)
+	}
+
+	if err := json.Unmarshal(raw, &wire); err != nil {
+		t.Fatalf("decode the valid token body: %v", err)
+	}
+
+	withB := func(b string) string { return forgeToken(fmt.Sprintf(`{"b":%s,"f":%q}`, b, wire.F)) }
+
+	withCRLF := func() string {
+		token := forgeToken(fmt.Sprintf(`{"b":1,"f":%q}`, wire.F))
+
+		return token[:4] + "\r\n" + token[4:]
+	}()
+
+	return []struct{ name, token string }{
+		{"not base64url", "***"},
+		{"base64url that is not JSON", forgeToken("not json")},
+		{"JSON array", forgeToken(`[1,2]`)},
+		{"empty object", forgeToken(`{}`)},
+		{"unknown member", forgeToken(fmt.Sprintf(`{"b":1,"f":%q,"x":1}`, wire.F))},
+		{"member of another type", forgeToken(fmt.Sprintf(`{"b":"1","f":%q}`, wire.F))},
+		{"b of 0", withB("0")},
+		{"b of -1", withB("-1")},
+		{"b above int64", withB("9223372036854775808")},
+		{"too long", strings.Repeat("A", 4097)},
+		{"valid JSON over the limit", forgeToken(fmt.Sprintf(`{"b":1,"f":%q%s}`, wire.F, strings.Repeat(" ", 4100)))},
+		{"trailing JSON", forgeToken(fmt.Sprintf(`{"b":1,"f":%q}{}`, wire.F))},
+		{"fingerprint of another scope", forgeToken(`{"b":1,"f":"0000000000000000"}`)},
+		{"no fingerprint", forgeToken(`{"b":1}`)},
+		{"carriage return and line feed in the base64url text", withCRLF},
+		{"unused bits in the final base64url character", "e31"},
+		{"a member name in another case or twice", forgeToken(fmt.Sprintf(`{"B":1,"f":%q}`, wire.F))},
+		{"a member name twice", forgeToken(fmt.Sprintf(`{"b":1,"b":2,"f":%q}`, wire.F))},
+	}
+}
+
 // TestPageTokenHostileRows is the hostile table of the page token. Each
 // refused row answers 400 and reaches no store. The last rows are valid for
 // their scope and read only entries of that scope.
@@ -327,22 +411,7 @@ func TestPageTokenHostileRows(t *testing.T) {
 
 	withB := func(b string) string { return forgeToken(fmt.Sprintf(`{"b":%s,"f":%q}`, b, wire.F)) }
 
-	refused := []struct{ name, token string }{
-		{"not base64url", "***"},
-		{"base64url that is not JSON", forgeToken("not json")},
-		{"JSON array", forgeToken(`[1,2]`)},
-		{"empty object", forgeToken(`{}`)},
-		{"unknown member", forgeToken(fmt.Sprintf(`{"b":1,"f":%q,"x":1}`, wire.F))},
-		{"member of another type", forgeToken(fmt.Sprintf(`{"b":"1","f":%q}`, wire.F))},
-		{"b of 0", withB("0")},
-		{"b of -1", withB("-1")},
-		{"b above int64", withB("9223372036854775808")},
-		{"too long", strings.Repeat("A", 4097)},
-		{"valid JSON over the limit", forgeToken(fmt.Sprintf(`{"b":1,"f":%q%s}`, wire.F, strings.Repeat(" ", 4100)))},
-		{"trailing JSON", forgeToken(fmt.Sprintf(`{"b":1,"f":%q}{}`, wire.F))},
-		{"fingerprint of another scope", forgeToken(`{"b":1,"f":"0000000000000000"}`)},
-		{"no fingerprint", forgeToken(`{"b":1}`)},
-	}
+	refused := hostilePageTokenRows(t, h)
 
 	for _, tc := range refused {
 		t.Run(tc.name, func(t *testing.T) {
@@ -380,4 +449,221 @@ func TestPageTokenHostileRows(t *testing.T) {
 			}
 		}
 	})
+}
+
+// TestPageTokenMemberNames proves that the member-name check of the page
+// token accepts exactly the names f and b, each once. The check reads the
+// token text itself, so the rows reach it before the shared decoder or the
+// sequence check can refuse them.
+func TestPageTokenMemberNames(t *testing.T) {
+	t.Parallel()
+
+	for _, tc := range []struct {
+		name    string
+		body    string
+		wantErr bool
+	}{
+		{"a name in another case", `{"F":"x","b":1}`, true},
+		{"an extra name", `{"f":"x","b":1,"x":1}`, true},
+		{"only f", `{"f":"x"}`, true},
+		{"only b", `{"b":1}`, true},
+		{"an extra name and no b", `{"f":"x","x":1}`, true},
+		{"an extra name and no f", `{"x":1,"b":1}`, true},
+		{"a repeated name", `{"f":"x","b":1,"b":2}`, true},
+		{"trailing object", `{"f":"x","b":1}{"x":1}`, true},
+		{"trailing text", `{"f":"x","b":1}garbage`, true},
+		{"a truncated object", `{"f":"x","b":1`, true},
+		{"a JSON array", `["f","b"]`, true},
+		{"a JSON array with the wire names twice", `["f","b","b","x"]`, true},
+		{"a JSON string", `"f"`, true},
+		{"the exact wire names", `{"f":"x","b":1}`, false},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			t.Parallel()
+
+			err := apiaudit.ValidatePageTokenMemberNames(forgeToken(tc.body))
+			if !tc.wantErr {
+				if err != nil {
+					t.Fatalf("ValidatePageTokenMemberNames = %v, want no error", err)
+				}
+
+				return
+			}
+
+			if !errors.Is(err, apiaudit.ErrPageToken) {
+				t.Fatalf("ValidatePageTokenMemberNames = %v, want ErrPageToken", err)
+			}
+		})
+	}
+}
+
+// TestDecodePageCursorRefusesNamesOutsideTheWire proves that the audit page
+// token accepts only the member names f and b: a token with another name,
+// another case or a missing name answers errPageToken, and a token of the
+// exact wire shape decodes.
+func TestDecodePageCursorRefusesNamesOutsideTheWire(t *testing.T) {
+	t.Parallel()
+
+	ns, err := namespace.ParseName("acme")
+	if err != nil {
+		t.Fatalf("parse namespace: %v", err)
+	}
+
+	h, e := newEnforcingHandler(t, selectiveAuthorizer{deny: map[identity.Action]bool{}})
+	seedMany(t, e, 3)
+
+	token := firstToken(t, h, "acme")
+
+	_, err = apiaudit.PageCursorBefore(token, ns)
+	if err != nil {
+		t.Fatalf("PageCursorBefore of a valid token = %v, want no error", err)
+	}
+
+	raw, err := base64.RawURLEncoding.DecodeString(token)
+	if err != nil {
+		t.Fatalf("decode the valid token: %v", err)
+	}
+
+	var wire struct {
+		F string `json:"f"`
+		B int64  `json:"b"`
+	}
+
+	err = json.Unmarshal(raw, &wire)
+	if err != nil {
+		t.Fatalf("decode the valid token body: %v", err)
+	}
+
+	for _, tc := range []struct{ name, token string }{
+		{"another case", forgeToken(fmt.Sprintf(`{"F":%q,"b":1}`, wire.F))},
+		{"an unknown member", forgeToken(fmt.Sprintf(`{"f":%q,"b":1,"x":1}`, wire.F))},
+		{"a missing member", forgeToken(fmt.Sprintf(`{"f":%q}`, wire.F))},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			t.Parallel()
+
+			if _, err := apiaudit.PageCursorBefore(tc.token, ns); !errors.Is(err, apiaudit.ErrPageToken) {
+				t.Fatalf("PageCursorBefore = %v, want ErrPageToken", err)
+			}
+		})
+	}
+}
+
+// TestRefusedPageTokenIsRecorded proves that each refused page token writes
+// one audit entry with the outcome denied, the caller, the action on the
+// scope and the reason request.page-token-invalid. The entry holds no token
+// text. A refusal with request.page-size-invalid writes no entry.
+func TestRefusedPageTokenIsRecorded(t *testing.T) {
+	t.Parallel()
+
+	h, e := newEnforcingHandler(t, selectiveAuthorizer{deny: map[identity.Action]bool{}})
+	seedMany(t, e, 3)
+	refused := hostilePageTokenRows(t, h)
+
+	ns, err := namespace.ParseName("acme")
+	if err != nil {
+		t.Fatalf("parse namespace: %v", err)
+	}
+
+	for _, tc := range refused {
+		t.Run(tc.name, func(t *testing.T) {
+			t.Parallel()
+
+			handler, entries := newEnforcingHandler(t, selectiveAuthorizer{deny: map[identity.Action]bool{}})
+			seedMany(t, entries, 3)
+
+			rec := getList(t, handler, "/api/audit/entries?organization=acme&pageToken="+url.QueryEscape(tc.token))
+			checkRefusal(t, rec, errcode.RequestPageTokenInvalid)
+			checkRefusedTokenEntry(t, rec, entries, ns, tc.token)
+		})
+	}
+
+	t.Run("server scope records the server action", func(t *testing.T) {
+		t.Parallel()
+
+		handler, entries := newEnforcingHandler(t, selectiveAuthorizer{deny: map[identity.Action]bool{}})
+
+		rec := getList(t, handler, "/api/audit/entries?organization="+url.QueryEscape("@server")+
+			"&pageToken="+url.QueryEscape("***"))
+		checkRefusal(t, rec, errcode.RequestPageTokenInvalid)
+
+		got := deniedEntriesOf(entries, audit.ServerScope)
+		if len(got) != 1 {
+			t.Fatalf("denied entries = %d, want 1", len(got))
+		}
+
+		if got[0].Action != string(identity.ActionServerReadAudit) {
+			t.Errorf("action = %q, want %s", got[0].Action, identity.ActionServerReadAudit)
+		}
+	})
+}
+
+// checkRefusedTokenEntry proves that the refusal of token wrote one entry
+// with the outcome denied, the caller, the read action and the token reason,
+// and that neither the answer nor the entry holds the token text.
+func checkRefusedTokenEntry(
+	t *testing.T, rec *httptest.ResponseRecorder, entries *memAuditStore, ns namespace.Name, token string,
+) {
+	t.Helper()
+
+	got := deniedEntriesOf(entries, ns)
+	if len(got) != 1 {
+		t.Fatalf("denied entries = %d, want 1", len(got))
+	}
+
+	de := got[0]
+	if de.Subject != "tester" {
+		t.Errorf("subject = %q, want tester", de.Subject)
+	}
+
+	if de.Action != string(identity.ActionNamespaceReadAudit) {
+		t.Errorf("action = %q, want %s", de.Action, identity.ActionNamespaceReadAudit)
+	}
+
+	if !strings.HasPrefix(de.Reason, errcode.RequestPageTokenInvalid) {
+		t.Errorf("reason = %q, want prefix %q", de.Reason, errcode.RequestPageTokenInvalid)
+	}
+
+	if strings.Contains(rec.Body.String(), token) {
+		t.Error("response body holds the token text")
+	}
+
+	if strings.Contains(de.Reason, token) || strings.Contains(de.Object, token) {
+		t.Errorf("denied entry holds the token text: %+v", de)
+	}
+}
+
+// TestPageSizeInvalidWritesNoDeniedEntry proves that a refusal with
+// request.page-size-invalid writes no audit entry.
+func TestPageSizeInvalidWritesNoDeniedEntry(t *testing.T) {
+	t.Parallel()
+
+	handler, entries := newEnforcingHandler(t, selectiveAuthorizer{deny: map[identity.Action]bool{}})
+	seedMany(t, entries, 3)
+
+	ns, err := namespace.ParseName("acme")
+	if err != nil {
+		t.Fatalf("parse namespace: %v", err)
+	}
+
+	rec := getList(t, handler, "/api/audit/entries?organization=acme&pageSize=201")
+	checkRefusal(t, rec, errcode.RequestPageSizeInvalid)
+
+	if got := deniedEntriesOf(entries, ns); len(got) != 0 {
+		t.Fatalf("denied entries = %d, want 0", len(got))
+	}
+}
+
+// deniedEntriesOf returns the entries of ns with the outcome denied.
+func deniedEntriesOf(entries *memAuditStore, ns namespace.Name) []audit.Entry {
+	out := make([]audit.Entry, 0)
+
+	chain := entries.entries[ns]
+	for i := range chain {
+		if chain[i].Outcome == audit.OutcomeDenied {
+			out = append(out, chain[i])
+		}
+	}
+
+	return out
 }

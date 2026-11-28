@@ -74,6 +74,7 @@ type memAuditStore struct {
 var (
 	_ audit.Store       = (*memAuditStore)(nil)
 	_ audit.EntryReader = (*memAuditStore)(nil)
+	_ audit.ServerStore = (*memAuditStore)(nil)
 )
 
 func (m *memAuditStore) EntryAt(_ context.Context, ns namespace.Name, seq int64) (audit.Entry, error) {
@@ -194,6 +195,10 @@ func (m *memAuditStore) Check(_ context.Context, ns namespace.Name) (audit.Check
 	}
 
 	return audit.CheckResult{Checked: int64(len(chain)), BadSequence: 0, Unchained: 0, Valid: true}, nil
+}
+
+func (m *memAuditStore) AppendServer(ctx context.Context, e audit.Entry) (audit.Entry, error) {
+	return m.Append(ctx, namespace.Fence{Namespace: audit.ServerScope, FailoverVersion: 1}, e)
 }
 
 // changeEntrySubject rewrites the subject of one stored entry behind the

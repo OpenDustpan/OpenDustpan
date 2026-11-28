@@ -50,6 +50,10 @@ func TestDecodeRefusesHostileTokens(t *testing.T) {
 		{name: "a member of another type", token: b64([]byte(`{"a":1}`))},
 		{name: "data after the object", token: b64([]byte(`{"a":"x"} {}`))},
 		{name: "a member that the wire struct does not have", token: b64([]byte(`{"a":"x","extra":1}`))},
+		{name: "carriage return and line feed in the base64url text", token: b64([]byte(`{"a":"x"}`))[:4] + "\r\n" + b64([]byte(`{"a":"x"}`))[4:]},
+		{name: "unused bits in the final base64url character", token: "e31"},
+		{name: "a member name in another case", token: b64([]byte(`{"A":"x"}`))},
+		{name: "a member name twice", token: b64([]byte(`{"a":"x","a":"y"}`))},
 	} {
 		var got wire
 
